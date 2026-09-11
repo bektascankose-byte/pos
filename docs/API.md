@@ -88,7 +88,7 @@ GET  /health/ready     readiness. Does check the database.
 POST /api/v1/auth/login      { email, password, device_id? } -> token pair
 POST /api/v1/auth/refresh    { refresh_token } -> a NEW pair; the old one dies
 POST /api/v1/auth/logout     revokes one session
-POST /api/v1/auth/session    who am I, and what may I do
+GET  /api/v1/auth/session    who am I, and what may I do
 ```
 
 Refresh tokens rotate. Replaying a spent one revokes the entire family — see
