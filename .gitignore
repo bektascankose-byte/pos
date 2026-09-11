@@ -42,3 +42,8 @@ coverage/
 
 # Local database volumes
 pgdata/
+
+# Android build output
+apps/pos-android/**/build/
+apps/pos-android/.gradle/
+apps/pos-android/.kotlin/

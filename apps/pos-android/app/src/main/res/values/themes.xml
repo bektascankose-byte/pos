@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark by default. Not a stylistic preference: a bright screen behind a
+         counter for a ten hour shift is fatiguing, and a dark surface makes the
+         cart the brightest thing in the room, which is where the cashier's eyes
+         should be. -->
+    <style name="Theme.SnapPos" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#0B0F14</item>
+        <item name="android:navigationBarColor">#0B0F14</item>
+    </style>
+</resources>
