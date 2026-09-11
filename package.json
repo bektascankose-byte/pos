@@ -22,7 +22,9 @@
     "db:down": "docker compose -f infra/docker/docker-compose.dev.yml down",
     "db:migrate": "npm run migrate -w @snappos/db",
     "db:seed": "npm run seed -w @snappos/db",
-    "db:reset": "npm run reset -w @snappos/db"
+    "db:reset": "npm run reset -w @snappos/db",
+    "e2e": "npm run e2e -w @snappos/api",
+    "dev:api": "npm run dev -w @snappos/api"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

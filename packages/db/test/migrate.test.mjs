@@ -18,12 +18,12 @@ const db = scratch.db;
 const n = async (sql) => Number((await db.query(sql))[0].n);
 
 test(`all ${migrationFiles().length} migrations applied on ${scratch.engine}`, () => {
-  assert.equal(migrationFiles().length, 5);
+  assert.equal(migrationFiles().length, 7);
 });
 
 test('migrations are numbered contiguously from 0001', () => {
   const prefixes = migrationFiles().map((f) => Number(f.name.slice(0, 4)));
-  assert.deepEqual(prefixes, [1, 2, 3, 4, 5]);
+  assert.deepEqual(prefixes, [1, 2, 3, 4, 5, 6, 7]);
 });
 
 test('63 base tables exist', async () => {
@@ -59,7 +59,7 @@ test('93 foreign keys, 20 enums, 62 table level checks', async () => {
                           and not t.relispartition`), 62);
 });
 
-test('7 functions and 18 user triggers', async () => {
+test('9 functions and 18 user triggers', async () => {
   // Extensions install their own functions into public (pg_trgm adds ~20), so
   // count only what our migrations own.
   assert.equal(await n(`select count(*) n from pg_proc p
@@ -67,7 +67,7 @@ test('7 functions and 18 user triggers', async () => {
                         where ns.nspname='public'
                           and not exists (
                             select 1 from pg_depend d
-                            where d.objid = p.oid and d.deptype = 'e')`), 7);
+                            where d.objid = p.oid and d.deptype = 'e')`), 9);
   assert.equal(await n(`select count(*) n from pg_trigger where not tgisinternal`), 18);
 });
 

@@ -11,6 +11,7 @@
 // against a database that holds sales.
 
 import pg from 'pg';
+import { hash } from '@node-rs/argon2';
 import { DEFAULT_URL } from '../src/engine.mjs';
 
 const ORG_SLUG = 'hh-smoke';
@@ -31,9 +32,40 @@ if (saleCount > 0 && !process.argv.includes('--force')) {
 
 await client.query('BEGIN');
 
-// Re-runnable. ON DELETE RESTRICT guards financial tables, so this fails loudly
-// if the org has grown anything the seed does not own.
-await client.query('delete from organizations where slug = $1', [ORG_SLUG]);
+// Re-runnable, but not by deleting the organization and letting cascades sort
+// it out: almost every foreign key to organizations is ON DELETE RESTRICT, on
+// purpose, so that nobody can remove a business and take its financial history
+// with it. The seed therefore clears its own tables in dependency order.
+//
+// Anything the seed does not own is left alone and will block the delete, which
+// is the correct outcome: if this database has grown sales or purchase orders,
+// re-seeding is not what anyone wanted. Use `npm run db:reset` for a clean slate.
+const existing = await one('select id from organizations where slug = $1', [ORG_SLUG]);
+if (existing) {
+  const orderedTables = [
+    'inventory_ledger',
+    'inventory_levels',
+    'variant_prices',
+    'variant_barcodes',
+    'product_variants',
+    'product_compliance',
+    'products',
+    'brands',
+    'categories',
+    'tax_rates',
+    'tax_categories',
+    'employee_pins',
+    'user_roles',
+    'auth_sessions',
+    'users',
+    'registers',
+    'stores',
+  ];
+  for (const table of orderedTables) {
+    await client.query(`delete from ${table} where org_id = $1`, [existing.id]);
+  }
+  await client.query('delete from organizations where id = $1', [existing.id]);
+}
 
 const org = await one(
   `insert into organizations (slug, legal_name, display_name)
@@ -56,6 +88,47 @@ for (const [code, name] of [
     `insert into registers (org_id, store_id, code, name) values ($1,$2,$3,$4)`,
     [org.id, store.id, code, name],
   );
+}
+
+// ----------------------------------------------------------------------- staff
+// Development credentials only. Printed at the end so nobody has to grep for
+// them, and refused outright if NODE_ENV is production.
+if (process.env.NODE_ENV === 'production') {
+  console.error('\n  refusing to seed known passwords into a production database\n');
+  process.exit(1);
+}
+
+const DEV_PASSWORD = 'dev-password-change-me';
+const ARGON = { memoryCost: 19456, timeCost: 2, parallelism: 1 };
+const ARGON_PIN = { memoryCost: 4096, timeCost: 2, parallelism: 1 };
+
+const passwordHash = await hash(DEV_PASSWORD, ARGON);
+
+const staff = [];
+for (const [roleKey, email, fullName, pin] of [
+  ['owner', 'owner@hhsmoke.test', 'Sam Okafor', '1234'],
+  ['manager', 'manager@hhsmoke.test', 'Dana Reyes', '2345'],
+  ['cashier', 'cashier@hhsmoke.test', 'Maria Chen', '3456'],
+]) {
+  const u = await one(
+    `insert into users (org_id, email, full_name, display_name, password_hash, status)
+     values ($1,$2,$3,$4,$5,'active') returning id`,
+    [org.id, email, fullName, fullName.split(' ')[0], passwordHash],
+  );
+
+  // Platform roles have a NULL org_id and are shared by every organization.
+  const role = await one(`select id from roles where org_id is null and key = $1`, [roleKey]);
+  await client.query(
+    `insert into user_roles (org_id, user_id, role_id, store_id) values ($1,$2,$3,$4)`,
+    [org.id, u.id, role.id, store.id],
+  );
+
+  await client.query(
+    `insert into employee_pins (user_id, org_id, pin_hash) values ($1,$2,$3)`,
+    [u.id, org.id, await hash(pin, ARGON_PIN)],
+  );
+
+  staff.push({ email, roleKey, pin });
 }
 
 // -------------------------------------------------------------------- taxonomy
@@ -316,6 +389,10 @@ console.log(`
     variants   ${summary.variants}
     barcodes   ${summary.barcodes}
     units      ${summary.units} on hand, all posted through the ledger
+
+  development sign in (password is the same for all three)
+    password   ${DEV_PASSWORD}
+${staff.map((m) => `    ${m.roleKey.padEnd(10)} ${m.email.padEnd(26)} PIN ${m.pin}`).join(String.fromCharCode(10))}
 `);
 
 await client.end();

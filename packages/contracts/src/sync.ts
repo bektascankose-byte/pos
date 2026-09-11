@@ -117,13 +117,25 @@ export const changesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(1000).default(500),
 });
 
+/**
+ * A change notification, not the change itself.
+ *
+ * `change_log` stores a hash of the row rather than the row, which keeps the
+ * table small on a counter that writes constantly and, more importantly, means
+ * a replicated table can be reshaped without rewriting history. The register
+ * uses this to learn WHAT changed and then fetches the current version.
+ *
+ * `payload_hash` lets it skip a fetch when it already holds that version, which
+ * is the common case when two registers in one store sync seconds apart.
+ */
 export const changeSchema = z.object({
   id: z.string().regex(/^\d+$/),
   entity_type: z.string(),
   entity_id: uuid,
   op: z.enum(['insert', 'update', 'delete']),
+  /** Derived from entity_type by the API; change_log does not store it. */
   scope: syncScope,
-  payload: z.record(z.unknown()).nullable(),
+  payload_hash: z.string().nullable(),
 });
 
 export const changesResponseSchema = z.object({
