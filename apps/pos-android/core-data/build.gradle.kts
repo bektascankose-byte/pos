@@ -21,6 +21,11 @@ android {
   kotlin { jvmToolchain(17) }
 }
 
+// Room writes the schema JSON here on every build. Committed, so a schema
+// change is visible in review rather than discovered at runtime on a terminal
+// holding sales that have not uploaded.
+ksp { arg("room.schemaLocation", "$projectDir/schemas") }
+
 dependencies {
   implementation(project(":core-domain"))
 
