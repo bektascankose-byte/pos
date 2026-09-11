@@ -117,7 +117,7 @@ Posted financial amounts are `bigint` minor units (cents), named with a `_minor`
 
 ## C. REPOSITORY STRUCTURE
 
-Single monorepo, pnpm workspaces plus Turborepo for the TypeScript side, Gradle for Android. One repository because the contracts package, the pricing spec and the migrations are shared by everything, and splitting them means version skew between the register and the API.
+Single monorepo, npm workspaces for the TypeScript side, Gradle for Android. (Revised from pnpm plus Turborepo: npm ships with Node, supports workspaces fully, and removes an install step before a new machine can build. Turborepo can be added later if build caching starts to pay for itself.) One repository because the contracts package, the pricing spec and the migrations are shared by everything, and splitting them means version skew between the register and the API.
 
 ```
 snappos/
@@ -194,7 +194,7 @@ organizations
 users ─ user_org_roles ─ roles ─ role_permissions
   └─ employee_pins (Argon2id, offline verifiable)
 
-brands        categories (ltree path, unlimited depth)
+brands        categories (materialized path, unlimited depth)
    └───────────────┬──────────────┘
                    ▼
               products ── product_variants ──┬─ variant_barcodes  (many: UPC, alt UPC, PLU)
