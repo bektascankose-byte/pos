@@ -13,6 +13,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
+import { runSalesChecks } from './e2e-sales.mjs';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -51,7 +52,9 @@ async function api(path, { token, method = 'GET', body, headers = {} } = {}) {
   const response = await fetch(`${BASE}${path}`, {
     method,
     headers: {
-      'content-type': 'application/json',
+      // Only claim a JSON body when there is one: Fastify rejects a JSON
+      // content type with an empty body, which is correct of it.
+      ...(body ? { 'content-type': 'application/json' } : {}),
       ...(token ? { authorization: `Bearer ${token}` } : {}),
       ...headers,
     },
@@ -176,6 +179,13 @@ const cashier = await api('/api/v1/auth/login', {
 });
 const cashierToken = cashier.body?.access_token;
 check('the cashier can sign in', cashier.status === 201);
+
+const manager = await api('/api/v1/auth/login', {
+  method: 'POST',
+  body: { email: 'manager@hhsmoke.test', password: PASSWORD },
+});
+const managerToken = manager.body?.access_token;
+check('the manager can sign in', manager.status === 201);
 
 // --------------------------------------------------------- 3. refresh rotation
 
@@ -412,8 +422,21 @@ check(
     ],
   };
 
-  const upload = await api('/api/v1/sync/batch', {
+  // A cashier may upload sales but not stock adjustments. The entity level
+  // check means the sync route cannot be used to get around that.
+  const cashierAttempt = await api('/api/v1/sync/batch', {
     token: cashierToken,
+    method: 'POST',
+    body: envelope,
+  });
+  check(
+    'a cashier cannot push a stock adjustment through sync',
+    cashierAttempt.body?.results?.[0]?.error?.code === 'forbidden',
+    JSON.stringify(cashierAttempt.body?.results?.[0]),
+  );
+
+  const upload = await api('/api/v1/sync/batch', {
+    token: ownerToken,
     method: 'POST',
     body: envelope,
   });
@@ -424,7 +447,7 @@ check(
   );
 
   const replay = await api('/api/v1/sync/batch', {
-    token: cashierToken,
+    token: ownerToken,
     method: 'POST',
     body: envelope,
   });
@@ -450,7 +473,19 @@ check(
   check('the ledger and levels still agree after sync', stillHealthy.body?.healthy === true);
 }
 
-// ------------------------------------------------------------------ 8. summary
+// --------------------------------------------------- 8. a day at the counter
+
+await runSalesChecks({
+  api,
+  check,
+  uuidV7,
+  ownerToken,
+  managerToken,
+  cashierToken,
+  storeId,
+});
+
+// ------------------------------------------------------------------ 9. summary
 
 console.log(`\n  ${passed} passed, ${failed} failed\n`);
 if (failed > 0) {

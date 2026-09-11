@@ -14,6 +14,10 @@ export class SyncController {
    * Upload. Carries no Idempotency-Key header because it does not need one:
    * every entity in the batch already carries its own UUIDv7, which serves as
    * the key. There is nothing separate to get wrong.
+   *
+   * `sync.upload` gates the endpoint; each entity is additionally checked
+   * against the permission that governs its own action, so this route cannot
+   * become a way around the ones that guard /sales and /refunds.
    */
   @Post('batch')
   @RequirePermissions('sync.upload')
@@ -21,7 +25,7 @@ export class SyncController {
     @CurrentUser() user: AuthenticatedUser,
     @Body(zodBody(syncBatchSchema)) body: ReturnType<typeof syncBatchSchema.parse>,
   ) {
-    return this.sync.ingest(user.orgId, body, new Date());
+    return this.sync.ingest(user.orgId, body, new Date(), user.permissions);
   }
 
   @Get('changes')

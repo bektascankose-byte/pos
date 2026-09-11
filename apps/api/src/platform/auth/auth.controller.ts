@@ -1,4 +1,4 @@
-import { Body, Controller, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, Post, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import { loginSchema, refreshSchema } from '@snappos/contracts';
 import { AuthService } from './auth.service.js';
@@ -45,8 +45,13 @@ export class AuthController {
     return { ok: true };
   }
 
-  /** Who am I, and what may I do. The register calls this after an unlock. */
-  @Post('session')
+  /**
+   * Who am I, and what may I do. The register calls this after an unlock.
+   *
+   * GET, because it reads and changes nothing. It was briefly a POST, which
+   * Fastify rejects when a client sends a JSON content type with no body.
+   */
+  @Get('session')
   session(@CurrentUser() user: AuthenticatedUser) {
     return {
       user_id: user.userId,

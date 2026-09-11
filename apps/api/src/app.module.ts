@@ -9,10 +9,26 @@ import { CatalogModule } from './modules/catalog/catalog.module.js';
 import { InventoryModule } from './modules/inventory/inventory.module.js';
 import { SyncModule } from './modules/sync/sync.module.js';
 import { OrgModule } from './modules/org/org.module.js';
+import { SalesModule } from './modules/sales/sales.module.js';
+import { RefundsModule } from './modules/refunds/refunds.module.js';
+import { CashModule } from './modules/cash/cash.module.js';
+import { AuditModule } from './platform/audit/audit.module.js';
 import { HealthController } from './modules/health/health.controller.js';
 
 @Module({
-  imports: [DatabaseModule, AuthModule, IdempotencyModule, CatalogModule, InventoryModule, SyncModule, OrgModule],
+  imports: [
+    DatabaseModule,
+    AuditModule,
+    AuthModule,
+    IdempotencyModule,
+    CatalogModule,
+    InventoryModule,
+    SalesModule,
+    RefundsModule,
+    CashModule,
+    SyncModule,
+    OrgModule,
+  ],
   controllers: [HealthController],
   providers: [
     // Authentication is global and opting out is an explicit @Public()

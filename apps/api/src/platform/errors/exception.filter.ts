@@ -8,6 +8,7 @@ import {
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { ApiException } from './api-exception.js';
 import { isZodError } from './is-zod-error.js';
+import { mapPostgresError } from './postgres-error.js';
 import type { ApiError } from '@snappos/contracts';
 
 /**
@@ -34,7 +35,8 @@ export class ApiExceptionFilter implements ExceptionFilter {
 
     const { status, body } = this.render(exception, requestId);
 
-    if (status >= 500) {
+    const pgCode = (exception as { code?: string }).code;
+    if (status >= 500 || (typeof pgCode === 'string' && /^[0-9A-Z]{5}$/.test(pgCode))) {
       this.logger.error(
         {
           requestId,
@@ -83,6 +85,24 @@ export class ApiExceptionFilter implements ExceptionFilter {
           request_id: requestId,
           // A malformed request will be malformed the second time too.
           retryable: false,
+        },
+      };
+    }
+
+    // A constraint violation is a statement about the request, not a server
+    // fault. Mapped to a clean 4xx with a stable code; the database's own
+    // message stays in the log, because it can quote the offending value.
+    const fromPostgres = mapPostgresError(exception);
+    if (fromPostgres) {
+      const response = fromPostgres.getResponse() as { code: ApiError['code']; message: string; userMessage?: string };
+      return {
+        status: fromPostgres.getStatus(),
+        body: {
+          code: response.code,
+          message: response.message,
+          ...(response.userMessage ? { user_message: response.userMessage } : {}),
+          request_id: requestId,
+          retryable: fromPostgres.retryable,
         },
       };
     }

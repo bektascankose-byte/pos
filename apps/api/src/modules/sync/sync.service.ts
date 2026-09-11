@@ -1,15 +1,41 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { PoolClient } from 'pg';
+import { saleInput, refundInput, cashMovementInput } from '@snappos/contracts';
 import type { SyncBatch, SyncResult, Change } from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
+import { SalesService } from '../sales/sales.service.js';
+import { RefundsService } from '../refunds/refunds.service.js';
 
 const MAX_ATTEMPTS_BEFORE_DEAD_LETTER = 5;
+
+/**
+ * The permission each entity type actually requires.
+ *
+ * `sync.upload` only says "this device may talk to the sync endpoint". Without
+ * this table it would also mean "and may therefore push anything at all", which
+ * would let a cashier who cannot issue a refund over HTTP issue one by putting
+ * it in a sync batch instead. The permission that governs an action has to
+ * govern it on every route that can perform it, or it governs nothing.
+ */
+const PERMISSION_BY_ENTITY: Record<string, string> = {
+  sale: 'sale.create',
+  refund: 'refund.create',
+  cash_movement: 'cash.paid_in_out',
+  cash_session: 'cash.session_open',
+  inventory_movement: 'inventory.adjust',
+  age_verification: 'sale.create',
+  time_entry: 'employee.timeclock_edit',
+};
 
 @Injectable()
 export class SyncService {
   private readonly logger = new Logger(SyncService.name);
 
-  constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly sales: SalesService,
+    private readonly refunds: RefundsService,
+  ) {}
 
   /**
    * Accept an upload batch from a register.
@@ -24,11 +50,27 @@ export class SyncService {
    * `duplicate`. The register treats that identically to `accepted` and clears
    * its outbox row.
    */
-  async ingest(orgId: string, batch: SyncBatch, receivedAt: Date) {
+  async ingest(
+    orgId: string,
+    batch: SyncBatch,
+    receivedAt: Date,
+    permissions: readonly string[] = [],
+  ) {
     const results: SyncResult[] = [];
+    const held = new Set(permissions);
 
     for (const envelope of batch.entities) {
       try {
+        const required = PERMISSION_BY_ENTITY[envelope.entity_type];
+        if (required && !held.has(required)) {
+          // Rejected per entity rather than failing the batch: a cashier's
+          // sales must still upload even if a refund in the same batch is
+          // refused. Not retryable - permissions will not change on retry.
+          throw new PermissionError(
+            `uploading a ${envelope.entity_type} requires ${required}`,
+          );
+        }
+
         const status = await this.db.withOrg(orgId, (tx) =>
           this.ingestOne(tx, orgId, batch, envelope),
         );
@@ -51,7 +93,16 @@ export class SyncService {
         results.push({
           id: envelope.id,
           status: 'rejected',
-          error: { code: retryable ? 'internal_error' : 'validation_failed', message, retryable },
+          error: {
+            code:
+              error instanceof PermissionError
+                ? 'forbidden'
+                : retryable
+                  ? 'internal_error'
+                  : 'validation_failed',
+            message,
+            retryable,
+          },
         });
       }
     }
@@ -73,9 +124,12 @@ export class SyncService {
   }
 
   /**
-   * Phase 1 handles inventory movements. Sales, refunds, payments and cash
-   * sessions land in Phase 2 with the register itself; the envelope, the
-   * idempotency guarantee and the dead letter path are all in place for them.
+   * Route one envelope to the service that owns its entity type.
+   *
+   * Each arrives already validated by its own schema rather than trusted: a
+   * register running a build from three months ago is a normal situation in
+   * retail, not an edge case, and its payload has to be checked the same way a
+   * direct HTTP body is.
    */
   private async ingestOne(
     tx: PoolClient,
@@ -84,13 +138,60 @@ export class SyncService {
     envelope: SyncBatch['entities'][number],
   ): Promise<'accepted' | 'duplicate'> {
     switch (envelope.entity_type) {
+      case 'sale': {
+        const sale = saleInput.parse({ ...envelope.payload, id: envelope.id });
+        return this.sales.intake(tx, sale, batch.device_id);
+      }
+      case 'refund': {
+        const refund = refundInput.parse({ ...envelope.payload, id: envelope.id });
+        return this.refunds.intake(tx, refund, batch.device_id);
+      }
+      case 'cash_movement': {
+        const movement = cashMovementInput.parse({ ...envelope.payload, id: envelope.id });
+        return this.ingestCashMovement(tx, movement, batch.device_id);
+      }
       case 'inventory_movement':
         return this.ingestMovement(tx, envelope);
+      case 'payment':
+        // Payments arrive inside their sale or refund envelope, never alone. A
+        // standalone payment would be money with nothing to attach it to.
+        throw new Error('payments are uploaded inside their sale or refund, not separately');
       default:
-        throw new Error(
-          `entity type "${envelope.entity_type}" is not accepted yet (Phase 2)`,
-        );
+        throw new Error(`entity type "${envelope.entity_type}" is not accepted yet`);
     }
+  }
+
+  private async ingestCashMovement(
+    tx: PoolClient,
+    movement: { id: string; session_id: string; kind: string; amount_minor: bigint;
+               reason?: string | undefined; reference_type?: string | undefined;
+               reference_id?: string | undefined; actor_user_id: string;
+               approved_by?: string | undefined; occurred_at: string; note?: string | undefined },
+    deviceId: string,
+  ): Promise<'accepted' | 'duplicate'> {
+    const { rows } = await tx.query<{ id: string }>(
+      `INSERT INTO cash_movements
+         (id, org_id, session_id, kind, amount_minor, reason, reference_type, reference_id,
+          actor_user_id, approved_by, occurred_at, device_id, note)
+       VALUES ($1, current_setting('app.org_id')::uuid, $2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT (id) DO NOTHING
+       RETURNING id`,
+      [
+        movement.id,
+        movement.session_id,
+        movement.kind,
+        movement.amount_minor.toString(),
+        movement.reason ?? null,
+        movement.reference_type ?? null,
+        movement.reference_id ?? null,
+        movement.actor_user_id,
+        movement.approved_by ?? null,
+        movement.occurred_at,
+        deviceId,
+        movement.note ?? null,
+      ],
+    );
+    return rows.length === 0 ? 'duplicate' : 'accepted';
   }
 
   private async ingestMovement(
@@ -265,6 +366,11 @@ export class SyncService {
     // Serialization failure, deadlock, too many connections, admin shutdown.
     return ['40001', '40P01', '53300', '57P01', '08006', '08003'].includes(code);
   }
+}
+
+/** A permission failure inside a batch, so it can be reported as `forbidden`. */
+class PermissionError extends Error {
+  override name = 'PermissionError';
 }
 
 function uuidV7Timestamp(id: string): Date {

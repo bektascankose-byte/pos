@@ -145,12 +145,61 @@ Shrinkage reasons (`damage`, `theft`, `expired`, `manual_adjustment`) require a
 note. Without one the loss prevention report is a list of numbers nobody can act
 on.
 
+### Sales, refunds and cash
+
+```
+GET  /api/v1/sales                      report.sales
+GET  /api/v1/sales/:id                  sale.reprint
+POST /api/v1/sales/:id/void             sale.void
+
+GET  /api/v1/refunds                    report.sales
+GET  /api/v1/refunds/for-sale/:saleId   refund.create
+
+POST /api/v1/cash/sessions              cash.session_open
+POST /api/v1/cash/sessions/:id/close    cash.session_close
+GET  /api/v1/cash/sessions/:id          cash.session_open
+GET  /api/v1/cash/sessions?register_id= cash.session_open
+POST /api/v1/cash/movements             cash.paid_in_out
+
+GET  /api/v1/audit                      audit.view
+```
+
+**There is no `POST /sales`.** A sale is composed on the register and arrives
+through `/sync/batch`. Ringing a sale over HTTP would make selling depend on the
+network, which is the one thing this architecture refuses.
+
+A void is a new state, never a deletion, and it returns the stock through a new
+ledger entry rather than by reversing the original — so the history reads as
+"sold, then returned", which is what happened. A sale that has been partly
+refunded cannot be voided: that would count the same return twice.
+
+`/refunds/for-sale/:saleId` is what the register calls *before* offering a
+refund, so a cashier is told "only 1 of 3 left" before promising a customer
+anything rather than after. `quantity_refunded` on the original line is the one
+mutable column in the financial schema, and it is locked `FOR UPDATE` during a
+refund so two registers refunding the same receipt serialize rather than both
+reading three.
+
+Closing a drawer requires a different permission from opening one. Opening
+commits nothing; closing produces the over/short number a shift is judged by,
+and letting the person who is short report their own variance removes the only
+check on it. Expected cash is `sum(amount_minor)` over the session's movements,
+computed when asked — never a stored counter, which drifts the first time a
+write is retried.
+
 ### Sync
 
 ```
 POST /api/v1/sync/batch                          sync.upload
 GET  /api/v1/sync/changes?since=&scopes=&limit=  sync.download
 ```
+
+`sync.upload` gates the endpoint, and **each entity is additionally checked
+against the permission that governs its own action** — `sale.create` for a sale,
+`refund.create` for a refund, `inventory.adjust` for a stock movement. Without
+that, a cashier who cannot issue a refund over `/refunds` could issue one by
+putting it in a batch instead. A permission that does not govern every route
+capable of the action governs nothing.
 
 Upload is **ordered but not atomic**. Entity 7 failing must not block entities 1
 to 6: one malformed row cannot hold a day of sales hostage. Each gets its own
@@ -191,7 +240,7 @@ because the API moved.
 - OpenAPI generation from the Zod schemas (the schemas are the source of truth;
   the generator is not wired)
 - The Kotlin client generator for the register
-- Sales, refunds, payments and cash sessions — Phase 2, with the register. The
-  sync envelope, the idempotency guarantee and the dead letter path are already
-  in place for them.
 - Webhooks
+- Promotions and the pricing engine (Phase 2, with the register)
+- Held and parked transactions
+- Receipt rendering and delivery
