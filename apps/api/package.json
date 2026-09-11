@@ -7,7 +7,7 @@
     "dev": "nest start --watch",
     "start": "node dist/main.js",
     "typecheck": "tsc --noEmit",
-    "e2e": "nest build && node scripts/e2e.mjs"
+    "e2e": "nest build -p tsconfig.e2e.json && node scripts/e2e.mjs"
   },
   "dependencies": {
     "@fastify/helmet": "^13.0.1",

@@ -31,6 +31,12 @@ recovered. Running the tests must never cost somebody their till.
 Override with `E2E_DB_NAME`, or `E2E_MIGRATOR_URL` and `E2E_DATABASE_URL` for
 the two roles. `E2E_SKIP_RESET=true` reuses whatever is already there.
 
+It builds to its own output directory too, `dist-e2e`, for the same reason.
+`nest build` empties its target first, so building into `dist` while a
+`nest start --watch` dev server is running from it kills that server — the file
+it is about to reload disappears mid-rebuild, and the failure surfaces much
+later as a device that cannot reach the API for no visible reason.
+
 ## The two engine rule
 
 Migrations must apply to both PGlite and PostgreSQL 16, and CI runs both. PGlite is the fast gate;

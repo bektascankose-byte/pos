@@ -105,7 +105,14 @@ if (process.env.E2E_SKIP_RESET !== 'true') {
 }
 
 // ------------------------------------------------------------------ the server
-const server = spawn(process.execPath, ['dist/main.js'], {
+// Built and run from its own output directory, never `dist`.
+//
+// `nest build` empties its target first, so building into `dist` while a
+// `nest start --watch` dev server is running from it kills that server: the
+// file it is about to reload disappears mid-rebuild. Running the tests must not
+// take the development API down with it, for the same reason they must not
+// reset the development database.
+const server = spawn(process.execPath, ['dist-e2e/main.js'], {
   cwd,
   env: {
     ...process.env,
