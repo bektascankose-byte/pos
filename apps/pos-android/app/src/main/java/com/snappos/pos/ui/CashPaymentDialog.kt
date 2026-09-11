@@ -4,16 +4,18 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -29,18 +31,25 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.snappos.domain.Money
 
 /**
  * Taking cash.
  *
- * Two things a cashier does here, hundreds of times a day: tap a quick-cash
+ * Two things a cashier does here hundreds of times a day: tap a quick-cash
  * button, or type an amount. Both are one gesture, and the change due is shown
- * as large as the total because getting change wrong is the most common
- * counter mistake there is.
+ * as large as the total because handing back the wrong change is the most
+ * common mistake at a counter.
  *
  * The keypad is deliberately not the system keyboard. A numeric IME on a
- * terminal is small, slow to appear, and moves the layout when it does.
+ * terminal is small, slow to appear, and shifts the layout when it does.
+ *
+ * **Two layouts, chosen by height.** A register in landscape has roughly 380dp
+ * of vertical space, and a single stacked column does not fit — the first
+ * version of this dialog pushed TAKE CASH off the bottom of the screen, which
+ * made the sale impossible to complete rather than merely awkward. Short
+ * screens get amounts and actions beside the keypad instead of above it.
  */
 @Composable
 fun CashPaymentDialog(
@@ -57,84 +66,50 @@ fun CashPaymentDialog(
   val change = tendered - total
   val sufficient = tendered >= total
 
-  Dialog(onDismissRequest = onDismiss) {
-    Surface(
-      shape = RoundedCornerShape(12.dp),
-      color = MaterialTheme.colorScheme.surface,
-      modifier = Modifier.width(420.dp),
-    ) {
-      Column(Modifier.padding(Space.L.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-          Text("Total due", style = MaterialTheme.typography.bodyLarge)
-          Text(
-            total.toMajorString(),
-            style = MaterialTheme.typography.headlineMedium.merge(MoneyTextStyle),
-          )
-        }
+  Dialog(
+    onDismissRequest = onDismiss,
+    properties = DialogProperties(usePlatformDefaultWidth = false),
+  ) {
+    BoxWithConstraints {
+      val sideBySide = maxHeight < 560.dp
 
-        Spacer(Modifier.height(Space.M.dp))
-
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-          Text("Tendered", style = MaterialTheme.typography.bodyLarge)
-          Text(
-            tendered.toMajorString(),
-            style = MaterialTheme.typography.headlineMedium.merge(MoneyTextStyle),
-            color = MaterialTheme.colorScheme.primary,
-          )
-        }
-
-        Spacer(Modifier.height(Space.S.dp))
-
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-          Text(
-            "Change",
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-          Text(
-            if (sufficient) change.toMajorString() else "—",
-            // As large as the total on purpose: handing back the wrong change is
-            // the most common mistake at a counter.
-            style = MaterialTheme.typography.displaySmall.merge(MoneyTextStyle),
-            color = if (sufficient) MaterialTheme.colorScheme.tertiary
-            else MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-
-        Spacer(Modifier.height(Space.M.dp))
-
-        // Exact, then the notes a customer actually hands over.
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Space.S.dp)) {
-          // weight() lives on RowScope, so the caller supplies it rather than
-          // the helper trying to reach for a scope it is not in.
-          QuickCash("Exact", Modifier.weight(1f)) { digits = total.minor.toString() }
-          for (note in listOf(5L, 10L, 20L)) {
-            QuickCash("$$note", Modifier.weight(1f)) { digits = (note * 100).toString() }
+      Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier
+          .padding(Space.M.dp)
+          .widthIn(max = if (sideBySide) 720.dp else 420.dp),
+      ) {
+        if (sideBySide) {
+          Row(Modifier.padding(Space.M.dp)) {
+            Column(Modifier.weight(1f).padding(end = Space.M.dp)) {
+              Amounts(total, tendered, change, sufficient)
+              Spacer(Modifier.height(Space.M.dp))
+              QuickCashRow(total) { digits = it }
+              Spacer(Modifier.weight(1f))
+              Actions(sufficient, onDismiss) { onConfirm(tendered) }
+            }
+            Box(Modifier.weight(1f)) {
+              Keypad(
+                onDigit = { if (digits.length < 9) digits += it },
+                onBackspace = { digits = digits.dropLast(1) },
+                onClear = { digits = "" },
+              )
+            }
           }
-        }
-
-        Spacer(Modifier.height(Space.M.dp))
-        Keypad(
-          onDigit = { digit ->
-            // Capped so a stray repeat cannot produce an absurd tender.
-            if (digits.length < 9) digits += digit
-          },
-          onBackspace = { digits = digits.dropLast(1) },
-          onClear = { digits = "" },
-        )
-
-        Spacer(Modifier.height(Space.M.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Space.S.dp)) {
-          TextButton(onClick = onDismiss, modifier = Modifier.weight(1f).height(Touch.MIN.dp)) {
-            Text("Cancel")
-          }
-          Button(
-            onClick = { onConfirm(tendered) },
-            enabled = sufficient,
-            modifier = Modifier.weight(2f).height(Touch.PRIMARY.dp),
-            shape = RoundedCornerShape(6.dp),
-          ) {
-            Text("TAKE CASH", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        } else {
+          Column(Modifier.padding(Space.L.dp)) {
+            Amounts(total, tendered, change, sufficient)
+            Spacer(Modifier.height(Space.M.dp))
+            QuickCashRow(total) { digits = it }
+            Spacer(Modifier.height(Space.M.dp))
+            Keypad(
+              onDigit = { if (digits.length < 9) digits += it },
+              onBackspace = { digits = digits.dropLast(1) },
+              onClear = { digits = "" },
+            )
+            Spacer(Modifier.height(Space.M.dp))
+            Actions(sufficient, onDismiss) { onConfirm(tendered) }
           }
         }
       }
@@ -143,7 +118,76 @@ fun CashPaymentDialog(
 }
 
 @Composable
-private fun QuickCash(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun ColumnScope.Amounts(
+  total: Money,
+  tendered: Money,
+  change: Money,
+  sufficient: Boolean,
+) {
+  Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+    Text("Total due", style = MaterialTheme.typography.bodyLarge)
+    Text(total.toMajorString(), style = MaterialTheme.typography.headlineMedium.merge(MoneyTextStyle))
+  }
+  Spacer(Modifier.height(Space.S.dp))
+  Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+    Text("Tendered", style = MaterialTheme.typography.bodyLarge)
+    Text(
+      tendered.toMajorString(),
+      style = MaterialTheme.typography.headlineMedium.merge(MoneyTextStyle),
+      color = MaterialTheme.colorScheme.primary,
+    )
+  }
+  Spacer(Modifier.height(Space.S.dp))
+  Row(
+    Modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.SpaceBetween,
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Text(
+      "Change",
+      style = MaterialTheme.typography.titleLarge,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Text(
+      if (sufficient) change.toMajorString() else "—",
+      // As large as the total on purpose.
+      style = MaterialTheme.typography.displaySmall.merge(MoneyTextStyle),
+      color = if (sufficient) MaterialTheme.colorScheme.tertiary
+      else MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+  }
+}
+
+/** Exact, then the notes a customer actually hands over. */
+@Composable
+private fun QuickCashRow(total: Money, onPick: (String) -> Unit) {
+  Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Space.S.dp)) {
+    QuickCash("Exact", Modifier.weight(1f)) { onPick(total.minor.toString()) }
+    for (note in listOf(5L, 10L, 20L)) {
+      QuickCash("$$note", Modifier.weight(1f)) { onPick((note * 100).toString()) }
+    }
+  }
+}
+
+@Composable
+private fun Actions(sufficient: Boolean, onCancel: () -> Unit, onConfirm: () -> Unit) {
+  Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Space.S.dp)) {
+    TextButton(onClick = onCancel, modifier = Modifier.weight(1f).height(Touch.MIN.dp)) {
+      Text("Cancel")
+    }
+    Button(
+      onClick = onConfirm,
+      enabled = sufficient,
+      modifier = Modifier.weight(2f).height(Touch.PRIMARY.dp),
+      shape = RoundedCornerShape(6.dp),
+    ) {
+      Text("TAKE CASH", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+    }
+  }
+}
+
+@Composable
+private fun RowScope.QuickCash(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
   Box(
     modifier
       .height(Touch.MIN.dp)
@@ -162,7 +206,7 @@ private fun Keypad(onDigit: (String) -> Unit, onBackspace: () -> Unit, onClear: 
     listOf("1", "2", "3"),
     listOf("4", "5", "6"),
     listOf("7", "8", "9"),
-    listOf("C", "0", "⌫"),
+    listOf("C", "0", "<"),
   )
   Column(verticalArrangement = Arrangement.spacedBy(Space.S.dp)) {
     rows.forEach { row ->
@@ -177,7 +221,7 @@ private fun Keypad(onDigit: (String) -> Unit, onBackspace: () -> Unit, onClear: 
               .clickable {
                 when (key) {
                   "C" -> onClear()
-                  "⌫" -> onBackspace()
+                  "<" -> onBackspace()
                   else -> onDigit(key)
                 }
               },

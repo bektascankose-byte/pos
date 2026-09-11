@@ -25,18 +25,14 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,11 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -144,53 +136,6 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
 }
 
 enum class SyncState { Online, Syncing, Offline, Error }
-
-/**
- * The scan field.
- *
- * Always focused, so a scan works the instant the app is open with no tap
- * required — a hardware scanner types like a keyboard and sends Enter, and if
- * nothing holds focus those characters go nowhere.
- *
- * The same field doubles as search, because a cashier looking something up and
- * a cashier scanning it are doing the same job and should not have to pick a
- * mode first.
- */
-@Composable
-private fun ScanField(onQueryChange: (String) -> Unit, onSubmit: (String) -> Unit) {
-  val focus = remember { FocusRequester() }
-  var text by remember { mutableStateOf("") }
-
-  LaunchedEffect(Unit) { focus.requestFocus() }
-
-  OutlinedTextField(
-    value = text,
-    onValueChange = {
-      text = it
-      onQueryChange(it)
-    },
-    modifier = Modifier
-      .fillMaxWidth()
-      .padding(horizontal = Space.M.dp, vertical = Space.S.dp)
-      .focusRequester(focus),
-    singleLine = true,
-    placeholder = { Text("Scan or type SKU, UPC, name") },
-    keyboardOptions = KeyboardOptions(
-      keyboardType = KeyboardType.Ascii,
-      imeAction = ImeAction.Done,
-    ),
-    keyboardActions = KeyboardActions(
-      onDone = {
-        // A scanner sends the barcode then Enter. Clearing here is what lets a
-        // rapid sequence of scans work without the cashier touching anything.
-        onSubmit(text)
-        text = ""
-        onQueryChange("")
-        focus.requestFocus()
-      },
-    ),
-  )
-}
 
 @Composable
 private fun RegisterHeader(cashier: String, register: String, state: SyncState, pending: Int) {

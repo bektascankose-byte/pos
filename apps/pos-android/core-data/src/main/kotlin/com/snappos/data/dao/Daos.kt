@@ -86,6 +86,15 @@ interface CatalogDao {
   )
   suspend fun search(query: String, now: Long, limit: Int = 50): List<ScannedItem>
 
+  /**
+   * Products in a category, including everything beneath it.
+   *
+   * Matching `categoryId` exactly was wrong: variants are assigned to leaf
+   * categories, so tapping a department like "Vapes" returned nothing at all
+   * while every vape sat one level down in "vapes.disposable". The materialized
+   * path makes the descendant test a prefix comparison, which the
+   * `categories_prefix_idx` equivalent on device serves directly.
+   */
   @Query(
     """
     SELECT v.*, '1' AS scanUnits,
@@ -96,7 +105,12 @@ interface CatalogDao {
              ORDER BY p.effectiveFrom DESC LIMIT 1) AS priceMinor,
            (SELECT i.onHand FROM inventory i WHERE i.variantId = v.id) AS onHand
     FROM variants v
-    WHERE v.status = 'active' AND (:categoryId IS NULL OR v.categoryId = :categoryId)
+    WHERE v.status = 'active'
+      AND (:categoryId IS NULL OR v.categoryId IN (
+            SELECT c.id FROM categories c
+            WHERE c.id = :categoryId
+               OR c.path LIKE (SELECT p2.path FROM categories p2 WHERE p2.id = :categoryId) || '.%'
+          ))
     ORDER BY v.productName, v.sortOrder
     LIMIT :limit
     """,
