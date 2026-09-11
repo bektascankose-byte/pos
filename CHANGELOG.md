@@ -2,6 +2,38 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — A scan could be silently dropped
+
+### Fixed
+
+- **Scanning fast lost items from the cart.** Measured on a Galaxy S22 Ultra:
+  10 scans at 2.5s intervals added 10 items, but 10 scans back to back added
+  **7**, and the same barcodes delivered as raw key events added **2**. A
+  customer charged for one of the two things in their hand, on the one code path
+  a shop uses thousands of times a day.
+
+  The cause is a lost update that reads as atomic and is not:
+
+  ```kotlin
+  _state.value = _state.value.copy(tiles = catalog.byCategory(...))
+  ```
+
+  Kotlin evaluates the receiver first, then suspends on the Room query, then
+  copies the state it captured *before* the suspension. Anything written while
+  it was suspended is discarded. Clearing the scan field calls this on every
+  submit, so two scans in quick succession overlapped: the search started by the
+  first read the cart, suspended, and wrote the pre-scan cart back over the item
+  the second had just added.
+
+  Both occurrences now resolve the query into a local before touching state.
+  Re-measured on the same device at the same speed: **10 of 10 and 20 of 20**,
+  no loss on either input path.
+
+  Worth stating plainly: this never reproduced while driving the register by
+  hand, because a person cannot scan fast enough to overlap two database reads.
+  It only appeared under machine-speed input, and it is exactly the kind of
+  defect that survives to production as "the count is off again".
+
 ## Phase 2 — Voids through sync
 
 A void composed at the counter, authorised by a manager PIN, delivered through

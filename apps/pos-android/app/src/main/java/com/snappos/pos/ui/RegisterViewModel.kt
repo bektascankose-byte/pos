@@ -163,7 +163,9 @@ class RegisterViewModel @Inject constructor(
   }
 
   private suspend fun loadTiles(categoryId: String?) {
-    _state.value = _state.value.copy(tiles = catalog.byCategory(categoryId, limit = 60))
+    // Resolved before the state is touched. See onSearch for why.
+    val rows = catalog.byCategory(categoryId, limit = 60)
+    _state.value = _state.value.copy(tiles = rows)
   }
 
   fun selectCategory(categoryId: String?) {
@@ -198,10 +200,25 @@ class RegisterViewModel @Inject constructor(
   fun onSearch(query: String) {
     viewModelScope.launch {
       _state.value = _state.value.copy(searchQuery = query)
-      _state.value = _state.value.copy(
-        tiles = if (query.isBlank()) catalog.byCategory(_state.value.selectedCategoryId, 60)
-        else catalog.search(query, 60),
-      )
+
+      // The query is resolved into a local **before** the state is read.
+      //
+      // `_state.value = _state.value.copy(tiles = <suspending call>)` looks
+      // atomic and is not: Kotlin evaluates the receiver first, then suspends
+      // on the database read, then copies the state it captured before the
+      // suspension. Anything written while it was suspended is silently
+      // discarded.
+      //
+      // That lost scans. Clearing the scan field calls this on every submit, so
+      // two scans in quick succession overlapped: the search started by the
+      // first read the cart, suspended, and wrote back the pre-scan cart over
+      // the item the second had just added. Measured at 30% loss on a phone
+      // scanning as fast as adb can drive it, and 0% with a pause between
+      // scans - which is exactly the shape of a bug nobody reproduces at a desk
+      // and everybody hits at a counter during a rush.
+      val rows = if (query.isBlank()) catalog.byCategory(_state.value.selectedCategoryId, 60)
+      else catalog.search(query, 60)
+      _state.value = _state.value.copy(tiles = rows)
     }
   }
 
@@ -397,10 +414,17 @@ class RegisterViewModel @Inject constructor(
     viewModelScope.launch {
       _state.value = _state.value.copy(busy = true, refundError = null)
       val found = refunds.findByReceipt(receiptNo)
+
+      // Every suspending call resolved before the state is read. Suspending
+      // inside a `_state.value.copy(...)` argument captures the state first and
+      // writes it back after, discarding whatever happened in between — the
+      // lost update that was dropping scans.
+      val voided = if (found == null) refunds.wasVoided(receiptNo) else false
+
       _state.value = when {
         found == null -> _state.value.copy(
           busy = false,
-          refundError = if (refunds.wasVoided(receiptNo)) {
+          refundError = if (voided) {
             "$receiptNo was voided. There is nothing left to refund on it."
           } else {
             "No sale on this register with receipt $receiptNo"
