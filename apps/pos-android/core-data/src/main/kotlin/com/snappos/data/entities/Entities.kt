@@ -298,4 +298,13 @@ data class RegisterConfigEntity(
   val taxRate: String,
   val lastCatalogCursor: String,
   val clockOffsetMillis: Long,
+  /**
+   * Who a sale is attributed to.
+   *
+   * Set from the signed-in session. Replaced by whoever unlocked the register
+   * once PIN unlock exists; until then a sale must still name a real user, or
+   * the server rejects the upload on a foreign key and the sale sits in the
+   * dead letter list for a reason nobody can act on.
+   */
+  val cashierUserId: String? = null,
 )

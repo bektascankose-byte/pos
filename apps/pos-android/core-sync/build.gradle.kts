@@ -25,6 +25,7 @@ dependencies {
   implementation(libs.hilt.android)
   implementation(libs.hilt.work)
   ksp(libs.hilt.compiler)
+  ksp(libs.androidx.hilt.compiler)
 
   implementation(libs.retrofit)
   implementation(libs.retrofit.kotlinx.serialization)
@@ -32,6 +33,7 @@ dependencies {
   implementation(libs.okhttp.logging)
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.kotlinx.coroutines.android)
+  implementation(libs.datastore.preferences)
 
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)

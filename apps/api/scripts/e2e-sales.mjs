@@ -488,7 +488,42 @@ export async function runSalesChecks({ api, check, uuidV7, ownerToken, managerTo
     `got ${lateMovement.status}`,
   );
 
-  // ------------------------------------------------------------- 8. audit trail
+  // ------------------------------------------------- 8. the register bootstrap
+
+  const snapshot = await api(`/api/v1/sync/catalog?store_id=${storeId}`, { token: cashierToken });
+  check('a register can pull a catalog snapshot', snapshot.status === 200, JSON.stringify(snapshot.body).slice(0, 200));
+  check(
+    'the snapshot carries everything needed to sell offline',
+    snapshot.body?.variants?.length === 12 &&
+      snapshot.body?.barcodes?.length === 12 &&
+      snapshot.body?.prices?.length >= 12 &&
+      snapshot.body?.categories?.length === 8 &&
+      snapshot.body?.tax_rates?.length >= 1,
+    JSON.stringify({
+      variants: snapshot.body?.variants?.length,
+      barcodes: snapshot.body?.barcodes?.length,
+      prices: snapshot.body?.prices?.length,
+      categories: snapshot.body?.categories?.length,
+      taxRates: snapshot.body?.tax_rates?.length,
+    }),
+  );
+  check(
+    'the snapshot carries the age rule with each variant',
+    snapshot.body?.variants?.find((v) => v.sku === 'GB-PULSEX-MM')?.minimum_age === 21 &&
+      snapshot.body?.variants?.find((v) => v.sku === 'MON-ULTRA-16')?.minimum_age === null,
+  );
+  check(
+    'the snapshot carries a cursor to resume the change feed from',
+    /^\d+$/.test(snapshot.body?.cursor ?? ''),
+    `cursor was ${snapshot.body?.cursor}`,
+  );
+  // A terminal can be stolen, so it holds the smallest useful copy.
+  check(
+    'the snapshot contains no customer data',
+    !('customers' in (snapshot.body ?? {})),
+  );
+
+  // ------------------------------------------------------------- 9. audit trail
 
   const audit = await api(`/api/v1/audit?entity_id=${voidSaleId}`, { token: ownerToken });
   check(

@@ -8,8 +8,8 @@ Kotlin, Jetpack Compose, multi-module Gradle.
 |---|---|
 | `core-domain` | **Money type built, 13 tests passing.** Pure Kotlin, no Android. |
 | `app` | **Shell builds and packages.** Register layout renders against static data. |
-| `core-data` | Module configured. Room entities are next. |
-| `core-sync` | Module configured. WorkManager outbox drain is next. |
+| `core-data` | **Built.** Room over SQLCipher, 12 tables, schema committed. |
+| `core-sync` | **Built.** Retrofit client, outbox drain, catalog pull, WorkManager. |
 | `hardware/hardware-api` | Module configured. Interfaces are next. |
 
 `./gradlew :app:assembleDebug` produces a debug APK. `./gradlew test` runs the
@@ -126,8 +126,38 @@ A physical device is the better test of the two — real touch targets, real
 scanner hardware — though the layout is designed for a landscape terminal and
 will be cramped on a handset.
 
+## Reaching the server from a device
+
+`adb reverse tcp:3000 tcp:3000` tunnels the phone's `localhost:3000` to the
+development machine over USB. Chosen over the machine's LAN address because it
+survives a VPN, a firewall and a change of wifi — none of which anyone should
+have to debug in order to ring a test sale.
+
+```bash
+adb reverse tcp:3000 tcp:3000
+```
+
+Note that removing the tunnel does **not** simulate being offline: OkHttp keeps
+pooled connections alive and requests keep succeeding for a while. Stop the API
+process instead.
+
+## What is proven on hardware
+
+Verified on a Galaxy S22 Ultra against the real API:
+
+- sign in, adopt the store and register identity, pull a 12 variant catalog
+- scan to cart, per line tax from the server's own rate
+- the 21+ gate blocking payment until ID is confirmed
+- a sale committed locally and uploaded: stock deducted through the ledger
+- **two sales rung with the API process stopped**, both draining when it
+  returned, each landing exactly once, with the levels still equal to the sum
+  of the ledger
+
 ## Not yet built
 
-Everything that makes it a register: the Room schema and encrypted local store,
-the sync outbox and its WorkManager drain, scan-to-cart, the pricing engine,
-payment, receipts, hardware adapters, PIN unlock, and cash sessions on device.
+PIN unlock, cash sessions on device, refunds, receipt printing, hardware
+adapters, the promotions engine, and the incremental change feed — the catalog
+currently arrives as a full snapshot on each pull.
+
+`DevProvisioning` and `DevSignIn` are development scaffolding standing in for a
+real device claim flow, and both say so. Delete them when it lands.

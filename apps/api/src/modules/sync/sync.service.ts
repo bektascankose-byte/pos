@@ -316,6 +316,95 @@ export class SyncService {
     });
   }
 
+  /**
+   * The catalog a register replicates, as one snapshot.
+   *
+   * A register needs everything it can sell before it can sell anything, and
+   * `/sync/changes` cannot provide that: it is a log of what changed, so a
+   * device with an empty database has nothing to apply changes to. This is the
+   * bootstrap, and the change feed carries it forward from there.
+   *
+   * Deliberately scoped to one store. A register has no business holding
+   * another store's prices, and on a device that can be stolen the smallest
+   * useful copy is the right one.
+   *
+   * Customers are NOT included, on purpose. Caching the customer table on a
+   * terminal is a privacy problem with no operational payoff: the register
+   * looks a customer up by phone number when it needs one.
+   */
+  async catalogSnapshot(orgId: string, storeId: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const [{ rows: categories }, { rows: variants }, { rows: barcodes }, { rows: prices },
+             { rows: levels }, { rows: taxRates }] = await Promise.all([
+        tx.query(
+          `SELECT id, parent_id, slug, name, path, depth, sort_order, tile_color,
+                  is_department
+           FROM categories WHERE status = 'active' ORDER BY path`,
+        ),
+        tx.query(
+          `SELECT v.id, v.product_id, p.name AS product_name, v.variant_name, v.sku, v.plu,
+                  p.brand_id, b.name AS brand_name, p.category_id, p.tax_category_id,
+                  v.cost::text, v.case_quantity, v.sort_order, v.is_default, v.status,
+                  pc.minimum_age, COALESCE(pc.id_scan_required, false) AS id_scan_required,
+                  pc.regulated_class
+           FROM product_variants v
+           JOIN products p ON p.id = v.product_id
+           LEFT JOIN brands b ON b.id = p.brand_id
+           LEFT JOIN product_compliance pc ON pc.product_id = p.id
+           WHERE v.status = 'active' AND p.status = 'active'`,
+        ),
+        tx.query(
+          `SELECT vb.id, vb.variant_id, vb.barcode, vb.kind, vb.units::text, vb.is_primary
+           FROM variant_barcodes vb
+           JOIN product_variants v ON v.id = vb.variant_id
+           WHERE v.status = 'active'`,
+        ),
+        // Store specific prices win over the organization default, and both are
+        // sent: a price scheduled for Monday has to be on the register on
+        // Sunday night, because the register may be offline on Monday.
+        tx.query(
+          `SELECT id, variant_id, kind, price_minor::text,
+                  effective_from, effective_to
+           FROM variant_prices
+           WHERE (store_id = $1 OR store_id IS NULL)
+             AND (effective_to IS NULL OR effective_to > now())`,
+          [storeId],
+        ),
+        tx.query(
+          `SELECT variant_id, on_hand::text, available::text, updated_at
+           FROM inventory_levels WHERE store_id = $1`,
+          [storeId],
+        ),
+        tx.query(
+          `SELECT tax_category_id, rate::text, name
+           FROM tax_rates
+           WHERE (store_id = $1 OR store_id IS NULL)
+             AND effective_from <= now()
+             AND (effective_to IS NULL OR effective_to > now())`,
+          [storeId],
+        ),
+      ]);
+
+      // The cursor the register resumes the change feed from. Taken AFTER the
+      // snapshot reads so nothing committed during them is missed; re-applying
+      // a change already in the snapshot is harmless, skipping one is not.
+      const { rows: cursorRows } = await tx.query<{ cursor: string }>(
+        `SELECT COALESCE(sync_changes_watermark(), 0)::text AS cursor`,
+      );
+
+      return {
+        categories,
+        variants,
+        barcodes,
+        prices,
+        inventory: levels,
+        tax_rates: taxRates,
+        cursor: cursorRows[0]?.cursor ?? '0',
+        server_time: new Date().toISOString(),
+      };
+    });
+  }
+
   private async deadLetter(
     orgId: string,
     batch: SyncBatch,

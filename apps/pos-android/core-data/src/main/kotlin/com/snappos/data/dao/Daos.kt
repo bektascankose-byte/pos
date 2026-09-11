@@ -313,4 +313,7 @@ interface ConfigDao {
 
   @Query("UPDATE register_config SET clockOffsetMillis = :offset WHERE id = 1")
   suspend fun setClockOffset(offset: Long)
+
+  @Query("UPDATE register_config SET cashierUserId = :userId WHERE id = 1")
+  suspend fun setCashier(userId: String)
 }

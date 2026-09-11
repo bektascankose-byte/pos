@@ -192,7 +192,24 @@ write is retried.
 ```
 POST /api/v1/sync/batch                          sync.upload
 GET  /api/v1/sync/changes?since=&scopes=&limit=  sync.download
+GET  /api/v1/sync/catalog?store_id=              sync.download
 ```
+
+`/sync/catalog` is the **bootstrap**: everything one store sells, in a single
+response, plus a cursor to resume the change feed from. A register calls it once
+when claimed. The change feed cannot serve this purpose — it is a log of what
+changed, and a device with an empty database has nothing to apply changes to.
+
+Deliberately scoped to one store, and it carries **no customer data**: caching
+the customer table on a terminal is a privacy problem with no operational
+payoff, and the register looks a customer up by phone number when it needs one.
+
+`/registers` returns `last_sequence` for each register. Receipt numbers are
+composed on the device from a local counter so a receipt can print with no
+network, which means a wiped or replaced terminal would restart at 1 and collide
+with receipt numbers that already exist — the upload is then rejected by a unique
+constraint and a legitimate sale can never be handed over. The server reports
+where the register got to so a re-provisioned device resumes from there.
 
 `sync.upload` gates the endpoint, and **each entity is additionally checked
 against the permission that governs its own action** — `sale.create` for a sale,

@@ -28,6 +28,18 @@ export class SyncController {
     return this.sync.ingest(user.orgId, body, new Date(), user.permissions);
   }
 
+  /**
+   * Bootstrap: everything this store sells, in one response.
+   *
+   * A register calls this once when it is claimed, then keeps up with
+   * `/changes`. Gated on sync.download like the change feed.
+   */
+  @Get('catalog')
+  @RequirePermissions('sync.download')
+  catalog(@CurrentUser() user: AuthenticatedUser, @Query('store_id') storeId: string) {
+    return this.sync.catalogSnapshot(user.orgId, storeId);
+  }
+
   @Get('changes')
   @RequirePermissions('sync.download')
   changes(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string>) {

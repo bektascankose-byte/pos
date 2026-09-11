@@ -57,6 +57,10 @@ hilt-android = { module = "com.google.dagger:hilt-android", version.ref = "hilt"
 hilt-compiler = { module = "com.google.dagger:hilt-android-compiler", version.ref = "hilt" }
 hilt-navigation-compose = { module = "androidx.hilt:hilt-navigation-compose", version.ref = "hilt-navigation" }
 hilt-work = { module = "androidx.hilt:hilt-work", version = "1.2.0" }
+# The @HiltWorker annotation is processed by androidx.hilt, not by Dagger's
+# compiler. Without it @HiltWorker compiles cleanly and fails at run time with
+# NoSuchMethodException when WorkManager falls back to reflection.
+androidx-hilt-compiler = { module = "androidx.hilt:hilt-compiler", version = "1.2.0" }
 
 work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
 

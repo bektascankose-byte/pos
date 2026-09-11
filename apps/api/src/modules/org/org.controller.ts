@@ -30,12 +30,30 @@ export class OrgController {
     });
   }
 
+  /**
+   * Registers, each with the last receipt sequence it used.
+   *
+   * `last_sequence` matters more than it looks. Receipt numbers are composed on
+   * the device as `{store}-{register}-{sequence}` from a counter held locally,
+   * which is what lets a receipt print with no network. But that counter lives
+   * only on the device, so a terminal that is replaced, wiped or reinstalled
+   * starts again at 1 and collides with receipt numbers the server already has
+   * — `sales_receipt_key` rejects the upload, and a legitimate sale can never
+   * be handed over.
+   *
+   * So the server, which does have the whole history, reports where the
+   * register got to. A re-provisioned device resumes from there.
+   */
   @Get('registers')
   registers(@CurrentUser() user: AuthenticatedUser) {
     return this.db.withOrg(user.orgId, async (tx) => {
       const { rows } = await tx.query(
-        `SELECT id, store_id, code, name, status
-         FROM registers WHERE status = 'active' ORDER BY code`,
+        `SELECT r.id, r.store_id, r.code, r.name, r.status,
+                COALESCE(
+                  (SELECT max(s.register_sequence) FROM sales s WHERE s.register_id = r.id),
+                  0
+                )::text AS last_sequence
+         FROM registers r WHERE r.status = 'active' ORDER BY r.code`,
       );
       return { data: rows };
     });

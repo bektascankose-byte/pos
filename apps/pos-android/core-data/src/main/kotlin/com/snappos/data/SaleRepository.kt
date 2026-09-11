@@ -84,12 +84,14 @@ class SaleRepository @Inject constructor(
   suspend fun commit(
     cart: Cart,
     tenders: List<Tender>,
-    cashierUserId: String,
     sessionId: String?,
     deviceTimeMillis: Long = System.currentTimeMillis(),
   ): CommittedSale {
     val registerConfig = requireNotNull(config.get()) {
       "this device has not been claimed by a register"
+    }
+    val cashierUserId = requireNotNull(registerConfig.cashierUserId) {
+      "no cashier is signed in on this register"
     }
 
     val saleId = Uuid7.generate()

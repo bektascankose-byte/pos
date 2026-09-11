@@ -3,20 +3,25 @@ package com.snappos.pos.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.snappos.data.CatalogRepository
-import com.snappos.data.DevSeed
+import com.snappos.data.DevProvisioning
 import com.snappos.data.ResolvedProduct
 import com.snappos.data.SaleRepository
 import com.snappos.data.Tender
 import com.snappos.domain.Cart
 import com.snappos.domain.Money
 import com.snappos.domain.Uuid7
+import com.snappos.sync.CatalogSync
+import com.snappos.sync.DevSignIn
+import com.snappos.sync.SyncWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import android.content.Context
 import javax.inject.Inject
 
 /** A short lived message for the cashier. Not an error dialog; a line of text. */
@@ -38,9 +43,12 @@ data class CategoryTile(val id: String, val name: String)
 
 @HiltViewModel
 class RegisterViewModel @Inject constructor(
+  @ApplicationContext private val context: Context,
   private val catalog: CatalogRepository,
   private val sales: SaleRepository,
-  private val devSeed: DevSeed,
+  private val provisioning: DevProvisioning,
+  private val devSignIn: DevSignIn,
+  private val catalogSync: CatalogSync,
 ) : ViewModel() {
 
   private val _state = MutableStateFlow(RegisterUiState())
@@ -63,9 +71,34 @@ class RegisterViewModel @Inject constructor(
 
   init {
     viewModelScope.launch {
-      devSeed.seedIfEmpty()
+      // Provisioning says how to reach the server. The catalog comes only from
+      // the server: a local seed alongside a pulled catalog gave every product
+      // two rows with different ids, which is why DevSeed was deleted.
+      provisioning.ensureProvisioned()
       taxRate = catalog.taxRate()
       loadTiles(null)
+
+      if (catalog.isEmpty()) {
+        _state.value = _state.value.copy(
+          message = Toast("No catalog yet. Connecting to the server...", isError = false),
+        )
+      }
+
+      if (devSignIn.ensureSignedIn()) {
+        devSignIn.adoptServerIdentity()
+        val pulled = catalogSync.pull()
+        if (pulled.ok) {
+          taxRate = catalog.taxRate()
+          loadTiles(_state.value.selectedCategoryId)
+          _state.value = _state.value.copy(message = null)
+        } else if (catalog.isEmpty()) {
+          _state.value = _state.value.copy(
+            message = Toast("No catalog on this register. ${pulled.failure}", isError = true),
+          )
+        }
+        // Hand over anything left from a previous offline stretch.
+        SyncWorker.syncNow(context)
+      }
     }
     // Its own coroutine: collect() on a Room Flow never returns, so anything
     // sequenced after it in the same launch block would never run.
@@ -206,7 +239,6 @@ class RegisterViewModel @Inject constructor(
           tenders = listOf(
             Tender(method = "cash", amount = cart.total, tendered = tendered, change = change),
           ),
-          cashierUserId = DevSeed.DEV_CASHIER_ID,
           sessionId = null,
         )
         _state.value = RegisterUiState(
@@ -217,6 +249,10 @@ class RegisterViewModel @Inject constructor(
           lastChange = committed.change,
           message = Toast("Sale ${committed.receiptNo} saved on this device"),
         )
+        // Enqueued AFTER the sale is committed, never before. The upload is a
+        // consequence of a sale existing; a sale is never a consequence of an
+        // upload succeeding.
+        SyncWorker.syncNow(context)
       } catch (e: Exception) {
         // A failure here means the sale did not commit, so nothing was sold and
         // the cart is deliberately left intact for the cashier to retry.

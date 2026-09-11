@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "38c2df0dfd4f466b213ffc6a4af616ca",
+    "identityHash": "0106b0a9f7889bb34f142083cde269fe",
     "entities": [
       {
         "tableName": "variants",
@@ -1098,7 +1098,7 @@
       },
       {
         "tableName": "register_config",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `orgId` TEXT NOT NULL, `storeId` TEXT NOT NULL, `storeCode` TEXT NOT NULL, `storeName` TEXT NOT NULL, `registerId` TEXT NOT NULL, `registerCode` TEXT NOT NULL, `deviceId` TEXT NOT NULL, `apiBaseUrl` TEXT NOT NULL, `nextSequence` INTEGER NOT NULL, `taxRate` TEXT NOT NULL, `lastCatalogCursor` TEXT NOT NULL, `clockOffsetMillis` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `orgId` TEXT NOT NULL, `storeId` TEXT NOT NULL, `storeCode` TEXT NOT NULL, `storeName` TEXT NOT NULL, `registerId` TEXT NOT NULL, `registerCode` TEXT NOT NULL, `deviceId` TEXT NOT NULL, `apiBaseUrl` TEXT NOT NULL, `nextSequence` INTEGER NOT NULL, `taxRate` TEXT NOT NULL, `lastCatalogCursor` TEXT NOT NULL, `clockOffsetMillis` INTEGER NOT NULL, `cashierUserId` TEXT, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -1177,6 +1177,12 @@
             "columnName": "clockOffsetMillis",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "cashierUserId",
+            "columnName": "cashierUserId",
+            "affinity": "TEXT",
+            "notNull": false
           }
         ],
         "primaryKey": {
@@ -1192,7 +1198,7 @@
     "views": [],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '38c2df0dfd4f466b213ffc6a4af616ca')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '0106b0a9f7889bb34f142083cde269fe')"
     ]
   }
 }
