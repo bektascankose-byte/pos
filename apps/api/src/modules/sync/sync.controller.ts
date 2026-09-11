@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Post, Query } from '@nestjs/common';
-import { syncBatchSchema, changesQuerySchema } from '@snappos/contracts';
+import { syncBatchSchema, changesQuerySchema, catalogQuerySchema } from '@snappos/contracts';
 import { SyncService } from './sync.service.js';
 import { zodBody } from '../../platform/validation/zod.pipe.js';
 import { CurrentUser } from '../../platform/auth/current-user.decorator.js';
@@ -36,8 +36,12 @@ export class SyncController {
    */
   @Get('catalog')
   @RequirePermissions('sync.download')
-  catalog(@CurrentUser() user: AuthenticatedUser, @Query('store_id') storeId: string) {
-    return this.sync.catalogSnapshot(user.orgId, storeId);
+  catalog(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string>) {
+    // Validated rather than taken raw. A missing or malformed store_id used to
+    // produce a 200 carrying an empty roster, no prices and no stock, which a
+    // register cannot tell apart from a store that genuinely has none.
+    const params = catalogQuerySchema.parse(query);
+    return this.sync.catalogSnapshot(user.orgId, params.store_id);
   }
 
   @Get('changes')

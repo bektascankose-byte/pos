@@ -91,13 +91,22 @@ class SyncWorker @AssistedInject constructor(
     /**
      * Run now. Called after every committed sale.
      *
-     * `APPEND_OR_REPLACE` rather than `REPLACE`: a burst of sales during a rush
-     * must not have each one cancel the upload of the one before it.
+     * `REPLACE`, not `APPEND_OR_REPLACE`. Appending looks safer - it reads as
+     * "never drop an upload" - but it chains each sale behind the one before
+     * it, and a single entity stuck in exponential backoff then holds up every
+     * sale rung after it. That is head-of-line blocking on the one path that
+     * must never stall.
+     *
+     * Replacing loses nothing, because the worker drains the whole outbox
+     * rather than one entity: whichever run executes last uploads everything
+     * that is pending, including the rows whose own runs were replaced. It
+     * also clears a stuck backoff the moment the next sale is rung, which is
+     * the behaviour a counter actually needs.
      */
     fun syncNow(context: Context, pullCatalog: Boolean = false) {
       WorkManager.getInstance(context).enqueueUniqueWork(
         IMMEDIATE,
-        ExistingWorkPolicy.APPEND_OR_REPLACE,
+        ExistingWorkPolicy.REPLACE,
         OneTimeWorkRequestBuilder<SyncWorker>()
           .setConstraints(
             Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),

@@ -8,6 +8,7 @@ import com.snappos.data.dao.CatalogDao
 import com.snappos.data.dao.ConfigDao
 import com.snappos.data.dao.EmployeeDao
 import com.snappos.data.dao.OutboxDao
+import com.snappos.data.dao.RefundsDao
 import com.snappos.data.dao.SalesDao
 import dagger.Module
 import dagger.Provides
@@ -43,4 +44,6 @@ object DataModule {
   @Provides fun configDao(db: SnapPosDatabase): ConfigDao = db.config()
 
   @Provides fun cashDao(db: SnapPosDatabase): CashDao = db.cash()
+
+  @Provides fun refundsDao(db: SnapPosDatabase): RefundsDao = db.refunds()
 }

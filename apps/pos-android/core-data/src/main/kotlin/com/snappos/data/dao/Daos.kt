@@ -143,6 +143,17 @@ interface EmployeeDao {
   @Query("SELECT * FROM employees WHERE status = 'active' ORDER BY displayName")
   fun active(): Flow<List<EmployeeEntity>>
 
+  /**
+   * Every employee row, active or not.
+   *
+   * Only ever used to explain an empty roster. "No staff on this register" and
+   * "every member of staff on this register is inactive" look identical at the
+   * till and need completely different remedies, so the screen has to be able
+   * to tell them apart.
+   */
+  @Query("SELECT count(*) FROM employees")
+  fun countAll(): Flow<Int>
+
   @Query("SELECT * FROM employees WHERE id = :id")
   suspend fun byId(id: String): EmployeeEntity?
 

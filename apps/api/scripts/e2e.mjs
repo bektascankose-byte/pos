@@ -75,17 +75,33 @@ async function api(path, { token, method = 'GET', body, headers = {} } = {}) {
 const cwd = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 const repoRoot = new URL('../../..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 
+// A database of its own, never the development one.
+//
+// This suite drops and recreates whatever it points at. Pointed at `snappos`
+// it would also wipe the registers a physical device is provisioned against,
+// and that device has no way back: its queued sales reference store, register
+// and variant ids that no longer exist, and the roster it unlocks from is
+// gone. Running the tests must never cost somebody their till.
+const E2E_DB = process.env.E2E_DB_NAME ?? 'snappos_e2e';
+const MIGRATOR_URL =
+  process.env.E2E_MIGRATOR_URL ??
+  `postgres://snappos_migrator:dev_only_not_a_secret@localhost:5432/${E2E_DB}`;
+const APP_URL =
+  process.env.E2E_DATABASE_URL ??
+  `postgres://snappos_app:dev_only_not_a_secret@localhost:5432/${E2E_DB}`;
+
 if (process.env.E2E_SKIP_RESET !== 'true') {
   const reset = spawnSync('npm', ['run', 'db:reset'], {
     cwd: repoRoot,
     stdio: 'pipe',
     shell: true,
+    env: { ...process.env, DATABASE_URL: MIGRATOR_URL },
   });
   if (reset.status !== 0) {
     console.error('database reset failed', reset.stdout?.toString(), reset.stderr?.toString());
     process.exit(1);
   }
-  console.log('  database reset and seeded');
+  console.log(`  ${E2E_DB} reset and seeded`);
 }
 
 // ------------------------------------------------------------------ the server
@@ -94,9 +110,7 @@ const server = spawn(process.execPath, ['dist/main.js'], {
   env: {
     ...process.env,
     PORT: String(PORT),
-    DATABASE_URL:
-      process.env.E2E_DATABASE_URL ??
-      'postgres://snappos_app:dev_only_not_a_secret@localhost:5432/snappos',
+    DATABASE_URL: APP_URL,
     JWT_SECRET: 'e2e_secret_that_is_at_least_thirty_two_chars',
     RATE_LIMIT_MAX: '10000',
   },

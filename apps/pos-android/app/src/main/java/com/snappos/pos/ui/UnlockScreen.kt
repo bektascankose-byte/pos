@@ -32,6 +32,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.snappos.data.RosterDiagnosis
 import com.snappos.data.entities.EmployeeEntity
 
 /**
@@ -51,6 +52,7 @@ fun UnlockScreen(
   message: String?,
   busy: Boolean,
   onUnlock: (userId: String, pin: String) -> Unit,
+  rosterDiagnosis: RosterDiagnosis? = null,
 ) {
   var selected by remember { mutableStateOf<EmployeeEntity?>(null) }
   var pin by remember { mutableStateOf("") }
@@ -72,15 +74,45 @@ fun UnlockScreen(
         Spacer(Modifier.height(Space.L.dp))
 
         if (employees.isEmpty()) {
-          // A register with no staff has never synced. Say so plainly rather
-          // than showing an empty list that looks like a bug.
+          // Say which of the four situations this is, not the most likely one.
+          //
+          // "No staff on this register yet. Connect to the server to set it
+          // up." reads as a diagnosis and is really a guess: a register that
+          // synced fine and was handed an empty roster shows exactly the same
+          // words, and re-syncing will never fix it. A till that will not open
+          // is the worst failure this product has, and whoever is standing at
+          // it has to be able to say something useful down the phone.
+          val (headline, detail) = when (rosterDiagnosis) {
+            RosterDiagnosis.NotProvisioned ->
+              "This register has not been set up yet." to
+                "Claim it for a store, then it will pull its staff."
+
+            RosterDiagnosis.NeverSynced ->
+              "No staff on this register yet." to
+                "It has never finished syncing. Check the connection to the server."
+
+            is RosterDiagnosis.ServerListedNobody ->
+              "The server listed no staff for ${rosterDiagnosis.storeCode}." to
+                "Syncing again will not change this. Someone has to be assigned " +
+                  "to this store, and this register has to be pointed at the " +
+                  "right one."
+
+            is RosterDiagnosis.AllInactive ->
+              "Every member of staff here is inactive." to
+                "${rosterDiagnosis.total} are on this register and none can sign " +
+                  "in. Reactivate someone on the server."
+
+            // The diagnosis has not arrived yet; do not guess in the meantime.
+            null -> "No staff on this register yet." to "Checking why."
+          }
+
           Text(
-            "No staff on this register yet.",
+            headline,
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.secondary,
           )
           Text(
-            "Connect to the server to set it up.",
+            detail,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )

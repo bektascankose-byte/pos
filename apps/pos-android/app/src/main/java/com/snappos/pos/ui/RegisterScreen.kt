@@ -79,6 +79,7 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
         message = state.message?.text,
         busy = state.busy,
         onUnlock = viewModel::unlock,
+        rosterDiagnosis = state.rosterDiagnosis,
       )
       return
     }
@@ -90,6 +91,32 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
         onOpen = viewModel::openDrawer,
         onLock = viewModel::lock,
       )
+      return
+    }
+    RegisterStage.Refunding -> {
+      RefundScreen(
+        sale = state.refundSale,
+        lookupError = state.refundError,
+        selections = state.refundSelections,
+        restockFlags = state.refundRestock,
+        reasonCode = state.refundReason,
+        busy = state.busy,
+        onLookup = viewModel::lookupReceipt,
+        onQuantity = viewModel::setRefundQuantity,
+        onToggleRestock = viewModel::toggleRefundRestock,
+        onReason = viewModel::setRefundReason,
+        onSubmit = viewModel::requestRefundApproval,
+        onCancel = viewModel::cancelRefund,
+        onVoid = viewModel::requestVoidApproval,
+      )
+      state.approvalPrompt?.let { prompt ->
+        ApprovalDialog(
+          action = prompt,
+          error = state.approvalError,
+          onApprove = viewModel::approve,
+          onDismiss = viewModel::dismissApproval,
+        )
+      }
       return
     }
     RegisterStage.Selling -> Unit
@@ -113,6 +140,7 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
         pending = pending,
         onLock = viewModel::lock,
         onCloseDrawer = { showClose = true },
+        onRefund = viewModel::startRefund,
       )
       HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 
@@ -194,6 +222,7 @@ private fun RegisterHeader(
   pending: Int,
   onLock: () -> Unit,
   onCloseDrawer: () -> Unit,
+  onRefund: () -> Unit,
 ) {
   Row(
     Modifier
@@ -210,6 +239,7 @@ private fun RegisterHeader(
       color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Spacer(Modifier.weight(1f))
+    TextButton(onClick = onRefund) { Text("Refund") }
     TextButton(onClick = onCloseDrawer) { Text("Close drawer") }
     TextButton(onClick = onLock) { Text("Lock") }
   }

@@ -92,6 +92,36 @@ added per route, eventually ships an unguarded endpoint.
 `@RequirePermissions(a, b)` requires **all** of them. "Any" would quietly widen
 access as routes grow.
 
+### The sync route is governed per entity, not per batch
+
+`sync.upload` says a device may talk to the endpoint. It must not also mean "and
+may therefore push anything at all", or a cashier who cannot issue a refund over
+HTTP could issue one by putting it in a batch instead. `PERMISSION_BY_ENTITY`
+maps each entity type to the permission that governs the action, so the
+permission that guards a route guards it everywhere the action can be performed.
+
+### Delegated authority, verified rather than trusted
+
+A register uploads under the **cashier's** token, and a cashier does not hold
+`refund.create`. But a manager standing at the counter can approve a refund by
+PIN, on a register with no network, hours before that refund uploads. Checking
+the uploader's permissions would reject a refund that was properly authorised;
+granting the cashier `refund.create` would let them refund alone.
+
+So for entity types listed in `APPROVER_FIELD_BY_ENTITY`, authority comes from
+the user the payload names — `approved_by` for a refund. That name is **not**
+taken on faith. The server looks the user up inside the request's org, under
+RLS, and requires that they are `active` and actually hold the permission. A
+register that names the cashier themselves, names a manager from another
+organization, or names a user whose access has since been revoked is refused
+exactly like one that names nobody. Revocation therefore takes effect on the
+sync path too, which matters because a stolen device would otherwise keep a
+former manager's authority indefinitely.
+
+The on device PIN check is a **usability** control, not the security boundary:
+it decides what the register lets a cashier do at the counter. The server's
+lookup is the boundary, and it assumes the device may lie.
+
 ## Payment card data
 
 **No card data enters this system. Ever.** Semi integrated P2PE terminal, tokens

@@ -6,9 +6,9 @@ Kotlin, Jetpack Compose, multi-module Gradle.
 
 | Module | State |
 |---|---|
-| `core-domain` | **Money type built, 13 tests passing.** Pure Kotlin, no Android. |
-| `app` | **Shell builds and packages.** Register layout renders against static data. |
-| `core-data` | **Built.** Room over SQLCipher, 12 tables, schema committed. |
+| `core-domain` | **Money, cart and UUIDv7 built, 37 tests passing.** Pure Kotlin, no Android. |
+| `app` | **Selling on hardware.** Unlock, drawer, scan to cart, the 21+ gate, cash tender, refunds with manager approval. |
+| `core-data` | **Built.** Room over SQLCipher, 16 tables, schema v2, migration 1-2 exercised on a device holding v1 data. |
 | `core-sync` | **Built.** Retrofit client, outbox drain, catalog pull, WorkManager. |
 | `hardware/hardware-api` | Module configured. Interfaces are next. |
 
@@ -157,6 +157,29 @@ Verified on a Galaxy S22 Ultra against the real API:
   closing on a blind count that reported **short 2.03 against an expected
   207.03** — and the session, its movements and the close all reaching the
   server
+- **a partial refund against a receipt**: one of two units returned, the
+  cashier's own PIN refused, a manager's accepted, the refund uploading under
+  the cashier's token and restocking server side (18 back to 19) with
+  `approved_by` naming the manager and `inventory_levels` still equal to
+  `sum(inventory_ledger.delta)` on every variant
+- **the Room 1 to 2 migration** run against a device that already held v1 data,
+  opening with its roster and sales intact
+- **the refund guard at its boundary**: the second unit of the same receipt
+  refunded on a later day's session, taking that sale to fully refunded, after
+  which looking the receipt up again is refused with "everything on HH01-R1-3
+  has already been refunded" — before the cashier can promise the customer
+  anything
+- **a void taken at the counter**: the sale rung and uploaded, the cashier's own
+  PIN refused with "that PIN cannot void a sale", a manager's accepted, and the
+  void landing server side with `voided_by` naming the manager — stock back from
+  18 to 19, the ledger still agreeing, and the drawer showing `+2705` in and
+  `-2705` out so the voided sale nets to nothing
+- **the Room 2 to 3 migration** run against a device holding v2 data, opening
+  with its roster and sales intact
+- **the approval dialog**: a cashier's own PIN refused, the refusal clearing on
+  the first digit of the next attempt rather than standing as a verdict on a
+  PIN nobody entered, and the keypad holding still throughout — including its
+  bottom row, where backspace and clear live
 
 ## Starting a shift
 
@@ -180,9 +203,87 @@ close the drawer: closing produces the over/short figure a shift is judged by,
 and letting the person who is short report their own variance removes the only
 check on it.
 
+## Refunding
+
+A refund is the most common vector for employee theft in retail, so the flow is
+deliberately narrow: find the original sale by its receipt number, choose what
+is coming back, say why, and have a manager approve it. There is no way to
+refund an arbitrary amount against no original, because that is the hole theft
+goes through and a register that makes it easy invites it.
+
+Three things are true of every refund composed here:
+
+- it names the original sale, so a quantity can be checked
+- it names the manager who approved it
+- the units it returns are claimed against the original line, so the same item
+  cannot be handed back twice
+
+The over-refund check runs **twice**. On device, `quantityRefunded` on the sale
+line is claimed in the same transaction as the refund, so "only 1 of 3 can still
+be refunded" is answered at the counter rather than on upload, after the
+customer already has the money. The device's copy is advisory — another register
+can refund the same receipt while this one is offline, and only the server knows
+that — so `numeric(14,3)` on the server remains the authority.
+
+Tax is divided back out per unit from a line total that was rounded once, which
+is how a partial refund returns a proportional share; the remainder is absorbed
+by the final unit rather than silently lost.
+
+**Approval does not change who is on the register.** A manager approves standing
+beside the cashier, by PIN, verified on device against the replicated Argon2id
+hash — a customer is waiting, and an approval that needs a round trip is one
+that fails during an outage. The cashier stays signed in, because the sale that
+follows still belongs to them.
+
+The register uploads under the **cashier's** token, and a cashier does not hold
+`refund.create`. Authority therefore comes from the user the payload names in
+`approved_by`, which the server looks up live and requires to be active and to
+actually hold the permission — see `APPROVER_FIELD_BY_ENTITY` in
+`sync.service.ts`. The device's claim is checked, not believed: a refund naming
+the cashier themselves is refused exactly like one naming nobody.
+
+Restock is per line and defaults on. An opened drink is refunded and not
+restocked; restocking it anyway would make the count drift by exactly the number
+of damaged returns, which is the kind of slow error that takes a full physical
+count to find.
+
+Known limits: the lookup is **local only**, so a sale rung on another register
+is not on this device and the register says so rather than inventing a refund
+with nothing to check against. The tender is always cash, because no payment
+provider is integrated yet — a card refund must go back to the card, so that
+line stays honest rather than being faked.
+
+## Voiding
+
+A void reverses a whole transaction that should not have happened — the wrong
+item rung, the customer changing their mind at the counter. It is reached from
+the same receipt lookup as a refund, and offered **only while nothing on the
+sale has been refunded**: refunding one of two units and then voiding the sale
+would put three units back on the shelf and more money in the customer's hand
+than they ever paid. The action is hidden rather than shown and refused.
+
+Approval is a separate permission from a refund (`sale.void`), because a shop
+may well let a shift lead reverse a mis-rung sale without letting them hand cash
+back against last week's receipt.
+
+Voiding a cash sale **takes the money back out of the drawer**, on the device
+and on the server, through the same rule. Without that the drawer is expected to
+hold cash that was handed back, so every voided cash sale reads over by its own
+amount at close — and a cashier who voided a sale and pocketed the notes would
+produce a drawer that balanced perfectly.
+
+The upload is its own `sale_void` entity rather than an edit of the sale, since
+sales are append only on both sides. A void whose sale has not uploaded yet
+waits rather than failing, because entities are ordered inside a batch but not
+across batches.
+
+A voided sale is not refundable — the money already went back — but the screen
+says **"HH01-R1-7 was voided"** rather than "no such sale". The receipt is in the
+cashier's hand; telling them it does not exist sends them looking for it.
+
 ## Not yet built
 
-Refunds on device, receipt printing, hardware adapters, the promotions engine,
+Receipt printing, hardware adapters, the promotions engine,
 manager approval for price overrides, and the incremental change feed — the
 catalog currently arrives as a full snapshot on each pull.
 

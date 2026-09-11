@@ -7,13 +7,29 @@
 | Migration shape | `packages/db/test/migrate.test.mjs` | 9 | both |
 | Schema invariants | `packages/db/test/invariants.test.mjs` | 26 | both |
 | Row level security | `packages/db/test/rls.test.mjs` | 9 | PostgreSQL only |
+| Money and schemas | `packages/contracts/src/{money,schemas}.test.ts` | 24 | n/a |
+| End to end HTTP | `apps/api/scripts/e2e.mjs` | 83 | PostgreSQL only |
 
 44 on PostgreSQL. 34 plus 2 skipped on PGlite.
 
 ```bash
 npm test                          # PGlite
 npm run test:pg -w @snappos/db    # PostgreSQL, needs npm run db:up first
+npm run e2e                       # end to end, needs npm run db:up first
 ```
+
+## The end to end suite has its own database
+
+`npm run e2e` **drops and recreates** the database it points at, so it points at
+`snappos_e2e` and never at `snappos`. This matters more than it looks: a
+physical register is provisioned against `snappos`, and resetting it out from
+under the device leaves that device holding queued sales that reference store,
+register and variant ids which no longer exist, an empty roster, and no way
+back. The register cannot be signed into and its unuploaded sales cannot be
+recovered. Running the tests must never cost somebody their till.
+
+Override with `E2E_DB_NAME`, or `E2E_MIGRATOR_URL` and `E2E_DATABASE_URL` for
+the two roles. `E2E_SKIP_RESET=true` reuses whatever is already there.
 
 ## The two engine rule
 
@@ -65,5 +81,7 @@ Per the architecture, in the phase that introduces each:
 - Pricing conformance suite across the TypeScript and Kotlin engines (Phase 2, §B)
 - Offline sync harness driving the register through Toxiproxy: dropped, delayed, duplicated and
   reordered requests (Phase 2, §M risk 4)
-- API integration tests, permission tests, refund and inventory tests (Phase 1 onward)
+- Instrumented Android tests: the Room migrations currently have no automated
+  coverage and are proven by installing over a device that holds the old
+  version, which does not run in CI
 - The `change_log` bigserial gap test, which forces interleaved commits (§E)

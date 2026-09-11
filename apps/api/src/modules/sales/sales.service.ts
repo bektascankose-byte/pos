@@ -1,10 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { PoolClient } from 'pg';
-import type { SaleInput } from '@snappos/contracts';
+import { createHash } from 'node:crypto';
+import type { SaleInput, SaleVoidInput } from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
 import { InventoryRepository } from '../inventory/inventory.repository.js';
 import { AuditService } from '../../platform/audit/audit.service.js';
 import { ApiException } from '../../platform/errors/api-exception.js';
+import { RetryableIntakeError } from '../../platform/errors/retryable-intake.js';
 
 export type IntakeResult = 'accepted' | 'duplicate';
 
@@ -285,6 +287,80 @@ export class SalesService {
   }
 
   /**
+   * Voiding a cash sale takes the money back out of the drawer.
+   *
+   * Without this the drawer is expected to hold cash that was handed back to
+   * the customer, so every voided cash sale makes the count read **over** by
+   * its own amount at close. That is worse than a missing feature: over and
+   * short are the only signal a manager has, and a cashier who voided a sale
+   * and kept the notes would produce a drawer that balances perfectly.
+   *
+   * Only captured cash reverses. A card sale's void has to go back to the card
+   * through the processor, and no payment provider is integrated yet — putting
+   * a negative cash movement in for one would move a drawer that never held
+   * the money.
+   *
+   * A closed session cannot be reopened, so a void of a sale from an earlier
+   * shift is refused rather than silently posted somewhere it does not belong.
+   * The remedy is a refund, which lands in today's drawer where the money
+   * actually leaves from.
+   */
+  private async reverseCashMovements(
+    tx: PoolClient,
+    saleId: string,
+    sessionId: string | null,
+    actorUserId: string,
+    reason: string,
+  ): Promise<void> {
+    if (!sessionId) return;
+
+    const { rows: cash } = await tx.query<{ id: string; amount_minor: string }>(
+      `SELECT id, amount_minor::text
+       FROM payments
+       WHERE sale_id = $1 AND method = 'cash' AND status = 'captured'`,
+      [saleId],
+    );
+    if (cash.length === 0) return;
+
+    const { rows: sessionRows } = await tx.query<{ closed_at: Date | null }>(
+      `SELECT closed_at FROM cash_sessions WHERE id = $1 FOR UPDATE`,
+      [sessionId],
+    );
+    const session = sessionRows[0];
+    if (session?.closed_at) {
+      throw new ApiException(
+        'conflict',
+        'the drawer this sale was rung into has already been closed; refund it instead',
+        {
+          userMessage:
+            "That shift is closed. Refund this sale instead, so the money comes out of today's drawer.",
+        },
+      );
+    }
+
+    for (const payment of cash) {
+      await tx.query(
+        `INSERT INTO cash_movements
+           (id, org_id, session_id, kind, amount_minor, reference_type, reference_id,
+            actor_user_id, reason, occurred_at)
+         VALUES ($1, current_setting('app.org_id')::uuid, $2, 'refund', $3, 'sale_void',
+                 $4, $5, $6, now())
+         ON CONFLICT (id) DO NOTHING`,
+        [
+          // Derived from the payment being reversed, so a replayed void cannot
+          // take the money out twice.
+          reversalId(payment.id),
+          sessionId,
+          (-BigInt(payment.amount_minor)).toString(),
+          saleId,
+          actorUserId,
+          reason,
+        ],
+      );
+    }
+  }
+
+  /**
    * Difference between the total the register claimed and the total its own
    * lines add up to. Zero on every healthy sale.
    *
@@ -316,12 +392,34 @@ export class SalesService {
    * then returned" — which is what happened.
    */
   async void(orgId: string, saleId: string, actorUserId: string, reason: string) {
-    return this.db.withOrg(orgId, async (tx) => {
+    return this.db.withOrg(orgId, (tx) => this.voidInTx(tx, saleId, actorUserId, reason));
+  }
+
+  /**
+   * Voiding, inside a caller's transaction.
+   *
+   * Extracted so a void arriving through the sync batch reverses stock by
+   * exactly the same code as one arriving over HTTP. Two implementations of
+   * "put the sale's stock back" would drift, and the direction they drift in is
+   * a count that is quietly wrong.
+   */
+  private async voidInTx(
+    tx: PoolClient,
+    saleId: string,
+    actorUserId: string,
+    reason: string,
+  ) {
+    {
       const { rows } = await tx.query<{
         status: string;
         store_id: string;
+        session_id: string | null;
         completed_at: Date | null;
-      }>(`SELECT status, store_id, completed_at FROM sales WHERE id = $1 FOR UPDATE`, [saleId]);
+      }>(
+        `SELECT status, store_id, session_id, completed_at
+         FROM sales WHERE id = $1 FOR UPDATE`,
+        [saleId],
+      );
 
       const sale = rows[0];
       if (!sale) throw ApiException.notFound('sale');
@@ -341,7 +439,7 @@ export class SalesService {
         [saleId],
       );
 
-      // Refunding part of a sale and then voting the rest would double count the
+      // Refunding part of a sale and then voiding the rest would double count the
       // return. Voiding is for a whole transaction that should not have happened.
       if (lines.some((l) => Number.parseFloat(l.quantity_refunded) > 0)) {
         throw new ApiException(
@@ -373,6 +471,8 @@ export class SalesService {
         })),
       );
 
+      await this.reverseCashMovements(tx, saleId, sale.session_id, actorUserId, reason);
+
       await this.audit.record(tx, {
         action: 'sale.void',
         entityType: 'sale',
@@ -385,7 +485,46 @@ export class SalesService {
       });
 
       return { id: saleId, status: 'voided' };
-    });
+    }
+  }
+
+  /**
+   * A void that arrived from a register, inside a sync batch.
+   *
+   * Idempotent on the sale's own status rather than on a separate key. A second
+   * delivery finds the sale already voided and reports `duplicate`, which the
+   * register treats exactly like `accepted`; nothing is restocked twice, which
+   * is the silent drift this path exists to avoid. Who voided it and why is
+   * already recorded on the sale row and in the audit log.
+   *
+   * A missing sale is **retryable, not a rejection**. Entities are ordered
+   * inside a batch but not across batches, so a sale whose upload failed while
+   * its void succeeded is a normal sequence. Rejecting would dead letter a void
+   * for a sale that is about to arrive, leaving a sale standing that a manager
+   * already voided at the counter.
+   *
+   * Authority is the approver's, checked by the sync route before this runs,
+   * because the cashier's token is only the transport.
+   */
+  async intakeVoid(
+    tx: PoolClient,
+    input: SaleVoidInput,
+  ): Promise<'accepted' | 'duplicate'> {
+    const { rows } = await tx.query<{ status: string }>(
+      `SELECT status FROM sales WHERE id = $1 FOR UPDATE`,
+      [input.sale_id],
+    );
+
+    const existing = rows[0];
+    if (!existing) {
+      throw new RetryableIntakeError(
+        `sale ${input.sale_id} has not arrived yet; its void waits for it`,
+      );
+    }
+    if (existing.status === 'voided') return 'duplicate';
+
+    await this.voidInTx(tx, input.sale_id, input.approved_by, input.reason);
+    return 'accepted';
   }
 
   async findOne(orgId: string, saleId: string) {
@@ -454,4 +593,37 @@ export class SalesService {
 function negate(value: string): string {
   const trimmed = value.trim();
   return trimmed.startsWith('-') ? trimmed.slice(1) : `-${trimmed}`;
+}
+
+/**
+ * The id of the cash movement that reverses a payment.
+ *
+ * Derived from the payment's own id rather than generated, so it is the same
+ * every time: a replayed void hits `ON CONFLICT (id) DO NOTHING` and the money
+ * comes out of the drawer exactly once. A random id would take it out again on
+ * every redelivery, and a register retries without knowing whether the last
+ * attempt landed.
+ *
+ * A name based UUID (RFC 4122 v5 shape) over a fixed namespace, so two
+ * different payments can never collide into one reversal.
+ */
+function reversalId(paymentId: string): string {
+  const NAMESPACE = 'a9f1c3d2-5e7b-4a86-9c40-2f1d8b6e0a33';
+  const bytes = createHash('sha1')
+    .update(Buffer.from(NAMESPACE.replace(/-/g, ''), 'hex'))
+    .update(paymentId)
+    .digest();
+
+  // Version 5, RFC 4122 variant.
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+
+  const hex = bytes.subarray(0, 16).toString('hex');
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20, 32),
+  ].join('-');
 }

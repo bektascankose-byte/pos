@@ -262,6 +262,31 @@ export const voidSaleSchema = z.object({
   reason: z.string().min(3).max(256),
 });
 
+/**
+ * A void composed on a register and delivered through the sync batch.
+ *
+ * Separate from `voidSaleSchema` because the two arrive by different routes and
+ * carry different authority. Over HTTP the caller is the actor and the guard
+ * checks their own `sale.void`. From a register the uploader is the cashier's
+ * token, and the manager who authorised it at the counter is named here — so
+ * `approved_by` is required rather than optional. A void with nobody's name on
+ * it is indistinguishable from a cashier deleting their own mistake, or their
+ * own theft, after the fact.
+ *
+ * `id` is the void's own UUIDv7, not the sale's: it is the idempotency key, and
+ * a replay of the same delivery has to be recognisable as the same void.
+ */
+export const saleVoidInput = z.object({
+  id: uuidV7,
+  sale_id: uuid,
+  approved_by: uuid,
+  cashier_user_id: uuid,
+  reason: z.string().min(3).max(256),
+  device_time: z.string().datetime({ offset: true }),
+});
+
+export type SaleVoidInput = z.infer<typeof saleVoidInput>;
+
 // -------------------------------------------------------------------- refunds
 
 /**

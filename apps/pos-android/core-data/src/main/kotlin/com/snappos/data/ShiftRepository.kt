@@ -6,6 +6,7 @@ import com.snappos.data.dao.EmployeeDao
 import com.snappos.data.entities.EmployeeEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -50,6 +51,32 @@ class ShiftRepository @Inject constructor(
 ) {
 
   private val argon2 = Argon2Kt()
+
+  /**
+   * Why the roster is empty, in terms the screen can state plainly.
+   *
+   * Durable facts only, because this is read after a restart: whether the
+   * device is provisioned at all, whether a catalog pull has ever completed
+   * (the cursor survives), and how many employee rows exist regardless of
+   * status. Guessing "this register has never synced" is what makes an empty
+   * till take an hour to explain.
+   */
+  fun rosterDiagnosis(): Flow<RosterDiagnosis> =
+    combine(employees.countAll(), config.observe()) { total, registerConfig ->
+      when {
+        registerConfig == null -> RosterDiagnosis.NotProvisioned
+        // "0" counts as never, not as blank. Provisioning seeds the cursor
+        // with "0" and a completed pull replaces it with the server's
+        // watermark, which is a positive bigserial. Treating "0" as a real
+        // cursor would have a freshly claimed register announce that the
+        // server listed nobody, which is both wrong and the opposite advice.
+        total == 0 && registerConfig.lastCatalogCursor.trim().let {
+          it.isBlank() || it == "0"
+        } -> RosterDiagnosis.NeverSynced
+        total == 0 -> RosterDiagnosis.ServerListedNobody(registerConfig.storeCode)
+        else -> RosterDiagnosis.AllInactive(total)
+      }
+    }
 
   fun activeEmployees(): Flow<List<EmployeeEntity>> = employees.active()
 
@@ -149,4 +176,30 @@ class ShiftRepository @Inject constructor(
     const val MAX_ATTEMPTS = 5
     const val LOCKOUT_MILLIS = 15 * 60 * 1000L
   }
+}
+
+/**
+ * What an empty roster actually means on this device.
+ *
+ * A register that cannot be unlocked is a till that cannot open, and the person
+ * standing at it has to be able to say something more useful down the phone
+ * than "it says no staff".
+ */
+sealed interface RosterDiagnosis {
+  /** No config row: this device has never been claimed by a store. */
+  data object NotProvisioned : RosterDiagnosis
+
+  /** Claimed, but no catalog pull has ever completed. */
+  data object NeverSynced : RosterDiagnosis
+
+  /**
+   * A pull completed and the server named nobody for this store.
+   *
+   * Almost always a server side problem — nobody assigned to the store, or the
+   * register asking for the wrong one — and not something re-syncing will fix.
+   */
+  data class ServerListedNobody(val storeCode: String) : RosterDiagnosis
+
+  /** Staff exist on the device, but every one of them is inactive. */
+  data class AllInactive(val total: Int) : RosterDiagnosis
 }

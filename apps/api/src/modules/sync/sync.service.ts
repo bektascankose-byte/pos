@@ -1,13 +1,15 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import {
   saleInput,
   refundInput,
+  saleVoidInput,
   cashMovementInput,
   syncEnvelopeSchema,
 } from '@snappos/contracts';
 import type { SyncBatch, SyncResult, Change } from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
+import { RetryableIntakeError } from '../../platform/errors/retryable-intake.js';
 import { SalesService } from '../sales/sales.service.js';
 import { RefundsService } from '../refunds/refunds.service.js';
 
@@ -24,6 +26,7 @@ const MAX_ATTEMPTS_BEFORE_DEAD_LETTER = 5;
  */
 const PERMISSION_BY_ENTITY: Record<string, string> = {
   sale: 'sale.create',
+  sale_void: 'sale.void',
   refund: 'refund.create',
   cash_movement: 'cash.paid_in_out',
   cash_session: 'cash.session_open',
@@ -31,6 +34,28 @@ const PERMISSION_BY_ENTITY: Record<string, string> = {
   inventory_movement: 'inventory.adjust',
   age_verification: 'sale.create',
   time_entry: 'employee.timeclock_edit',
+};
+
+/**
+ * The payload field naming who authorized an action, where that is someone
+ * other than whoever is uploading.
+ *
+ * A register's connection identity is transport, not authority. The cashier
+ * signed in at the counter cannot issue a refund, and should not be able to -
+ * but a manager standing next to them can, by PIN, on a register with no
+ * network. When that refund finally uploads it is still the cashier's token
+ * carrying it, and checking the token's permissions would reject a refund that
+ * was properly approved hours earlier.
+ *
+ * So for these entity types the permission is checked against the user the
+ * payload names. The device's claim is not taken on faith: the named user is
+ * looked up here and must actually hold the permission. A register that lied
+ * about who approved a refund gets the same rejection as one that had nobody
+ * approve it at all.
+ */
+const APPROVER_FIELD_BY_ENTITY: Record<string, string> = {
+  refund: 'approved_by',
+  sale_void: 'approved_by',
 };
 
 @Injectable()
@@ -67,15 +92,10 @@ export class SyncService {
 
     for (const envelope of batch.entities) {
       try {
-        const required = PERMISSION_BY_ENTITY[envelope.entity_type];
-        if (required && !held.has(required)) {
-          // Rejected per entity rather than failing the batch: a cashier's
-          // sales must still upload even if a refund in the same batch is
-          // refused. Not retryable - permissions will not change on retry.
-          throw new PermissionError(
-            `uploading a ${envelope.entity_type} requires ${required}`,
-          );
-        }
+        // Rejected per entity rather than failing the batch: a cashier's
+        // sales must still upload even if a refund in the same batch is
+        // refused. Not retryable - permissions will not change on retry.
+        await this.assertPermitted(orgId, envelope, held);
 
         const status = await this.db.withOrg(orgId, (tx) =>
           this.ingestOne(tx, orgId, batch, envelope),
@@ -137,6 +157,87 @@ export class SyncService {
    * retail, not an edge case, and its payload has to be checked the same way a
    * direct HTTP body is.
    */
+  /**
+   * Decide whether this envelope may be accepted, and by whose authority.
+   *
+   * Two cases. Ordinary entities are governed by the uploading token. Entities
+   * that name an approver are governed by that approver, looked up live, which
+   * is what lets a manager-approved refund taken offline upload later under a
+   * cashier's token without giving the cashier the ability to refund on their
+   * own.
+   */
+  private async assertPermitted(
+    orgId: string,
+    envelope: SyncBatch['entities'][number],
+    held: ReadonlySet<string>,
+  ): Promise<void> {
+    const required = PERMISSION_BY_ENTITY[envelope.entity_type];
+    if (!required) return;
+
+    const approverField = APPROVER_FIELD_BY_ENTITY[envelope.entity_type];
+    if (!approverField) {
+      if (!held.has(required)) {
+        throw new PermissionError(
+          `uploading a ${envelope.entity_type} requires ${required}`,
+        );
+      }
+      return;
+    }
+
+    const payload = (envelope.payload ?? {}) as Record<string, unknown>;
+    const approverId = payload[approverField];
+
+    if (typeof approverId !== 'string' || approverId.length === 0) {
+      // No named approver, so the only authority left is the uploader's own.
+      // A cashier's unapproved refund lands here and is refused, which is the
+      // entire point of requiring an approval at the counter.
+      if (!held.has(required)) {
+        throw new PermissionError(
+          `a ${envelope.entity_type} must name the user who approved it in ` +
+            `${approverField}, or be uploaded by someone holding ${required}`,
+        );
+      }
+      return;
+    }
+
+    const approverHolds = await this.db.withOrg(orgId, (tx) =>
+      this.userHolds(tx, approverId, required),
+    );
+
+    if (!approverHolds) {
+      throw new PermissionError(
+        `the user named in ${approverField} does not hold ${required}`,
+      );
+    }
+  }
+
+  /**
+   * Whether a user holds a permission, right now.
+   *
+   * Scoped by org through RLS, so a register cannot name a manager belonging to
+   * a different organization. An inactive user holds nothing: revoking someone
+   * has to take effect on the sync path too, or a stolen device keeps their
+   * authority indefinitely.
+   */
+  private async userHolds(
+    tx: PoolClient,
+    userId: string,
+    permission: string,
+  ): Promise<boolean> {
+    const { rows } = await tx.query<{ ok: boolean }>(
+      `SELECT true AS ok
+         FROM user_roles ur
+         JOIN role_permissions rp ON rp.role_id = ur.role_id
+         JOIN users u ON u.id = ur.user_id AND u.org_id = ur.org_id
+        WHERE ur.user_id = $1
+          AND rp.permission_key = $2
+          AND u.status = 'active'
+        LIMIT 1`,
+      [userId, permission],
+    );
+    return rows.length > 0;
+  }
+
   private async ingestOne(
     tx: PoolClient,
     orgId: string,
@@ -152,6 +253,10 @@ export class SyncService {
       case 'sale': {
         const sale = saleInput.parse({ ...envelope.payload, id: envelope.id });
         return this.sales.intake(tx, sale, batch.device_id);
+      }
+      case 'sale_void': {
+        const voidInput = saleVoidInput.parse({ ...envelope.payload, id: envelope.id });
+        return this.sales.intakeVoid(tx, voidInput);
       }
       case 'refund': {
         const refund = refundInput.parse({ ...envelope.payload, id: envelope.id });
@@ -455,6 +560,20 @@ export class SyncService {
    */
   async catalogSnapshot(orgId: string, storeId: string) {
     return this.db.withOrg(orgId, async (tx) => {
+      // The store has to exist in this org before anything is read. RLS already
+      // makes another org's store invisible, but invisible here means every
+      // store scoped query returns nothing - and an empty snapshot delivered
+      // with a 200 is indistinguishable from a store that has no staff, no
+      // prices and no stock. A register that asked for the wrong store must be
+      // told so, not handed a catalog it cannot open the till with.
+      const { rows: storeRows } = await tx.query<{ id: string }>(
+        `SELECT id FROM stores WHERE id = $1`,
+        [storeId],
+      );
+      if (storeRows.length === 0) {
+        throw new NotFoundException('no such store in this organization');
+      }
+
       const [{ rows: categories }, { rows: variants }, { rows: barcodes }, { rows: prices },
              { rows: levels }, { rows: taxRates }] = await Promise.all([
         tx.query(
@@ -605,6 +724,10 @@ export class SyncService {
 
   /** Retryable means transient. An inaccurate answer either loses a sale or retries forever. */
   private isRetryable(error: unknown): boolean {
+    // Some intake failures are transient for a reason the database cannot
+    // express — a void whose sale has not been delivered yet is the first.
+    if (error instanceof RetryableIntakeError) return true;
+
     const code = (error as { code?: string }).code;
     if (!code) return false;
     // Serialization failure, deadlock, too many connections, admin shutdown.

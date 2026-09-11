@@ -6,6 +6,11 @@ import com.snappos.data.CatalogRepository
 import com.snappos.data.Cashier
 import com.snappos.data.CashRepository
 import com.snappos.data.DevProvisioning
+import com.snappos.data.RefundRepository
+import com.snappos.data.RosterDiagnosis
+import com.snappos.data.VoidRepository
+import com.snappos.data.RefundSelection
+import com.snappos.data.RefundableSale
 import com.snappos.data.ShiftRepository
 import com.snappos.data.UnlockResult
 import com.snappos.data.entities.EmployeeEntity
@@ -33,11 +38,22 @@ import javax.inject.Inject
 data class Toast(val text: String, val isError: Boolean = false)
 
 /** What the register is showing: the shift gate, the drawer gate, or the till. */
-enum class RegisterStage { Locked, DrawerClosed, Selling }
+enum class RegisterStage { Locked, DrawerClosed, Selling, Refunding }
+
+/**
+ * What the manager standing at the register is being asked to authorise.
+ *
+ * One dialog serves both, but they must never be confused: approving a
+ * partial refund and approving the reversal of a whole sale are different
+ * amounts of money and different permissions.
+ */
+enum class ApprovalKind { Refund, VoidSale }
 
 data class RegisterUiState(
   val stage: RegisterStage = RegisterStage.Locked,
   val employees: List<EmployeeEntity> = emptyList(),
+  /** Why the roster is empty, when it is. Never shown while staff exist. */
+  val rosterDiagnosis: RosterDiagnosis? = null,
   val cashier: Cashier? = null,
   val sessionId: String? = null,
   val cart: Cart = Cart.EMPTY,
@@ -49,6 +65,15 @@ data class RegisterUiState(
   val lastReceiptNo: String? = null,
   val lastChange: Money? = null,
   val busy: Boolean = false,
+  // ------------------------------------------------------------------ refunds
+  val refundSale: RefundableSale? = null,
+  val refundSelections: Map<String, Int> = emptyMap(),
+  val refundRestock: Map<String, Boolean> = emptyMap(),
+  val refundReason: String = "customer_changed_mind",
+  val refundError: String? = null,
+  val approvalPrompt: String? = null,
+  val approvalKind: ApprovalKind? = null,
+  val approvalError: String? = null,
 )
 
 data class CategoryTile(val id: String, val name: String)
@@ -63,6 +88,8 @@ class RegisterViewModel @Inject constructor(
   private val catalogSync: CatalogSync,
   private val shift: ShiftRepository,
   private val drawer: CashRepository,
+  private val refunds: RefundRepository,
+  private val voids: VoidRepository,
 ) : ViewModel() {
 
   private val _state = MutableStateFlow(RegisterUiState())
@@ -126,6 +153,11 @@ class RegisterViewModel @Inject constructor(
     viewModelScope.launch {
       shift.activeEmployees().collect { rows ->
         _state.value = _state.value.copy(employees = rows)
+      }
+    }
+    viewModelScope.launch {
+      shift.rosterDiagnosis().collect { diagnosis ->
+        _state.value = _state.value.copy(rosterDiagnosis = diagnosis)
       }
     }
   }
@@ -327,6 +359,235 @@ class RegisterViewModel @Inject constructor(
             message = Toast(it.message ?: "Could not close the drawer", true),
           )
         }
+    }
+  }
+
+  // ----------------------------------------------------------------- refunds
+
+  fun startRefund() {
+    _state.value = _state.value.copy(
+      stage = RegisterStage.Refunding,
+      refundSale = null,
+      refundSelections = emptyMap(),
+      refundRestock = emptyMap(),
+      refundError = null,
+      message = null,
+    )
+  }
+
+  fun cancelRefund() {
+    _state.value = _state.value.copy(
+      stage = RegisterStage.Selling,
+      refundSale = null,
+      refundSelections = emptyMap(),
+      refundRestock = emptyMap(),
+      refundError = null,
+      approvalPrompt = null,
+    )
+  }
+
+  /**
+   * Find the sale a customer is returning against.
+   *
+   * Local only. A sale rung on another register is not on this device, and the
+   * honest answer is to say so rather than invent a refund with nothing to
+   * check a quantity against.
+   */
+  fun lookupReceipt(receiptNo: String) {
+    viewModelScope.launch {
+      _state.value = _state.value.copy(busy = true, refundError = null)
+      val found = refunds.findByReceipt(receiptNo)
+      _state.value = when {
+        found == null -> _state.value.copy(
+          busy = false,
+          refundError = if (refunds.wasVoided(receiptNo)) {
+            "$receiptNo was voided. There is nothing left to refund on it."
+          } else {
+            "No sale on this register with receipt $receiptNo"
+          },
+        )
+        found.fullyRefunded -> _state.value.copy(
+          busy = false,
+          refundError = "Everything on $receiptNo has already been refunded",
+        )
+        else -> _state.value.copy(
+          busy = false,
+          refundSale = found,
+          refundRestock = found.lines.associate { it.saleLineId to true },
+          refundError = null,
+        )
+      }
+    }
+  }
+
+  fun setRefundQuantity(saleLineId: String, quantity: Int) {
+    _state.value = _state.value.copy(
+      refundSelections = _state.value.refundSelections + (saleLineId to quantity),
+      refundError = null,
+    )
+  }
+
+  fun toggleRefundRestock(saleLineId: String) {
+    val current = _state.value.refundRestock[saleLineId] ?: true
+    _state.value = _state.value.copy(
+      refundRestock = _state.value.refundRestock + (saleLineId to !current),
+    )
+  }
+
+  fun setRefundReason(code: String) {
+    _state.value = _state.value.copy(refundReason = code)
+  }
+
+  /** Ask for a manager. A refund is never approved by the person taking it. */
+  fun requestRefundApproval() {
+    _state.value = _state.value.copy(
+      approvalPrompt = "Approve this refund",
+      approvalKind = ApprovalKind.Refund,
+      approvalError = null,
+    )
+  }
+
+  /** Ask for a manager before reversing a whole sale. */
+  fun requestVoidApproval() {
+    _state.value = _state.value.copy(
+      approvalPrompt = "Void this entire sale",
+      approvalKind = ApprovalKind.VoidSale,
+      approvalError = null,
+    )
+  }
+
+  fun dismissApproval() {
+    _state.value = _state.value.copy(
+      approvalPrompt = null,
+      approvalKind = null,
+      approvalError = null,
+    )
+  }
+
+  /** One entry point; the pending action decides what the PIN authorises. */
+  fun approve(pin: String) {
+    when (_state.value.approvalKind) {
+      ApprovalKind.Refund -> approveRefund(pin)
+      ApprovalKind.VoidSale -> approveVoid(pin)
+      null -> Unit
+    }
+  }
+
+  /**
+   * A manager PIN, checked against every employee holding `sale.void`.
+   *
+   * A different permission from a refund on purpose: a shop may well let a
+   * shift lead reverse a mis-rung sale at the counter without letting them hand
+   * cash back against a receipt from last week.
+   */
+  private fun approveVoid(pin: String) {
+    val sale = _state.value.refundSale ?: return
+    val cashier = _state.value.cashier ?: return
+
+    viewModelScope.launch {
+      _state.value = _state.value.copy(busy = true)
+      val manager = shift.approve("sale.void", pin)
+      if (manager == null) {
+        _state.value = _state.value.copy(
+          busy = false,
+          approvalError = "That PIN cannot void a sale",
+        )
+        return@launch
+      }
+
+      voids.commit(
+        sale = sale,
+        cashierUserId = cashier.userId,
+        approvedBy = manager.userId,
+        reason = _state.value.refundReason,
+        sessionId = _state.value.sessionId,
+      ).onSuccess { voided ->
+        _state.value = _state.value.copy(
+          busy = false,
+          stage = RegisterStage.Selling,
+          refundSale = null,
+          refundSelections = emptyMap(),
+          refundRestock = emptyMap(),
+          approvalPrompt = null,
+          approvalKind = null,
+          message = Toast(
+            "Voided ${voided.receiptNo}: ${voided.total.toMajorString()} " +
+              "approved by ${manager.displayName}",
+          ),
+        )
+        SyncWorker.syncNow(context)
+      }.onFailure {
+        _state.value = _state.value.copy(
+          busy = false,
+          approvalPrompt = null,
+          approvalKind = null,
+          refundError = it.message ?: "Could not void that sale",
+        )
+      }
+    }
+  }
+
+  /**
+   * A manager PIN, checked against every employee holding `refund.create`.
+   *
+   * Verified on device like every other PIN, so a refund can be approved on a
+   * register with no network - which is exactly when a customer is standing
+   * there waiting.
+   */
+  private fun approveRefund(pin: String) {
+    val sale = _state.value.refundSale ?: return
+    val cashier = _state.value.cashier ?: return
+
+    viewModelScope.launch {
+      _state.value = _state.value.copy(busy = true)
+      val manager = shift.approve("refund.create", pin)
+      if (manager == null) {
+        _state.value = _state.value.copy(
+          busy = false,
+          approvalError = "That PIN cannot approve a refund",
+        )
+        return@launch
+      }
+
+      val selections = _state.value.refundSelections
+        .filterValues { it > 0 }
+        .map { (lineId, quantity) ->
+          RefundSelection(
+            saleLineId = lineId,
+            quantity = quantity,
+            restock = _state.value.refundRestock[lineId] ?: true,
+          )
+        }
+
+      refunds.commit(
+        sale = sale,
+        selections = selections,
+        cashierUserId = cashier.userId,
+        approvedBy = manager.userId,
+        reasonCode = _state.value.refundReason,
+        sessionId = _state.value.sessionId,
+      ).onSuccess { committed ->
+        _state.value = _state.value.copy(
+          busy = false,
+          stage = RegisterStage.Selling,
+          refundSale = null,
+          refundSelections = emptyMap(),
+          refundRestock = emptyMap(),
+          approvalPrompt = null,
+          approvalKind = null,
+          message = Toast(
+            "Refund ${committed.receiptNo}: ${committed.total.toMajorString()} " +
+              "approved by ${manager.displayName}",
+          ),
+        )
+        SyncWorker.syncNow(context)
+      }.onFailure {
+        _state.value = _state.value.copy(
+          busy = false,
+          approvalPrompt = null,
+          refundError = it.message ?: "Could not complete the refund",
+        )
+      }
     }
   }
 

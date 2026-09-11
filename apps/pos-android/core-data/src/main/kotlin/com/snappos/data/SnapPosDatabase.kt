@@ -9,6 +9,7 @@ import com.snappos.data.dao.CatalogDao
 import com.snappos.data.dao.ConfigDao
 import com.snappos.data.dao.EmployeeDao
 import com.snappos.data.dao.OutboxDao
+import com.snappos.data.dao.RefundsDao
 import com.snappos.data.dao.SalesDao
 import com.snappos.data.entities.AgeVerificationEntity
 import com.snappos.data.entities.CashMovementEntity
@@ -20,6 +21,8 @@ import com.snappos.data.entities.InventoryEntity
 import com.snappos.data.entities.OutboxEntity
 import com.snappos.data.entities.PaymentEntity
 import com.snappos.data.entities.PriceEntity
+import com.snappos.data.entities.RefundEntity
+import com.snappos.data.entities.RefundLineEntity
 import com.snappos.data.entities.RegisterConfigEntity
 import com.snappos.data.entities.SaleEntity
 import com.snappos.data.entities.SaleLineEntity
@@ -42,8 +45,10 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
     RegisterConfigEntity::class,
     CashSessionEntity::class,
     CashMovementEntity::class,
+    RefundEntity::class,
+    RefundLineEntity::class,
   ],
-  version = 1,
+  version = 3,
   exportSchema = true,
 )
 abstract class SnapPosDatabase : RoomDatabase() {
@@ -53,6 +58,7 @@ abstract class SnapPosDatabase : RoomDatabase() {
   abstract fun outbox(): OutboxDao
   abstract fun config(): ConfigDao
   abstract fun cash(): CashDao
+  abstract fun refunds(): RefundsDao
 
   companion object {
     const val NAME = "snappos.db"
@@ -75,6 +81,7 @@ abstract class SnapPosDatabase : RoomDatabase() {
       System.loadLibrary("sqlcipher")
       return Room.databaseBuilder(context, SnapPosDatabase::class.java, NAME)
         .openHelperFactory(SupportOpenHelperFactory(passphrase))
+        .addMigrations(*Migrations.ALL)
         .build()
     }
 

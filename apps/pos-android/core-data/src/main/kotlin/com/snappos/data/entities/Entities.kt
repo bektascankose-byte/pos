@@ -183,6 +183,17 @@ data class SaleEntity(
   val note: String?,
   val deviceTimeMillis: Long,
   val completedAtMillis: Long?,
+  /**
+   * Who voided this sale, and why.
+   *
+   * Nullable because almost no sale is voided, but recorded the moment one is:
+   * a void reverses money and stock at once, and a void with nobody's name on
+   * it is indistinguishable after the fact from a cashier erasing their own
+   * mistake — or their own theft.
+   */
+  val voidedAtMillis: Long? = null,
+  val voidedBy: String? = null,
+  val voidReason: String? = null,
   /** pending, uploading, acknowledged, failed */
   val syncState: String,
 )
@@ -209,6 +220,20 @@ data class SaleLineEntity(
   /** JSON. Rebuilt into the server's tax_snapshot on upload. */
   val taxSnapshotJson: String,
   val complianceSnapshotJson: String,
+  /**
+   * How much of this line has been refunded.
+   *
+   * The one mutable column on a sale, mirroring the server exactly, and it
+   * exists for one job: making it impossible to refund four of something that
+   * was sold in a quantity of three.
+   *
+   * The register's copy is advisory — another register can refund the same
+   * receipt while this one is offline, and only the server knows that. It is
+   * still worth keeping, because catching an over-refund at the counter is
+   * infinitely better than catching it on upload, when the customer has already
+   * been handed the money.
+   */
+  val quantityRefunded: String = "0",
 )
 
 @Entity(tableName = "payments", indices = [Index("saleId")])

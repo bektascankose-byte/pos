@@ -233,7 +233,7 @@ export async function runSalesChecks({ api, check, uuidV7, ownerToken, managerTo
 
   const refundId = uuidV7();
   const refundLineId = uuidV7();
-  const refundEnvelope = (id, lineIdArg, qty) => ({
+  const refundEnvelope = (id, lineIdArg, qty, approver = ownerId) => ({
     register_id: registerId,
     device_id: randomUUID(),
     entities: [
@@ -247,7 +247,7 @@ export async function runSalesChecks({ api, check, uuidV7, ownerToken, managerTo
           session_id: sessionId,
           original_sale_id: saleId,
           cashier_user_id: cashierId,
-          approved_by: ownerId,
+          ...(approver ? { approved_by: approver } : {}),
           receipt_no: `HH01-R1-R${Date.now() % 100000}`,
           reason_code: 'customer_changed_mind',
           subtotal_minor: String(2499 * qty),
@@ -281,27 +281,43 @@ export async function runSalesChecks({ api, check, uuidV7, ownerToken, managerTo
     ],
   });
 
-  // The permission that guards /refunds must guard the sync route too, or a
-  // cashier could issue a refund by putting it in a batch instead.
-  const smuggled = await api('/api/v1/sync/batch', {
+  // A register uploads under the cashier's token, so the sync route cannot
+  // simply trust it - but it cannot simply refuse it either, or a refund a
+  // manager approved offline could never be delivered. Authority comes from
+  // the user the payload names, and these are the two ways that can fail.
+  const unapproved = await api('/api/v1/sync/batch', {
     token: cashierToken,
     method: 'POST',
-    body: refundEnvelope(uuidV7(), uuidV7(), 1),
+    body: refundEnvelope(uuidV7(), uuidV7(), 1, null),
   });
   check(
-    'a cashier cannot smuggle a refund through the sync endpoint',
-    smuggled.body?.results?.[0]?.status === 'rejected' &&
-      smuggled.body?.results?.[0]?.error?.code === 'forbidden',
-    JSON.stringify(smuggled.body?.results?.[0]),
+    'a cashier cannot smuggle an unapproved refund through the sync endpoint',
+    unapproved.body?.results?.[0]?.status === 'rejected' &&
+      unapproved.body?.results?.[0]?.error?.code === 'forbidden',
+    JSON.stringify(unapproved.body?.results?.[0]),
+  );
+
+  // The device's claim about who approved is checked, not believed. Naming
+  // yourself is the obvious attack and it has to fail.
+  const selfApproved = await api('/api/v1/sync/batch', {
+    token: cashierToken,
+    method: 'POST',
+    body: refundEnvelope(uuidV7(), uuidV7(), 1, cashierId),
+  });
+  check(
+    'a cashier cannot approve their own refund by naming themselves',
+    selfApproved.body?.results?.[0]?.status === 'rejected' &&
+      selfApproved.body?.results?.[0]?.error?.code === 'forbidden',
+    JSON.stringify(selfApproved.body?.results?.[0]),
   );
 
   const partial = await api('/api/v1/sync/batch', {
-    token: managerToken,
+    token: cashierToken,
     method: 'POST',
     body: refundEnvelope(refundId, refundLineId, 1),
   });
   check(
-    'one of two can be refunded',
+    'a refund a manager approved uploads under the cashier token that carried it',
     partial.body?.results?.[0]?.status === 'accepted',
     JSON.stringify(partial.body),
   );
@@ -440,6 +456,203 @@ export async function runSalesChecks({ api, check, uuidV7, ownerToken, managerTo
     `got ${alreadyRefunded.status}`,
   );
 
+  // ------------------------------------- a void taken at the counter, offline
+  //
+  // The register uploads under the cashier's token and a cashier cannot void.
+  // Authority comes from the manager the payload names, exactly as it does for
+  // a refund, or a void approved during an outage could never be delivered.
+
+  const offlineVoidSaleId = uuidV7();
+  const offlineVoidLineId = uuidV7();
+  const offlineSale = {
+    register_id: registerId,
+    device_id: randomUUID(),
+    entities: [
+      {
+        id: offlineVoidSaleId,
+        entity_type: 'sale',
+        device_time: new Date().toISOString(),
+        payload: {
+          store_id: storeId,
+          register_id: registerId,
+          session_id: sessionId,
+          cashier_user_id: cashierId,
+          receipt_no: `HH01-R1-OV${Date.now() % 100000}`,
+          register_sequence: 3,
+          status: 'completed',
+          subtotal_minor: '2499',
+          tax_minor: '206',
+          total_minor: '2705',
+          device_time: new Date().toISOString(),
+          completed_at: new Date().toISOString(),
+          lines: [
+            {
+              id: offlineVoidLineId,
+              line_no: 1,
+              variant_id: variantId,
+              description: 'Geek Bar Pulse X - Miami Mint',
+              sku_snapshot: 'GB-PULSEX-MM',
+              quantity: '1',
+              unit_price_minor: '2499',
+              original_price_minor: '2499',
+              tax_minor: '206',
+              total_minor: '2705',
+              unit_cost: '9.850000',
+            },
+          ],
+          payments: [
+            {
+              id: uuidV7(),
+              method: 'cash',
+              amount_minor: '2705',
+              device_time: new Date().toISOString(),
+            },
+          ],
+        },
+      },
+    ],
+  };
+  const offlineSaleUpload = await api('/api/v1/sync/batch', {
+    token: cashierToken,
+    method: 'POST',
+    body: offlineSale,
+  });
+  // Asserted rather than assumed. A setup step that fails silently surfaces
+  // later as an unrelated assertion failing for a reason it does not name.
+  check(
+    'the sale to be voided uploaded',
+    offlineSaleUpload.body?.results?.[0]?.status === 'accepted',
+    JSON.stringify(offlineSaleUpload.body?.results?.[0]),
+  );
+  const beforeOfflineVoid = await levelOf();
+
+  const voidEnvelope = (id, approver) => ({
+    register_id: registerId,
+    device_id: randomUUID(),
+    entities: [
+      {
+        id,
+        entity_type: 'sale_void',
+        device_time: new Date().toISOString(),
+        payload: {
+          sale_id: offlineVoidSaleId,
+          cashier_user_id: cashierId,
+          ...(approver ? { approved_by: approver } : {}),
+          reason: 'rang the wrong item',
+          device_time: new Date().toISOString(),
+        },
+      },
+    ],
+  });
+
+  const unapprovedVoid = await api('/api/v1/sync/batch', {
+    token: cashierToken,
+    method: 'POST',
+    body: voidEnvelope(uuidV7(), null),
+  });
+  check(
+    'a cashier cannot smuggle an unapproved void through the sync endpoint',
+    unapprovedVoid.body?.results?.[0]?.error?.code === 'forbidden',
+    JSON.stringify(unapprovedVoid.body?.results?.[0]),
+  );
+
+  const selfApprovedVoid = await api('/api/v1/sync/batch', {
+    token: cashierToken,
+    method: 'POST',
+    body: voidEnvelope(uuidV7(), cashierId),
+  });
+  check(
+    'a cashier cannot approve their own void by naming themselves',
+    selfApprovedVoid.body?.results?.[0]?.error?.code === 'forbidden',
+    JSON.stringify(selfApprovedVoid.body?.results?.[0]),
+  );
+
+  check(
+    'neither refused void changed any stock',
+    (await levelOf()) === beforeOfflineVoid,
+    `expected ${beforeOfflineVoid}, got ${await levelOf()}`,
+  );
+
+  const drawerBeforeVoid = await (async () => {
+    const status = await api(`/api/v1/cash/sessions/${sessionId}`, { token: managerToken });
+    const row = (status.body?.breakdown ?? []).find((b) => b.kind === 'refund');
+    return BigInt(row?.total ?? '0');
+  })();
+
+  const voidId = uuidV7();
+  const approvedVoid = await api('/api/v1/sync/batch', {
+    token: cashierToken,
+    method: 'POST',
+    body: voidEnvelope(voidId, ownerId),
+  });
+  check(
+    'a void a manager approved uploads under the cashier token that carried it',
+    approvedVoid.body?.results?.[0]?.status === 'accepted',
+    JSON.stringify(approvedVoid.body?.results?.[0]),
+  );
+  check(
+    'the void put the stock back',
+    (await levelOf()) === beforeOfflineVoid + 1,
+    `expected ${beforeOfflineVoid + 1}, got ${await levelOf()}`,
+  );
+
+  const refundKindTotal = async () => {
+    const status = await api(`/api/v1/cash/sessions/${sessionId}`, { token: managerToken });
+    const row = (status.body?.breakdown ?? []).find((b) => b.kind === 'refund');
+    return BigInt(row?.total ?? '0');
+  };
+  check(
+    'voiding a cash sale took the money back out of the drawer',
+    (await refundKindTotal()) === drawerBeforeVoid - 2705n,
+    `refund total went from ${drawerBeforeVoid} to ${await refundKindTotal()}`,
+  );
+
+  const replayedVoid = await api('/api/v1/sync/batch', {
+    token: cashierToken,
+    method: 'POST',
+    body: voidEnvelope(voidId, ownerId),
+  });
+  check(
+    'a replayed void is a duplicate, not a second restock',
+    replayedVoid.body?.results?.[0]?.status === 'duplicate',
+    JSON.stringify(replayedVoid.body?.results?.[0]),
+  );
+  check(
+    'the replayed void did not restock twice',
+    (await levelOf()) === beforeOfflineVoid + 1,
+  );
+
+  // The sale and its void are ordered inside a batch but not across batches.
+  // A void for a sale that has not arrived must wait, not dead letter: the
+  // alternative is a sale left standing that a manager already voided.
+  const orphanVoid = await api('/api/v1/sync/batch', {
+    token: cashierToken,
+    method: 'POST',
+    body: {
+      register_id: registerId,
+      device_id: randomUUID(),
+      entities: [
+        {
+          id: uuidV7(),
+          entity_type: 'sale_void',
+          device_time: new Date().toISOString(),
+          payload: {
+            sale_id: uuidV7(),
+            cashier_user_id: cashierId,
+            approved_by: ownerId,
+            reason: 'its sale has not uploaded yet',
+            device_time: new Date().toISOString(),
+          },
+        },
+      ],
+    },
+  });
+  check(
+    'a void whose sale has not arrived waits instead of being rejected',
+    orphanVoid.body?.results?.[0]?.error?.retryable === true,
+    JSON.stringify(orphanVoid.body?.results?.[0]),
+  );
+
   // --------------------------------------------------------- 7. close the drawer
 
   const reconcile = await api(`/api/v1/inventory/reconcile?store_id=${storeId}`, {
@@ -458,22 +671,36 @@ export async function runSalesChecks({ api, check, uuidV7, ownerToken, managerTo
   });
   check('the drawer closes', closed.status === 201, JSON.stringify(closed.body));
 
-  // 20000 float + 5410 sale + 2705 sale - 2500 paid out - 2705 refund = 22910.
+  // 20000 float + 5410 sale + 2705 sale + 2705 sale
+  //   - 2500 paid out - 2705 refund - 2705 void - 2705 void = 20205.
+  //
+  // Two of those sales were voided, and each contributes nothing on balance:
+  // the cash went into the drawer and came straight back out. Before voiding
+  // reversed its cash the drawer was expected to hold that money, so every
+  // voided cash sale read **over** by its own amount at close — and a cashier
+  // who voided a sale and pocketed the notes produced a drawer that balanced
+  // perfectly.
+  //
+  // The voided sale contributes nothing on balance, which is the point: its
+  // cash went into the drawer and came straight back out. Before the reversal
+  // existed the drawer was expected to hold that money, so every voided cash
+  // sale read **over** by its own amount at close — and a cashier who voided a
+  // sale and pocketed the notes produced a drawer that balanced perfectly.
   check(
     'expected cash is the sum of every movement',
-    closed.body?.expected_minor === '22910',
+    closed.body?.expected_minor === '20205',
     `expected_minor was ${closed.body?.expected_minor}`,
   );
   check(
-    'counting 20000 against 22910 reports short, by the difference',
-    closed.body?.outcome === 'short' && closed.body?.variance_minor === '-2910',
+    'counting 20000 against 20205 reports short, by the difference',
+    closed.body?.outcome === 'short' && closed.body?.variance_minor === '-205',
     JSON.stringify(closed.body),
   );
 
   const closeAgain = await api(`/api/v1/cash/sessions/${sessionId}/close`, {
     token: managerToken,
     method: 'POST',
-    body: { counted_minor: '22910' },
+    body: { counted_minor: '20205' },
   });
   check('a closed drawer cannot be closed again', closeAgain.status === 409);
 
@@ -492,6 +719,27 @@ export async function runSalesChecks({ api, check, uuidV7, ownerToken, managerTo
 
   const snapshot = await api(`/api/v1/sync/catalog?store_id=${storeId}`, { token: cashierToken });
   check('a register can pull a catalog snapshot', snapshot.status === 200, JSON.stringify(snapshot.body).slice(0, 200));
+
+  // An empty snapshot delivered with a 200 is the worst possible answer: the
+  // register looks provisioned, shows "no staff on this register yet", and
+  // cannot open the till. Both ways of asking for the wrong thing must fail
+  // loudly instead.
+  const noStore = await api('/api/v1/sync/catalog', { token: cashierToken });
+  check(
+    'a catalog snapshot without a store is refused, not answered emptily',
+    noStore.status === 400,
+    `status ${noStore.status}, employees ${noStore.body?.employees?.length}`,
+  );
+
+  const wrongStore = await api(
+    `/api/v1/sync/catalog?store_id=${randomUUID()}`,
+    { token: cashierToken },
+  );
+  check(
+    'a catalog snapshot for a store in no org is refused, not answered emptily',
+    wrongStore.status === 404,
+    `status ${wrongStore.status}, employees ${wrongStore.body?.employees?.length}`,
+  );
   check(
     'the snapshot carries everything needed to sell offline',
     snapshot.body?.variants?.length === 12 &&

@@ -17,6 +17,11 @@ import { uuid, uuidV7, deviceTime, timestamp } from './primitives.js';
 /** Entities a register may push. Pull-only data is not listed here. */
 export const syncEntityType = z.enum([
   'sale',
+  // A void is its own entity rather than a mutation of the sale it voids.
+  // Sales are append only on the register and the server alike, and an upload
+  // that edits a row already delivered would have no idempotency key of its
+  // own to make the retry safe.
+  'sale_void',
   'refund',
   'payment',
   'cash_session',
@@ -129,6 +134,19 @@ export const syncScope = z.enum([
  * It is a string because a bigserial exceeds what a JSON number represents
  * safely, and a cursor that silently rounds skips rows forever.
  */
+/**
+ * The bootstrap snapshot query.
+ *
+ * `store_id` is required, not optional. Prices, stock levels and the staff who
+ * may unlock the register are all store scoped, so a snapshot taken without one
+ * is not a smaller snapshot - it is a catalog with no prices, no stock and
+ * nobody able to sign in. Returning that with a 200 leaves a register that
+ * looks provisioned and cannot open, with nothing anywhere saying why.
+ */
+export const catalogQuerySchema = z.object({
+  store_id: uuid,
+});
+
 export const changesQuerySchema = z.object({
   since: z.string().regex(/^\d+$/).default('0'),
   scopes: z
