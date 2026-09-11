@@ -141,6 +141,8 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
         onLock = viewModel::lock,
         onCloseDrawer = { showClose = true },
         onRefund = viewModel::startRefund,
+        onReceipt = viewModel::showReceipt,
+        hasReceipt = state.lastReceipt != null,
       )
       HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 
@@ -185,6 +187,12 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
     }
   }
 
+  if (state.showingReceipt) {
+    state.lastReceipt?.let { receipt ->
+      ReceiptSheet(receipt = receipt, onDismiss = viewModel::dismissReceipt)
+    }
+  }
+
   if (showClose) {
     // Reuses the cash dialog: counting a drawer and taking a tender are the
     // same gesture, and a cashier should not have to learn two keypads.
@@ -223,6 +231,8 @@ private fun RegisterHeader(
   onLock: () -> Unit,
   onCloseDrawer: () -> Unit,
   onRefund: () -> Unit,
+  onReceipt: () -> Unit,
+  hasReceipt: Boolean,
 ) {
   Row(
     Modifier
@@ -239,6 +249,11 @@ private fun RegisterHeader(
       color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Spacer(Modifier.weight(1f))
+    // Only once there is a sale to show one for. A receipt button that opens
+    // nothing teaches a cashier to stop trusting the button.
+    if (hasReceipt) {
+      TextButton(onClick = onReceipt) { Text("Receipt") }
+    }
     TextButton(onClick = onRefund) { Text("Refund") }
     TextButton(onClick = onCloseDrawer) { Text("Close drawer") }
     TextButton(onClick = onLock) { Text("Lock") }

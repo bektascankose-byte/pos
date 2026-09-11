@@ -10,7 +10,7 @@ Kotlin, Jetpack Compose, multi-module Gradle.
 | `app` | **Selling on hardware.** Unlock, drawer, scan to cart, the 21+ gate, cash tender, refunds with manager approval. |
 | `core-data` | **Built.** Room over SQLCipher, 16 tables, schema v2, migration 1-2 exercised on a device holding v1 data. |
 | `core-sync` | **Built.** Retrofit client, outbox drain, catalog pull, WorkManager. |
-| `hardware/hardware-api` | Module configured. Interfaces are next. |
+| `hardware/hardware-api` | **`PrinterProvider` defined.** Interfaces only — no vendor SDK, no Android dependency. |
 
 `./gradlew :app:assembleDebug` produces a debug APK. `./gradlew test` runs the
 JVM suites.
@@ -281,9 +281,49 @@ A voided sale is not refundable — the money already went back — but the scre
 says **"HH01-R1-7 was voided"** rather than "no such sale". The receipt is in the
 cashier's hand; telling them it does not exist sends them looking for it.
 
+## Receipts
+
+A receipt is **described, not formatted**. `ReceiptRenderer` produces an
+abstract `ReceiptDocument` — text, label/amount rows, sold items, separators, a
+machine readable receipt number — and whatever consumes it decides the width.
+`TextReceipt` rasterizes it at a `PaperWidth`: 58mm is 32 columns, 80mm is 48.
+
+That split is load bearing. Pre-formatted text padded to 32 columns is wrong at
+every other width, and the only way back is a second template that drifts from
+the first. The on-screen receipt goes through the *same* rasterizer at the same
+width as the paper, so a preview cannot disagree with what the customer holds.
+
+Amounts sit flush to the last column, because a receipt is checked by running a
+finger down the right hand edge. Long product names wrap on word boundaries; a
+label that would crowd the amount is truncated rather than wrapped, since the
+amount is the part that has to survive.
+
+An age restricted sale prints **that the check happened** and nothing else —
+"Age 21+ ID verified", no date of birth, no licence number, no name. A receipt
+ends up in a bin behind the counter, and identity data on it is a breach made
+of paper. A test asserts the rendered receipt contains none of those words.
+
+`PrinterProvider` lives in `hardware-api` and every method reports rather than
+throws. The money has changed hands by the time a receipt is produced, so a
+printer that is out of paper, unplugged, or whose SDK throws on a Tuesday must
+never be able to fail a sale.
+
+**Verified on a Galaxy S22 Ultra**: a two unit sale tendered at $60 rendering
+`2 @ 24.99`, subtotal, tax, total, cash and change, with amounts aligned; a four
+item sale showing no change line at all because payment was exact.
+
 ## Not yet built
 
-Receipt printing, hardware adapters, the promotions engine,
+The **ESC/POS driver**. There is no printer here to verify one against, and an
+unverifiable driver that looks finished is worse than an absent one — the
+interface it plugs into is done and the document it consumes is tested. The
+receipt sheet says "No printer configured" rather than offering a Print button
+that silently does nothing.
+
+Store address, phone and return policy are shop configuration that does not
+exist yet, so the receipt omits them rather than inventing them.
+
+Also outstanding: the remaining hardware adapters, the promotions engine,
 manager approval for price overrides, and the incremental change feed — the
 catalog currently arrives as a full snapshot on each pull.
 

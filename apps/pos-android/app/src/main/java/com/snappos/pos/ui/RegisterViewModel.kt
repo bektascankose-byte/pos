@@ -6,7 +6,14 @@ import com.snappos.data.CatalogRepository
 import com.snappos.data.Cashier
 import com.snappos.data.CashRepository
 import com.snappos.data.DevProvisioning
+import com.snappos.data.CommittedSale
 import com.snappos.data.RefundRepository
+import com.snappos.data.dao.ConfigDao
+import com.snappos.domain.ReceiptItem
+import com.snappos.domain.ReceiptStore
+import com.snappos.domain.ReceiptTender
+import com.snappos.domain.SaleReceipt
+import java.time.Instant
 import com.snappos.data.RosterDiagnosis
 import com.snappos.data.VoidRepository
 import com.snappos.data.RefundSelection
@@ -64,6 +71,16 @@ data class RegisterUiState(
   val message: Toast? = null,
   val lastReceiptNo: String? = null,
   val lastChange: Money? = null,
+  /**
+   * The receipt for the sale just rung, kept so it can be shown or printed.
+   *
+   * Built at the moment of sale rather than reconstructed later: the receipt
+   * is what the customer was handed, and rebuilding it from the database
+   * would let a change in this code alter a receipt that already exists on
+   * paper.
+   */
+  val lastReceipt: SaleReceipt? = null,
+  val showingReceipt: Boolean = false,
   val busy: Boolean = false,
   // ------------------------------------------------------------------ refunds
   val refundSale: RefundableSale? = null,
@@ -90,6 +107,7 @@ class RegisterViewModel @Inject constructor(
   private val drawer: CashRepository,
   private val refunds: RefundRepository,
   private val voids: VoidRepository,
+  private val config: ConfigDao,
 ) : ViewModel() {
 
   private val _state = MutableStateFlow(RegisterUiState())
@@ -657,11 +675,17 @@ class RegisterViewModel @Inject constructor(
           ),
           sessionId = _state.value.sessionId,
         )
+        // Composed before the cart is cleared, because the cart *is* the
+        // receipt. Resolved into a local first: see onSearch for what happens
+        // when a suspending call is evaluated inside a state copy.
+        val receipt = buildReceipt(cart, committed, tendered, change)
+
         _state.value = _state.value.copy(
           busy = false,
           cart = Cart.EMPTY,
           lastReceiptNo = committed.receiptNo,
           lastChange = committed.change,
+          lastReceipt = receipt,
           message = Toast("Sale ${committed.receiptNo} saved on this device"),
         )
         // Enqueued AFTER the sale is committed, never before. The upload is a
@@ -677,5 +701,57 @@ class RegisterViewModel @Inject constructor(
         )
       }
     }
+  }
+
+  /**
+   * Turn the sale that just completed into a receipt.
+   *
+   * The store's address, phone and return policy are shop configuration that
+   * does not exist yet, so they are omitted rather than invented. A receipt
+   * that states a return policy the shop never agreed to is worse than one that
+   * states none.
+   */
+  private suspend fun buildReceipt(
+    cart: Cart,
+    committed: CommittedSale,
+    tendered: Money,
+    change: Money,
+  ): SaleReceipt {
+    val registerConfig = config.get()
+    return SaleReceipt(
+      store = ReceiptStore(name = registerConfig?.storeName ?: "SnapPOS"),
+      receiptNo = committed.receiptNo,
+      soldAt = Instant.now(),
+      cashierName = _state.value.cashier?.displayName ?: "",
+      registerName = "Register ${registerConfig?.registerCode ?: ""}".trim(),
+      items = cart.effectiveLines.map { line ->
+        ReceiptItem(
+          description = line.description,
+          quantity = line.quantity,
+          unitPrice = line.unitPrice,
+          lineTotal = line.total,
+        )
+      },
+      subtotal = cart.subtotal,
+      discount = cart.discountTotal,
+      tax = cart.taxTotal,
+      total = cart.total,
+      tenders = listOf(ReceiptTender("cash", tendered)),
+      change = change,
+      minimumAge = cart.minimumAgeRequired,
+      // The cart reached payment, so any age gate on it was satisfied — that is
+      // what `requiresAgeVerification` blocking payment guarantees.
+      ageVerified = cart.minimumAgeRequired != null,
+    )
+  }
+
+  fun showReceipt() {
+    if (_state.value.lastReceipt != null) {
+      _state.value = _state.value.copy(showingReceipt = true)
+    }
+  }
+
+  fun dismissReceipt() {
+    _state.value = _state.value.copy(showingReceipt = false)
   }
 }

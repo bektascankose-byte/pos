@@ -2,6 +2,49 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — Receipts
+
+A receipt is described, not formatted: `ReceiptRenderer` produces an abstract
+`ReceiptDocument` and whatever consumes it decides the width. The same document
+prints to 58mm, to 80mm, and to the screen, which is what stops a preview
+drifting from the paper a customer is holding. 14 tests, all pure Kotlin.
+
+### Added
+
+- **`ReceiptDocument`** — text, label/amount rows, sold items, separators and a
+  machine readable receipt number. No column widths, no printer commands.
+- **`TextReceipt`** — the rasterizer. Paper width is a value (`Mm58` = 32
+  columns, `Mm80` = 48), not a second template. Amounts are flush to the last
+  column so a receipt can be checked by running a finger down the right edge,
+  long product names wrap on word boundaries, and a label that would crowd the
+  amount is truncated rather than wrapped — the amount is the part that has to
+  survive.
+- **`PrinterProvider`** in `hardware-api`, interfaces only. Every method
+  reports rather than throws: the money has changed hands by the time a receipt
+  is produced, so a printer out of paper must never be able to fail a sale.
+- **The receipt on screen**, rendered through the same `TextReceipt` a printer
+  would use, reachable from the register once there is a sale to show. It says
+  "No printer configured" plainly — a Print button that silently does nothing
+  is worse than no button, because a cashier presses it and hands the customer
+  nothing.
+
+### Compliance
+
+An age restricted sale records **that the check happened** — "Age 21+ ID
+verified" — and nothing else. No date of birth, no licence number, no name. A
+receipt ends up in a bin behind the counter, and identity data on it is a breach
+made of paper. There is a test asserting the rendered receipt contains none of
+those words.
+
+### Not built
+
+The ESC/POS driver. There is no printer here to verify one against, and an
+unverifiable driver that looks finished is worse than an absent one. The
+interface it plugs into is done and the document it consumes is tested.
+
+Store address, phone and return policy are shop configuration that does not
+exist yet, so the receipt omits them rather than inventing them.
+
 ## Phase 2 — A scan could be silently dropped
 
 ### Fixed
