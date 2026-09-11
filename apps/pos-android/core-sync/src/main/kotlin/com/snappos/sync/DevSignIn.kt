@@ -28,7 +28,27 @@ class DevSignIn @Inject constructor(
 ) {
 
   suspend fun ensureSignedIn(): Boolean {
-    if (auth.isSignedIn()) return true
+    // Holding a token is not the same as being signed in. A token can outlive
+    // the user it names — the account is deleted, the register is moved to
+    // another organization, the token family is revoked after a suspected
+    // theft — and the symptom is not an error but an empty catalog, which
+    // looks exactly like a register that simply has no products.
+    //
+    // So the token is verified, not assumed, and a dead one is cleared and
+    // replaced rather than used forever.
+    if (auth.isSignedIn()) {
+      val session = runCatching { api.session() }.getOrNull()
+      if (session?.isSuccessful == true) return true
+      if (session != null && session.code() in 400..499) {
+        Log.w(TAG, "stored credentials are no longer valid (HTTP ${session.code()}); signing in again")
+        auth.clear()
+      } else {
+        // Could not reach the server at all. The stored token is probably fine;
+        // this is a network problem, and clearing it would sign a register out
+        // for the duration of an outage.
+        return session != null
+      }
+    }
 
     val deviceId = config.get()?.deviceId
     val response = try {

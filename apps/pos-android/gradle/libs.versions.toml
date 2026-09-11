@@ -51,6 +51,10 @@ room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 room-testing = { module = "androidx.room:room-testing", version.ref = "room" }
 
 sqlcipher = { module = "net.zetetic:sqlcipher-android", version.ref = "sqlcipher" }
+# Argon2id on device. The register verifies a cashier's PIN against the hash the
+# server replicated, with no network, because a shift most often starts on a
+# register that cannot reach anything.
+argon2kt = { module = "com.lambdapioneer.argon2kt:argon2kt", version = "1.6.0" }
 sqlite-ktx = { module = "androidx.sqlite:sqlite-ktx", version.ref = "sqlite-ktx" }
 
 hilt-android = { module = "com.google.dagger:hilt-android", version.ref = "hilt" }

@@ -1,6 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { PoolClient } from 'pg';
-import { saleInput, refundInput, cashMovementInput } from '@snappos/contracts';
+import {
+  saleInput,
+  refundInput,
+  cashMovementInput,
+  syncEnvelopeSchema,
+} from '@snappos/contracts';
 import type { SyncBatch, SyncResult, Change } from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
 import { SalesService } from '../sales/sales.service.js';
@@ -22,6 +27,7 @@ const PERMISSION_BY_ENTITY: Record<string, string> = {
   refund: 'refund.create',
   cash_movement: 'cash.paid_in_out',
   cash_session: 'cash.session_open',
+  cash_session_close: 'cash.session_close',
   inventory_movement: 'inventory.adjust',
   age_verification: 'sale.create',
   time_entry: 'employee.timeclock_edit',
@@ -135,8 +141,13 @@ export class SyncService {
     tx: PoolClient,
     orgId: string,
     batch: SyncBatch,
-    envelope: SyncBatch['entities'][number],
+    raw: SyncBatch['entities'][number],
   ): Promise<'accepted' | 'duplicate'> {
+    // Strict validation happens here, per entity, inside the try/catch that
+    // produces a per-entity verdict. Doing it at the batch level would make one
+    // malformed row reject every sale behind it.
+    const envelope = syncEnvelopeSchema.parse(raw);
+
     switch (envelope.entity_type) {
       case 'sale': {
         const sale = saleInput.parse({ ...envelope.payload, id: envelope.id });
@@ -145,6 +156,12 @@ export class SyncService {
       case 'refund': {
         const refund = refundInput.parse({ ...envelope.payload, id: envelope.id });
         return this.refunds.intake(tx, refund, batch.device_id);
+      }
+      case 'cash_session': {
+        return this.ingestCashSession(tx, envelope);
+      }
+      case 'cash_session_close': {
+        return this.ingestCashSessionClose(tx, envelope);
       }
       case 'cash_movement': {
         const movement = cashMovementInput.parse({ ...envelope.payload, id: envelope.id });
@@ -159,6 +176,110 @@ export class SyncService {
       default:
         throw new Error(`entity type "${envelope.entity_type}" is not accepted yet`);
     }
+  }
+
+  /**
+   * A drawer opened on a register.
+   *
+   * The id was minted on the device, so a replayed upload conflicts rather than
+   * opening a second session. That matters more here than almost anywhere: two
+   * sessions on one drawer would make over/short meaningless, because nobody
+   * could say which session a given note belonged to.
+   */
+  private async ingestCashSession(
+    tx: PoolClient,
+    envelope: SyncBatch['entities'][number],
+  ): Promise<'accepted' | 'duplicate'> {
+    const p = envelope.payload as {
+      store_id: string;
+      register_id: string;
+      opened_by: string;
+      opening_float_minor: string;
+      blind: boolean;
+      opened_at: string;
+    };
+
+    const { rows } = await tx.query<{ id: string }>(
+      `INSERT INTO cash_sessions
+         (id, org_id, store_id, register_id, opened_by, opened_at, opening_float_minor, blind)
+       VALUES ($1, current_setting('app.org_id')::uuid, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (id) DO NOTHING
+       RETURNING id`,
+      [
+        envelope.id,
+        p.store_id,
+        p.register_id,
+        p.opened_by,
+        p.opened_at,
+        p.opening_float_minor,
+        p.blind,
+      ],
+    );
+
+    if (rows.length === 0) return 'duplicate';
+
+    // The opening float is a movement like any other, so expected cash stays
+    // "the sum of the movements" with no special case anywhere downstream.
+    await tx.query(
+      `INSERT INTO cash_movements
+         (org_id, session_id, kind, amount_minor, reason, actor_user_id, occurred_at)
+       VALUES (current_setting('app.org_id')::uuid, $1, 'opening_float', $2, 'session opened', $3, $4)`,
+      [envelope.id, p.opening_float_minor, p.opened_by, p.opened_at],
+    );
+
+    return 'accepted';
+  }
+
+  /**
+   * A drawer closed against a counted amount.
+   *
+   * Expected cash is recomputed here from the movements the server actually
+   * holds, rather than trusting the figure the device sent. The two normally
+   * agree; when they do not, the server's is the one that reconciles with the
+   * sales it has, and a difference is worth seeing rather than papering over.
+   */
+  private async ingestCashSessionClose(
+    tx: PoolClient,
+    envelope: SyncBatch['entities'][number],
+  ): Promise<'accepted' | 'duplicate'> {
+    const p = envelope.payload as {
+      session_id: string;
+      closed_by: string;
+      counted_minor: string;
+      closed_at: string;
+      note?: string;
+    };
+
+    const { rows: existing } = await tx.query<{ closed_at: Date | null }>(
+      `SELECT closed_at FROM cash_sessions WHERE id = $1 FOR UPDATE`,
+      [p.session_id],
+    );
+    if (!existing[0]) throw new Error(`cash session ${p.session_id} is not on the server yet`);
+    if (existing[0].closed_at) return 'duplicate';
+
+    const { rows: expectedRows } = await tx.query<{ total: string }>(
+      `SELECT COALESCE(sum(amount_minor), 0)::text AS total
+       FROM cash_movements WHERE session_id = $1`,
+      [p.session_id],
+    );
+    const expected = expectedRows[0]?.total ?? '0';
+
+    await tx.query(
+      `INSERT INTO cash_movements
+         (org_id, session_id, kind, amount_minor, reason, actor_user_id, occurred_at)
+       VALUES (current_setting('app.org_id')::uuid, $1, 'closing_count', 0, 'session closed', $2, $3)`,
+      [p.session_id, p.closed_by, p.closed_at],
+    );
+
+    await tx.query(
+      `UPDATE cash_sessions
+       SET closed_by = $2, closed_at = $3, counted_minor = $4, expected_minor = $5,
+           note = COALESCE($6, note)
+       WHERE id = $1`,
+      [p.session_id, p.closed_by, p.closed_at, p.counted_minor, expected, p.note ?? null],
+    );
+
+    return 'accepted';
   }
 
   private async ingestCashMovement(
@@ -385,6 +506,39 @@ export class SyncService {
         ),
       ]);
 
+      // Employees who may unlock this register.
+      //
+      // The PIN hash is replicated so unlock works with no network, which is the
+      // whole point: a register is most likely to be offline exactly when a
+      // shift starts. Three things make that acceptable:
+      //
+      //   * only this store's staff, never the whole organization
+      //   * the PIN hash only. The password hash is NOT sent, because a
+      //     password unlocks the dashboard and everything in it, and a stolen
+      //     terminal must not carry one
+      //   * it lands in a SQLCipher database keyed from the Android Keystore
+      //
+      // A four digit PIN is 10,000 combinations, so the hash was never what
+      // protected it. Lockout is, and the register counts failures locally
+      // because that is where the attempts happen.
+      const { rows: employees } = await tx.query(
+        `SELECT DISTINCT u.id, COALESCE(u.display_name, u.full_name) AS display_name,
+                u.employee_code, p.pin_hash, u.status,
+                COALESCE(
+                  (SELECT array_agg(DISTINCT rp.permission_key)
+                   FROM user_roles ur2
+                   JOIN role_permissions rp ON rp.role_id = ur2.role_id
+                   WHERE ur2.user_id = u.id),
+                  '{}'
+                ) AS permissions
+         FROM users u
+         JOIN employee_pins p ON p.user_id = u.id
+         JOIN user_roles ur ON ur.user_id = u.id
+         WHERE u.status = 'active'
+           AND (ur.store_id = $1 OR ur.store_id IS NULL)`,
+        [storeId],
+      );
+
       // The cursor the register resumes the change feed from. Taken AFTER the
       // snapshot reads so nothing committed during them is missed; re-applying
       // a change already in the snapshot is harmless, skipping one is not.
@@ -399,6 +553,7 @@ export class SyncService {
         prices,
         inventory: levels,
         tax_rates: taxRates,
+        employees,
         cursor: cursorRows[0]?.cursor ?? '0',
         server_time: new Date().toISOString(),
       };

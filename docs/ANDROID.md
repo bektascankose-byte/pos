@@ -152,12 +152,39 @@ Verified on a Galaxy S22 Ultra against the real API:
 - **two sales rung with the API process stopped**, both draining when it
   returned, each landing exactly once, with the levels still equal to the sum
   of the ledger
+- a full shift: unlock as a cashier, open a drawer with a $200 float, ring a
+  cash sale, a cashier refused permission to close, a manager unlocking and
+  closing on a blind count that reported **short 2.03 against an expected
+  207.03** — and the session, its movements and the close all reaching the
+  server
+
+## Starting a shift
+
+Three gates, in order, each because the step after it is impossible without it:
+
+1. **Unlock.** Pick a name, enter a PIN. Verified on device against the Argon2id
+   hash the server replicated — a shift most often starts on a register that
+   cannot reach anything, so an unlock that needs a round trip is one that fails
+   when it matters. Five wrong PINs locks that employee out for fifteen minutes,
+   counted locally, because that is where the attempts happen.
+2. **Open the drawer.** A cash sale has to go somewhere; without a session the
+   drawer total is unknowable and over/short becomes meaningless.
+3. **Sell.**
+
+A four digit PIN is 10,000 combinations, so the hash was never the protection.
+The PIN unlocks a device a real login already claimed, it grants a cashier's
+permissions rather than a manager's, and lockout does the rest.
+
+**Permissions are enforced offline** from the replicated list. A cashier cannot
+close the drawer: closing produces the over/short figure a shift is judged by,
+and letting the person who is short report their own variance removes the only
+check on it.
 
 ## Not yet built
 
-PIN unlock, cash sessions on device, refunds, receipt printing, hardware
-adapters, the promotions engine, and the incremental change feed — the catalog
-currently arrives as a full snapshot on each pull.
+Refunds on device, receipt printing, hardware adapters, the promotions engine,
+manager approval for price overrides, and the incremental change feed — the
+catalog currently arrives as a full snapshot on each pull.
 
 `DevProvisioning` and `DevSignIn` are development scaffolding standing in for a
 real device claim flow, and both say so. Delete them when it lands.

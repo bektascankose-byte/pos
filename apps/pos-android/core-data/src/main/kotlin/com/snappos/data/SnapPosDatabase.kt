@@ -4,12 +4,15 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.snappos.data.dao.CashDao
 import com.snappos.data.dao.CatalogDao
 import com.snappos.data.dao.ConfigDao
 import com.snappos.data.dao.EmployeeDao
 import com.snappos.data.dao.OutboxDao
 import com.snappos.data.dao.SalesDao
 import com.snappos.data.entities.AgeVerificationEntity
+import com.snappos.data.entities.CashMovementEntity
+import com.snappos.data.entities.CashSessionEntity
 import com.snappos.data.entities.BarcodeEntity
 import com.snappos.data.entities.CategoryEntity
 import com.snappos.data.entities.EmployeeEntity
@@ -37,6 +40,8 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
     AgeVerificationEntity::class,
     OutboxEntity::class,
     RegisterConfigEntity::class,
+    CashSessionEntity::class,
+    CashMovementEntity::class,
   ],
   version = 1,
   exportSchema = true,
@@ -47,6 +52,7 @@ abstract class SnapPosDatabase : RoomDatabase() {
   abstract fun sales(): SalesDao
   abstract fun outbox(): OutboxDao
   abstract fun config(): ConfigDao
+  abstract fun cash(): CashDao
 
   companion object {
     const val NAME = "snappos.db"

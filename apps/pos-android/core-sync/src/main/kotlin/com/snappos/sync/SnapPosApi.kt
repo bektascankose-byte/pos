@@ -152,6 +152,7 @@ data class CatalogSnapshot(
   val prices: List<PriceDto>,
   val inventory: List<InventoryDto>,
   val tax_rates: List<TaxRateDto>,
+  val employees: List<EmployeeDto> = emptyList(),
   val cursor: String,
   val server_time: String,
 )
@@ -217,6 +218,23 @@ data class InventoryDto(
   val on_hand: String,
   val available: String,
   val updated_at: String,
+)
+
+/**
+ * An employee who may unlock this register.
+ *
+ * Carries the Argon2id PIN hash so unlock works offline, and deliberately not
+ * the password hash: a password opens the dashboard and everything in it, and a
+ * stolen terminal must not be able to carry one.
+ */
+@Serializable
+data class EmployeeDto(
+  val id: String,
+  val display_name: String,
+  val employee_code: String? = null,
+  val pin_hash: String,
+  val status: String,
+  val permissions: List<String> = emptyList(),
 )
 
 @Serializable

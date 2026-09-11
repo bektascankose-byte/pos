@@ -56,6 +56,9 @@ fun CashPaymentDialog(
   total: Money,
   onDismiss: () -> Unit,
   onConfirm: (Money) -> Unit,
+  /** "Total due" when taking a tender, "Expected" when counting a drawer. */
+  title: String = "Total due",
+  confirmLabel: String = "TAKE CASH",
 ) {
   // Digits as typed, interpreted as minor units: typing 5 0 0 0 means $50.00.
   // Cashiers on every POS enter cash this way, and a decimal point is a keypress
@@ -64,6 +67,10 @@ fun CashPaymentDialog(
 
   val tendered = Money.ofMinor(digits.ifEmpty { "0" }.toLong())
   val change = tendered - total
+
+  // Counting a drawer has no "due" amount, so there is nothing to be short of
+  // and the confirm button must not be gated on covering a total of zero.
+  val counting = total.isZero
   val sufficient = tendered >= total
 
   Dialog(
@@ -83,11 +90,11 @@ fun CashPaymentDialog(
         if (sideBySide) {
           Row(Modifier.padding(Space.M.dp)) {
             Column(Modifier.weight(1f).padding(end = Space.M.dp)) {
-              Amounts(total, tendered, change, sufficient)
+              Amounts(total, tendered, change, sufficient, title, counting)
               Spacer(Modifier.height(Space.M.dp))
               QuickCashRow(total) { digits = it }
               Spacer(Modifier.weight(1f))
-              Actions(sufficient, onDismiss) { onConfirm(tendered) }
+              Actions(sufficient || counting, confirmLabel, onDismiss) { onConfirm(tendered) }
             }
             Box(Modifier.weight(1f)) {
               Keypad(
@@ -99,7 +106,7 @@ fun CashPaymentDialog(
           }
         } else {
           Column(Modifier.padding(Space.L.dp)) {
-            Amounts(total, tendered, change, sufficient)
+            Amounts(total, tendered, change, sufficient, title, counting)
             Spacer(Modifier.height(Space.M.dp))
             QuickCashRow(total) { digits = it }
             Spacer(Modifier.height(Space.M.dp))
@@ -109,7 +116,7 @@ fun CashPaymentDialog(
               onClear = { digits = "" },
             )
             Spacer(Modifier.height(Space.M.dp))
-            Actions(sufficient, onDismiss) { onConfirm(tendered) }
+            Actions(sufficient || counting, confirmLabel, onDismiss) { onConfirm(tendered) }
           }
         }
       }
@@ -123,20 +130,25 @@ private fun ColumnScope.Amounts(
   tendered: Money,
   change: Money,
   sufficient: Boolean,
+  title: String,
+  counting: Boolean,
 ) {
-  Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-    Text("Total due", style = MaterialTheme.typography.bodyLarge)
-    Text(total.toMajorString(), style = MaterialTheme.typography.headlineMedium.merge(MoneyTextStyle))
+  if (!counting) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+      Text(title, style = MaterialTheme.typography.bodyLarge)
+      Text(total.toMajorString(), style = MaterialTheme.typography.headlineMedium.merge(MoneyTextStyle))
+    }
+    Spacer(Modifier.height(Space.S.dp))
   }
-  Spacer(Modifier.height(Space.S.dp))
   Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-    Text("Tendered", style = MaterialTheme.typography.bodyLarge)
+    Text(if (counting) "Counted" else "Tendered", style = MaterialTheme.typography.bodyLarge)
     Text(
       tendered.toMajorString(),
       style = MaterialTheme.typography.headlineMedium.merge(MoneyTextStyle),
       color = MaterialTheme.colorScheme.primary,
     )
   }
+  if (counting) return
   Spacer(Modifier.height(Space.S.dp))
   Row(
     Modifier.fillMaxWidth(),
@@ -170,18 +182,23 @@ private fun QuickCashRow(total: Money, onPick: (String) -> Unit) {
 }
 
 @Composable
-private fun Actions(sufficient: Boolean, onCancel: () -> Unit, onConfirm: () -> Unit) {
+private fun Actions(
+  enabled: Boolean,
+  confirmLabel: String,
+  onCancel: () -> Unit,
+  onConfirm: () -> Unit,
+) {
   Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Space.S.dp)) {
     TextButton(onClick = onCancel, modifier = Modifier.weight(1f).height(Touch.MIN.dp)) {
       Text("Cancel")
     }
     Button(
       onClick = onConfirm,
-      enabled = sufficient,
+      enabled = enabled,
       modifier = Modifier.weight(2f).height(Touch.PRIMARY.dp),
       shape = RoundedCornerShape(6.dp),
     ) {
-      Text("TAKE CASH", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+      Text(confirmLabel, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
     }
   }
 }

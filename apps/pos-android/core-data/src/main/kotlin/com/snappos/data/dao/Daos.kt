@@ -136,6 +136,10 @@ interface CatalogDao {
 
 @Dao
 interface EmployeeDao {
+  /** A one-shot read, for approval checks that must not observe a Flow. */
+  @Query("SELECT * FROM employees WHERE status = 'active' ORDER BY displayName")
+  suspend fun activeOnce(): List<EmployeeEntity>
+
   @Query("SELECT * FROM employees WHERE status = 'active' ORDER BY displayName")
   fun active(): Flow<List<EmployeeEntity>>
 

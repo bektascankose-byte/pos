@@ -38,6 +38,7 @@ dependencies {
   // that gets stolen, so the file is encrypted with a key held in the Android
   // Keystore rather than in the APK.
   implementation(libs.sqlcipher)
+  implementation(libs.argon2kt)
   implementation(libs.sqlite.ktx)
 
   implementation(libs.hilt.android)

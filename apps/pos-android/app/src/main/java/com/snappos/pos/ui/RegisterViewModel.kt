@@ -3,7 +3,12 @@ package com.snappos.pos.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.snappos.data.CatalogRepository
+import com.snappos.data.Cashier
+import com.snappos.data.CashRepository
 import com.snappos.data.DevProvisioning
+import com.snappos.data.ShiftRepository
+import com.snappos.data.UnlockResult
+import com.snappos.data.entities.EmployeeEntity
 import com.snappos.data.ResolvedProduct
 import com.snappos.data.SaleRepository
 import com.snappos.data.Tender
@@ -27,7 +32,14 @@ import javax.inject.Inject
 /** A short lived message for the cashier. Not an error dialog; a line of text. */
 data class Toast(val text: String, val isError: Boolean = false)
 
+/** What the register is showing: the shift gate, the drawer gate, or the till. */
+enum class RegisterStage { Locked, DrawerClosed, Selling }
+
 data class RegisterUiState(
+  val stage: RegisterStage = RegisterStage.Locked,
+  val employees: List<EmployeeEntity> = emptyList(),
+  val cashier: Cashier? = null,
+  val sessionId: String? = null,
   val cart: Cart = Cart.EMPTY,
   val tiles: List<ResolvedProduct> = emptyList(),
   val categories: List<CategoryTile> = emptyList(),
@@ -49,6 +61,8 @@ class RegisterViewModel @Inject constructor(
   private val provisioning: DevProvisioning,
   private val devSignIn: DevSignIn,
   private val catalogSync: CatalogSync,
+  private val shift: ShiftRepository,
+  private val drawer: CashRepository,
 ) : ViewModel() {
 
   private val _state = MutableStateFlow(RegisterUiState())
@@ -107,6 +121,11 @@ class RegisterViewModel @Inject constructor(
         _state.value = _state.value.copy(
           categories = rows.filter { it.depth == 0 }.map { CategoryTile(it.id, it.name) },
         )
+      }
+    }
+    viewModelScope.launch {
+      shift.activeEmployees().collect { rows ->
+        _state.value = _state.value.copy(employees = rows)
       }
     }
   }
@@ -199,6 +218,118 @@ class RegisterViewModel @Inject constructor(
     _state.value = _state.value.copy(cart = _state.value.cart.markAgeVerified())
   }
 
+  /**
+   * Start a shift.
+   *
+   * Verified on device against the replicated Argon2id hash. The register is
+   * most likely to be offline exactly when a shift starts, so an unlock that
+   * needs a round trip is an unlock that fails when it matters.
+   */
+  fun unlock(userId: String, pin: String) {
+    viewModelScope.launch {
+      _state.value = _state.value.copy(busy = true, message = null)
+      when (val result = shift.unlock(userId, pin)) {
+        is UnlockResult.Success -> {
+          val openSession = drawer.openSessionId()
+          _state.value = _state.value.copy(
+            busy = false,
+            cashier = result.cashier,
+            sessionId = openSession,
+            // A drawer has to be open before cash can be taken, so a register
+            // with no session goes to the drawer gate rather than to a till
+            // that would fail at the moment of payment.
+            stage = if (openSession == null) RegisterStage.DrawerClosed else RegisterStage.Selling,
+            message = null,
+          )
+        }
+        is UnlockResult.WrongPin ->
+          _state.value = _state.value.copy(busy = false, message = Toast("Wrong PIN", true))
+        is UnlockResult.LockedOut ->
+          _state.value = _state.value.copy(
+            busy = false,
+            message = Toast("Locked for 15 minutes after 5 wrong PINs", true),
+          )
+        is UnlockResult.NoEmployees ->
+          _state.value = _state.value.copy(
+            busy = false,
+            message = Toast("That employee is not on this register", true),
+          )
+      }
+    }
+  }
+
+  /** End the shift. The cart is deliberately kept: locking is not cancelling. */
+  fun lock() {
+    _state.value = _state.value.copy(stage = RegisterStage.Locked, cashier = null, message = null)
+  }
+
+  fun openDrawer(openingFloat: Money) {
+    val cashier = _state.value.cashier ?: return
+    viewModelScope.launch {
+      _state.value = _state.value.copy(busy = true)
+      drawer.open(cashier.userId, openingFloat)
+        .onSuccess { sessionId ->
+          _state.value = _state.value.copy(
+            busy = false,
+            sessionId = sessionId,
+            stage = RegisterStage.Selling,
+            message = Toast("Drawer open with ${openingFloat.toMajorString()}"),
+          )
+          SyncWorker.syncNow(context)
+        }
+        .onFailure {
+          _state.value = _state.value.copy(
+            busy = false,
+            message = Toast(it.message ?: "Could not open the drawer", true),
+          )
+        }
+    }
+  }
+
+  /**
+   * Close the drawer against a counted amount.
+   *
+   * Closing needs `cash.session_close`, which a cashier does not have by
+   * default: closing produces the over/short number a shift is judged by, and
+   * letting the person who is short report their own variance removes the only
+   * check on it.
+   */
+  fun closeDrawer(counted: Money) {
+    val cashier = _state.value.cashier ?: return
+    val sessionId = _state.value.sessionId ?: return
+
+    if (!cashier.can("cash.session_close")) {
+      _state.value = _state.value.copy(
+        message = Toast("A manager has to close the drawer", true),
+      )
+      return
+    }
+
+    viewModelScope.launch {
+      _state.value = _state.value.copy(busy = true)
+      drawer.close(sessionId, cashier.userId, counted)
+        .onSuccess { result ->
+          _state.value = _state.value.copy(
+            busy = false,
+            sessionId = null,
+            stage = RegisterStage.DrawerClosed,
+            message = Toast(
+              "Drawer ${result.outcome}: counted ${result.counted.toMajorString()}, " +
+                "expected ${result.expected.toMajorString()}",
+              isError = result.outcome == "short",
+            ),
+          )
+          SyncWorker.syncNow(context)
+        }
+        .onFailure {
+          _state.value = _state.value.copy(
+            busy = false,
+            message = Toast(it.message ?: "Could not close the drawer", true),
+          )
+        }
+    }
+  }
+
   fun dismissMessage() {
     _state.value = _state.value.copy(message = null, lastReceiptNo = null, lastChange = null)
   }
@@ -239,12 +370,11 @@ class RegisterViewModel @Inject constructor(
           tenders = listOf(
             Tender(method = "cash", amount = cart.total, tendered = tendered, change = change),
           ),
-          sessionId = null,
+          sessionId = _state.value.sessionId,
         )
-        _state.value = RegisterUiState(
-          tiles = _state.value.tiles,
-          categories = _state.value.categories,
-          selectedCategoryId = _state.value.selectedCategoryId,
+        _state.value = _state.value.copy(
+          busy = false,
+          cart = Cart.EMPTY,
           lastReceiptNo = committed.receiptNo,
           lastChange = committed.change,
           message = Toast("Sale ${committed.receiptNo} saved on this device"),

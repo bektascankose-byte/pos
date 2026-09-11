@@ -3,6 +3,7 @@ package com.snappos.data.di
 import android.content.Context
 import com.snappos.data.SnapPosDatabase
 import com.snappos.data.crypto.DatabaseKey
+import com.snappos.data.dao.CashDao
 import com.snappos.data.dao.CatalogDao
 import com.snappos.data.dao.ConfigDao
 import com.snappos.data.dao.EmployeeDao
@@ -40,4 +41,6 @@ object DataModule {
   @Provides fun outboxDao(db: SnapPosDatabase): OutboxDao = db.outbox()
 
   @Provides fun configDao(db: SnapPosDatabase): ConfigDao = db.config()
+
+  @Provides fun cashDao(db: SnapPosDatabase): CashDao = db.cash()
 }

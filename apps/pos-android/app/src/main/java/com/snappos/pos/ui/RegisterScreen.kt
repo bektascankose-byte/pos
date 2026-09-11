@@ -69,7 +69,34 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
   val pending by viewModel.pendingUploads.collectAsStateWithLifecycle()
   val dead by viewModel.deadLetters.collectAsStateWithLifecycle()
 
+  // Three gates, in order: who is on the register, is the drawer open, then
+  // sell. Each one exists because the step after it is impossible without it —
+  // a sale needs someone to attribute it to, and cash needs somewhere to go.
+  when (state.stage) {
+    RegisterStage.Locked -> {
+      UnlockScreen(
+        employees = state.employees,
+        message = state.message?.text,
+        busy = state.busy,
+        onUnlock = viewModel::unlock,
+      )
+      return
+    }
+    RegisterStage.DrawerClosed -> {
+      DrawerScreen(
+        cashierName = state.cashier?.displayName ?: "",
+        message = state.message,
+        busy = state.busy,
+        onOpen = viewModel::openDrawer,
+        onLock = viewModel::lock,
+      )
+      return
+    }
+    RegisterStage.Selling -> Unit
+  }
+
   var showPayment by remember { mutableStateOf(false) }
+  var showClose by remember { mutableStateOf(false) }
 
   val syncState = when {
     dead > 0 -> SyncState.Error
@@ -79,7 +106,14 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
 
   Surface(color = MaterialTheme.colorScheme.background) {
     Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-      RegisterHeader("Maria", "Register 1", syncState, pending)
+      RegisterHeader(
+        cashier = state.cashier?.displayName ?: "",
+        register = "Register 1",
+        state = syncState,
+        pending = pending,
+        onLock = viewModel::lock,
+        onCloseDrawer = { showClose = true },
+      )
       HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 
       state.message?.let { message ->
@@ -123,6 +157,21 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
     }
   }
 
+  if (showClose) {
+    // Reuses the cash dialog: counting a drawer and taking a tender are the
+    // same gesture, and a cashier should not have to learn two keypads.
+    CashPaymentDialog(
+      total = Money.ZERO,
+      title = "Count the drawer",
+      confirmLabel = "CLOSE DRAWER",
+      onDismiss = { showClose = false },
+      onConfirm = { counted ->
+        showClose = false
+        viewModel.closeDrawer(counted)
+      },
+    )
+  }
+
   if (showPayment) {
     CashPaymentDialog(
       total = state.cart.total,
@@ -138,7 +187,14 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
 enum class SyncState { Online, Syncing, Offline, Error }
 
 @Composable
-private fun RegisterHeader(cashier: String, register: String, state: SyncState, pending: Int) {
+private fun RegisterHeader(
+  cashier: String,
+  register: String,
+  state: SyncState,
+  pending: Int,
+  onLock: () -> Unit,
+  onCloseDrawer: () -> Unit,
+) {
   Row(
     Modifier
       .fillMaxWidth()
@@ -153,6 +209,9 @@ private fun RegisterHeader(cashier: String, register: String, state: SyncState, 
       style = MaterialTheme.typography.bodyMedium,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+    Spacer(Modifier.weight(1f))
+    TextButton(onClick = onCloseDrawer) { Text("Close drawer") }
+    TextButton(onClick = onLock) { Text("Lock") }
   }
 }
 

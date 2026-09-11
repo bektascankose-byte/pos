@@ -63,6 +63,7 @@ class SaleRepository @Inject constructor(
   private val sales: SalesDao,
   private val outbox: OutboxDao,
   private val config: ConfigDao,
+  private val cash: CashRepository,
 ) {
 
   private val json = Json { encodeDefaults = true }
@@ -228,6 +229,29 @@ class SaleRepository @Inject constructor(
 
     // One transaction. Either all of it lands or none of it does.
     sales.commitSale(saleEntity, lineEntities, paymentEntities, ageChecks, outboxEntry)
+
+    // Cash tenders move the drawer, by the amount and never the tender: $50
+    // handed over for a $43 sale puts $43 in the drawer and $7 back in the
+    // customer's hand. Counting the tender would make every drawer over by the
+    // change given.
+    //
+    // Not queued separately - the movement travels inside its sale, and
+    // uploading it on its own would double the drawer.
+    if (sessionId != null) {
+      for ((index, tender) in tenders.withIndex()) {
+        if (tender.method != "cash") continue
+        cash.recordMovement(
+          sessionId = sessionId,
+          kind = "sale",
+          amount = tender.amount,
+          actorUserId = cashierUserId,
+          referenceType = "sale",
+          referenceId = saleId,
+          occurredAtMillis = deviceTimeMillis,
+          movementId = paymentEntities[index].id,
+        )
+      }
+    }
 
     return CommittedSale(saleId, receiptNo, cart.total, change)
   }

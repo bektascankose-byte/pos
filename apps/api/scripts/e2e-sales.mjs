@@ -523,6 +523,30 @@ export async function runSalesChecks({ api, check, uuidV7, ownerToken, managerTo
     !('customers' in (snapshot.body ?? {})),
   );
 
+  // Employees are replicated so PIN unlock works with no network, which is
+  // exactly when a shift is most likely to start.
+  const employees = snapshot.body?.employees ?? [];
+  check(
+    'the snapshot carries the staff who can unlock this register',
+    employees.length === 3 && employees.every((e) => typeof e.pin_hash === 'string'),
+    JSON.stringify(employees.map((e) => e.display_name)),
+  );
+  check(
+    'a replicated employee carries a PIN hash and NEVER a password hash',
+    employees.every(
+      (e) =>
+        e.pin_hash?.startsWith('$argon2') &&
+        !('password_hash' in e) &&
+        !('mfa_secret_enc' in e),
+    ),
+    JSON.stringify(Object.keys(employees[0] ?? {})),
+  );
+  check(
+    'each employee carries the permissions the register enforces offline',
+    employees.every((e) => Array.isArray(e.permissions)) &&
+      employees.some((e) => e.permissions.includes('sale.create')),
+  );
+
   // ------------------------------------------------------------- 9. audit trail
 
   const audit = await api(`/api/v1/audit?entity_id=${voidSaleId}`, { token: ownerToken });

@@ -20,6 +20,7 @@ export const syncEntityType = z.enum([
   'refund',
   'payment',
   'cash_session',
+  'cash_session_close',
   'cash_movement',
   'inventory_movement',
   'age_verification',
@@ -43,6 +44,28 @@ export const syncEnvelopeSchema = z.object({
   payload: z.record(z.unknown()),
 });
 
+/**
+ * The batch-level shape: deliberately lenient.
+ *
+ * Strict validation here would be a mistake, and was one. Validating the whole
+ * array against `syncEnvelopeSchema` makes a single malformed entity fail the
+ * request, so **one bad row rejects every sale behind it** — the exact opposite
+ * of "ordered but not atomic", and a very real situation: a register running a
+ * build from three months ago can emit an entity this server does not
+ * recognise, and a shop's whole day should not be stuck behind it.
+ *
+ * So the envelope is checked loosely enough to route on, and each entity is
+ * validated strictly inside its own transaction, where a failure produces a
+ * per-entity verdict instead of an HTTP error.
+ */
+export const syncEnvelopeEnvelope = z.object({
+  id: z.string().min(1).max(64),
+  entity_type: z.string().min(1).max(64),
+  device_time: z.string().min(1).max(64),
+  attempt: z.number().int().min(0).default(0),
+  payload: z.record(z.unknown()),
+});
+
 export const syncBatchSchema = z.object({
   register_id: uuid,
   device_id: uuid,
@@ -50,7 +73,7 @@ export const syncBatchSchema = z.object({
    * Ordered, but not atomic. Entity 7 failing must not block entities 1 to 6:
    * one bad row cannot be allowed to hold a day of sales hostage.
    */
-  entities: z.array(syncEnvelopeSchema).min(1).max(200),
+  entities: z.array(syncEnvelopeEnvelope).min(1).max(200),
 });
 
 /**

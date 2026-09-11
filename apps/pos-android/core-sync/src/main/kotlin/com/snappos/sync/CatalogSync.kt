@@ -3,6 +3,7 @@ package com.snappos.sync
 import android.util.Log
 import com.snappos.data.dao.CatalogDao
 import com.snappos.data.dao.ConfigDao
+import com.snappos.data.dao.EmployeeDao
 import com.snappos.data.entities.BarcodeEntity
 import com.snappos.data.entities.CategoryEntity
 import com.snappos.data.entities.InventoryEntity
@@ -30,6 +31,7 @@ import javax.inject.Singleton
 class CatalogSync @Inject constructor(
   private val api: SnapPosApi,
   private val catalog: CatalogDao,
+  private val employees: EmployeeDao,
   private val config: ConfigDao,
 ) {
 
@@ -38,6 +40,7 @@ class CatalogSync @Inject constructor(
     val barcodes: Int = 0,
     val prices: Int = 0,
     val categories: Int = 0,
+    val employees: Int = 0,
     val failure: String? = null,
   ) {
     val ok: Boolean get() = failure == null
@@ -158,12 +161,27 @@ class CatalogSync @Inject constructor(
       config.get()?.let { current -> config.upsert(current.copy(taxRate = rate.rate)) }
     }
 
+    // Staff who may unlock this register. Replicated so a shift can start with
+    // no network, which is when shifts usually start.
+    employees.upsert(
+      snapshot.employees.map {
+        com.snappos.data.entities.EmployeeEntity(
+          id = it.id,
+          displayName = it.display_name,
+          employeeCode = it.employee_code,
+          pinHash = it.pin_hash,
+          permissions = it.permissions.joinToString(","),
+          status = it.status,
+        )
+      },
+    )
+
     config.setCatalogCursor(snapshot.cursor)
 
     Log.i(
       TAG,
       "catalog: ${snapshot.variants.size} variants, ${snapshot.barcodes.size} barcodes, " +
-        "cursor ${snapshot.cursor}",
+        "${snapshot.employees.size} employees, cursor ${snapshot.cursor}",
     )
 
     return Result(
@@ -171,6 +189,7 @@ class CatalogSync @Inject constructor(
       barcodes = snapshot.barcodes.size,
       prices = snapshot.prices.size,
       categories = snapshot.categories.size,
+      employees = snapshot.employees.size,
     )
   }
 
