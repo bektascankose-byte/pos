@@ -1,0 +1,21 @@
+{
+  "name": "@snappos/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "SQL migrations, schema tests and seed data. The schema is hand written SQL; Drizzle mirrors it for typed queries.",
+  "scripts": {
+    "test": "node scripts/test.mjs",
+    "test:pg": "node scripts/test.mjs --postgres",
+    "migrate": "node scripts/migrate.mjs",
+    "seed": "node scripts/seed.mjs",
+    "reset": "node scripts/reset.mjs",
+    "bootstrap": "node scripts/bootstrap.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.2.17"
+  }
+}

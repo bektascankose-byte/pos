@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The fast gate. PGlite needs no services and starts in a few hundred
+  # milliseconds, so schema mistakes surface before the slower job finishes.
+  schema-pglite:
+    name: Schema (PGlite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test -w @snappos/db
+
+  # The authoritative gate. Row level security is a no-op for a table owner, so
+  # it can only be proven against a real server with a real non-owner role.
+  # A green PGlite run does not mean tenancy is enforced.
+  schema-postgres:
+    name: Schema (PostgreSQL 16)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: snappos_migrator
+          POSTGRES_PASSWORD: dev_only_not_a_secret
+          POSTGRES_DB: snappos
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U snappos_migrator -d snappos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://snappos_migrator:dev_only_not_a_secret@localhost:5432/snappos
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Create the application role
+        run: npm run bootstrap -w @snappos/db
+      - name: Apply migrations
+        run: npm run migrate -w @snappos/db
+      - name: Seed
+        run: npm run seed -w @snappos/db
+      - name: Schema, invariant and RLS suites
+        run: npm run test:pg -w @snappos/db
+
+  quality:
+    name: Types and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint

@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+.pnp.*
+
+# Build output
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# Environment and secrets. Never commit these.
+.env
+.env.*
+!.env.example
+*.local
+
+# Android
+.gradle/
+local.properties
+*.apk
+*.aab
+*.keystore
+captures/
+platform-tools/
+
+# Editors
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs and coverage
+*.log
+npm-debug.log*
+coverage/
+.nyc_output/
+
+# Local database volumes
+pgdata/

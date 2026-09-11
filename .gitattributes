@@ -1,0 +1,10 @@
+# Normalize to LF in the repository. Windows checkouts keep CRLF locally where
+# it matters, but SQL, shell scripts and Gradle wrappers must stay LF.
+* text=auto eol=lf
+*.sql   text eol=lf
+*.sh    text eol=lf
+*.mjs   text eol=lf
+*.bat   text eol=crlf
+*.png binary
+*.jpg binary
+*.jar binary

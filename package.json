@@ -1,0 +1,30 @@
+{
+  "name": "snappos",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Offline-first retail POS platform for age-restricted retail",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/*"
+  ],
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  },
+  "scripts": {
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "db:up": "docker compose -f infra/docker/docker-compose.dev.yml up -d",
+    "db:down": "docker compose -f infra/docker/docker-compose.dev.yml down",
+    "db:migrate": "npm run migrate -w @snappos/db",
+    "db:seed": "npm run seed -w @snappos/db",
+    "db:reset": "npm run reset -w @snappos/db"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
