@@ -5,14 +5,16 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -84,16 +86,40 @@ fun RegisterScreen(
   cart: List<CartLine> = DEMO_CART,
 ) {
   Surface(color = MaterialTheme.colorScheme.background) {
-    Column(Modifier.fillMaxSize()) {
+    // safeDrawingPadding keeps every control clear of the status bar and, in
+    // landscape, the navigation bar down the right edge. Without it the header
+    // sat under the clock and the cart's money column was clipped mid figure -
+    // which on a POS means a cashier reading a total that is missing digits.
+    Column(Modifier.fillMaxSize().safeDrawingPadding()) {
       RegisterHeader(cashierName, registerName, syncState)
       HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 
-      Row(Modifier.fillMaxSize()) {
-        CategoryRail(categories, Modifier.width(160.dp).fillMaxHeight())
-        VerticalLine()
-        ProductGrid(tiles, Modifier.weight(1f).fillMaxHeight())
-        VerticalLine()
-        CartPanel(cart, Modifier.width(340.dp).fillMaxHeight())
+      // Sized for a 10 inch landscape terminal, which is the target. A phone in
+      // landscape has roughly a third of the height and far less width, so the
+      // two fixed panels give ground before the product grid does - the grid is
+      // the part a cashier is actually aiming at.
+      BoxWithConstraints(Modifier.fillMaxSize()) {
+        val compact = maxWidth < 900.dp
+        val short = maxHeight < 520.dp
+
+        Row(Modifier.fillMaxSize()) {
+          CategoryRail(
+            categories,
+            Modifier.width(if (compact) 116.dp else 160.dp).fillMaxHeight(),
+          )
+          VerticalLine()
+          ProductGrid(
+            tiles,
+            Modifier.weight(1f).fillMaxHeight(),
+            tileWidth = if (compact) 104.dp else 140.dp,
+          )
+          VerticalLine()
+          CartPanel(
+            cart,
+            Modifier.width(if (compact) 264.dp else 340.dp).fillMaxHeight(),
+            compact = short,
+          )
+        }
       }
     }
   }
@@ -170,9 +196,13 @@ private fun CategoryRail(categories: List<String>, modifier: Modifier = Modifier
 }
 
 @Composable
-private fun ProductGrid(tiles: List<ProductTile>, modifier: Modifier = Modifier) {
+private fun ProductGrid(
+  tiles: List<ProductTile>,
+  modifier: Modifier = Modifier,
+  tileWidth: androidx.compose.ui.unit.Dp = Touch.TILE.dp,
+) {
   LazyVerticalGrid(
-    columns = GridCells.Adaptive(minSize = Touch.TILE.dp),
+    columns = GridCells.Adaptive(minSize = tileWidth),
     modifier = modifier.padding(Space.M.dp),
     horizontalArrangement = Arrangement.spacedBy(Space.S.dp),
     verticalArrangement = Arrangement.spacedBy(Space.S.dp),
@@ -185,7 +215,7 @@ private fun ProductGrid(tiles: List<ProductTile>, modifier: Modifier = Modifier)
 private fun ProductTileCard(tile: ProductTile) {
   Column(
     Modifier
-      .aspectRatio(1f)
+      .height(Touch.TILE.dp)
       .clip(RoundedCornerShape(12.dp))
       .background(MaterialTheme.colorScheme.surface)
       .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
@@ -210,14 +240,23 @@ private fun ProductTileCard(tile: ProductTile) {
         )
       }
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(
+      Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
       Text(tile.price.toMajorString(), style = MaterialTheme.typography.bodyLarge.merge(MoneyTextStyle))
+      // A bare red "0" beside the price read as "24.990". An out of stock
+      // marker has to be unmistakably not part of the number.
       if (!tile.inStock) {
-        Spacer(Modifier.width(Space.XS.dp))
         Text(
-          "0",
+          "OUT",
           style = MaterialTheme.typography.labelMedium,
           color = MaterialTheme.colorScheme.error,
+          modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(MaterialTheme.colorScheme.error.copy(alpha = 0.15f))
+            .padding(horizontal = Space.S.dp, vertical = 2.dp),
         )
       }
     }
@@ -225,7 +264,11 @@ private fun ProductTileCard(tile: ProductTile) {
 }
 
 @Composable
-private fun CartPanel(cart: List<CartLine>, modifier: Modifier = Modifier) {
+private fun CartPanel(
+  cart: List<CartLine>,
+  modifier: Modifier = Modifier,
+  compact: Boolean = false,
+) {
   val subtotal = Money.sum(cart.map { it.total })
   val tax = subtotal.applyRate("0.0825")
   val total = subtotal + tax
@@ -244,20 +287,24 @@ private fun CartPanel(cart: List<CartLine>, modifier: Modifier = Modifier) {
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 
-    LazyColumn(Modifier.weight(1f)) {
+    LazyColumn(Modifier.weight(1f).heightIn(min = 96.dp)) {
       items(cart) { line -> CartRow(line) }
     }
 
     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-    Column(Modifier.padding(Space.M.dp)) {
+    Column(Modifier.padding(if (compact) Space.S.dp else Space.M.dp)) {
       TotalRow("Subtotal", subtotal)
       TotalRow("Tax", tax)
       Spacer(Modifier.height(Space.S.dp))
       TotalRow("TOTAL", total, emphasised = true)
-      Spacer(Modifier.height(Space.M.dp))
+      Spacer(Modifier.height(if (compact) Space.S.dp else Space.M.dp))
       Button(
         onClick = { },
-        modifier = Modifier.fillMaxWidth().height(Touch.PRIMARY.dp),
+        // Never below the 56dp minimum, even when squeezed: PAY is the most
+        // pressed control in the building.
+        modifier = Modifier
+          .fillMaxWidth()
+          .height(if (compact) Touch.MIN.dp else Touch.PRIMARY.dp),
         shape = RoundedCornerShape(6.dp),
         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
       ) {

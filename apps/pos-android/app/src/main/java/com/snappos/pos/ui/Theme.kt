@@ -1,6 +1,5 @@
 package com.snappos.pos.ui
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -85,9 +84,19 @@ private val PosTypography = Typography(
   labelMedium = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Medium),
 )
 
+/**
+ * Dark is the DEFAULT, not "whatever the phone is set to".
+ *
+ * Section O is specific about this and the reason is operational rather than
+ * aesthetic: a register sits on a counter for a ten hour shift. Following the
+ * system setting means a terminal that happens to be in light mode stays bright
+ * all day, which is exactly the outcome the decision exists to avoid. Light
+ * mode is a per device setting in the register's own configuration, which is
+ * where a manager can choose it deliberately.
+ */
 @Composable
 fun SnapPosTheme(
-  darkTheme: Boolean = isSystemInDarkTheme(),
+  darkTheme: Boolean = true,
   content: @Composable () -> Unit,
 ) {
   MaterialTheme(
