@@ -14,6 +14,7 @@ import { RefundsModule } from './modules/refunds/refunds.module.js';
 import { CashModule } from './modules/cash/cash.module.js';
 import { CustomersModule } from './modules/customers/customers.module.js';
 import { EmployeesModule } from './modules/employees/employees.module.js';
+import { PurchasingModule } from './modules/purchasing/purchasing.module.js';
 import { ReportsModule } from './modules/reports/reports.module.js';
 import { AuditModule } from './platform/audit/audit.module.js';
 import { HealthController } from './modules/health/health.controller.js';
@@ -31,6 +32,7 @@ import { HealthController } from './modules/health/health.controller.js';
     CashModule,
     CustomersModule,
     EmployeesModule,
+    PurchasingModule,
     ReportsModule,
     SyncModule,
     OrgModule,

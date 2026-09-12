@@ -63,6 +63,18 @@ export const inventoryLevelSchema = z.object({
   updated_at: timestamp,
 });
 
+/** A stock level joined with enough catalog context to show in a list -- the raw `inventory_levels` row alone is just two ids and three numbers. */
+export const stockLevelRowSchema = z.object({
+  variant_id: uuid,
+  product_name: z.string(),
+  variant_name: z.string().nullable(),
+  sku: z.string(),
+  on_hand: quantity,
+  reserved: quantity,
+  available: quantity,
+  updated_at: timestamp.nullable(),
+});
+
 export const ledgerEntrySchema = z.object({
   id: uuid,
   store_id: uuid,
@@ -196,5 +208,6 @@ export const ledgerQuerySchema = pagination.extend({
 
 export type InventoryReason = z.infer<typeof inventoryReason>;
 export type InventoryLevel = z.infer<typeof inventoryLevelSchema>;
+export type StockLevelRow = z.infer<typeof stockLevelRowSchema>;
 export type LedgerEntry = z.infer<typeof ledgerEntrySchema>;
 export type PostMovement = z.infer<typeof postMovementSchema>;

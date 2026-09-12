@@ -96,6 +96,12 @@ function describeCheck(constraint?: string): string {
       return 'a customer needs a phone or an email';
     case 'users_contactable':
       return 'an employee needs a phone or an email';
+    case 'purchase_order_lines_quantity_ordered_check':
+      return 'quantity ordered must be greater than zero';
+    case 'purchase_order_lines_unit_cost_check':
+      return 'unit cost cannot be negative';
+    case 'po_receipt_lines_quantity_received_check':
+      return 'quantity received must be greater than zero';
     default:
       return 'the request violates a rule the database enforces';
   }
@@ -119,6 +125,12 @@ function describeUnique(constraint?: string): string {
       return 'an employee with that email already exists';
     case 'users_org_code_key':
       return 'an employee with that employee code already exists';
+    case 'vendors_org_code_key':
+      return 'a vendor with that code already exists';
+    case 'po_ref_key':
+      return 'a purchase order with that reference already exists';
+    case 'purchase_order_lines_purchase_order_id_variant_id_key':
+      return 'that variant is already on this purchase order';
     default:
       return 'that record already exists';
   }

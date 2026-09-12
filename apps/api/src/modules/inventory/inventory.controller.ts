@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Post, Query } from '@nestjs/common';
 import { postMovementBatchSchema, ledgerQuerySchema } from '@snappos/contracts';
 import { InventoryService } from './inventory.service.js';
 import { zodBody } from '../../platform/validation/zod.pipe.js';
@@ -27,6 +27,25 @@ export class InventoryController {
       storeId,
       variantIds ? variantIds.split(',') : undefined,
     );
+  }
+
+  /** Every active variant for a store, with catalog context -- what the back office's stock list shows. */
+  @Get('stock')
+  @RequirePermissions('inventory.view')
+  stockList(@CurrentUser() user: AuthenticatedUser, @Query('store_id') storeId: string) {
+    return this.inventory.stockList(user.orgId, storeId);
+  }
+
+  @Get('stock/:variantId')
+  @RequirePermissions('inventory.view')
+  async stockDetail(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('variantId') variantId: string,
+    @Query('store_id') storeId: string,
+  ) {
+    const row = await this.inventory.stockDetail(user.orgId, storeId, variantId);
+    if (!row) throw ApiException.notFound('variant');
+    return row;
   }
 
   @Get('ledger')

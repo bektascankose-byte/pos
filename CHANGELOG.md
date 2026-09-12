@@ -2,6 +2,72 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — Back office, fifth slice: inventory management
+
+Stock levels, manual adjustments, movement history, and a full purchase-order
+and receiving workflow, added to the dashboard. Low-stock alerts and reorder
+recommendations were scoped out of this pass: `stock_alerts` and
+`reorder_recommendations` already exist as tables, but nothing computes an
+average daily sales rate or a safety-stock number yet, and that's a forecasting
+feature that deserves its own scoping conversation, not a byproduct of this one.
+
+- The read and manual-adjustment inventory endpoints already existed
+  (`GET /v1/inventory/levels`, `GET /v1/inventory/ledger`,
+  `POST /v1/inventory/movements`) with no dashboard UI in front of them at all.
+  Added `GET /v1/inventory/stock` and `GET /v1/inventory/stock/:variantId`,
+  which start from `product_variants` rather than `inventory_levels` (left
+  joining it) and join in product/variant/SKU names -- a variant with no stock
+  history yet (just added to the catalog, never received) still shows up, at
+  zero, instead of being invisible until its first movement.
+- **Purchase orders and receiving are a real new backend module** --
+  `apps/api/src/modules/purchasing/` -- since the tables (`purchase_orders`,
+  `purchase_order_lines`, `po_receipts`, `po_receipt_lines`, `vendors`) existed
+  in the schema from the start with no API in front of them. `line_total_minor`
+  is computed as `round(quantity_ordered * unit_cost * 100)` in Postgres numeric
+  arithmetic, never in a float. A PO starts at `submitted` rather than `draft`
+  -- creating one here means it's been placed with a vendor, not saved
+  mid-edit -- and `draft`/`confirmed`/`closed`/`cancelled` aren't wired to any
+  UI action in this pass. Receiving posts one `receiving` movement per line
+  through the same `InventoryRepository` every other stock change goes through
+  (never touches `inventory_levels` directly), requires an `Idempotency-Key`
+  for the same reason `POST /inventory/movements` does, and leaves the PO's own
+  `subtotal_minor`/`total_minor` exactly as ordered even when a line's received
+  cost differs -- that difference is recorded as `cost_changed` on the receipt
+  line and `variance_flagged`/`variance_note` on the receipt, not silently
+  folded into the PO's original total.
+- Dashboard: `/inventory` (stock list), `/inventory/[variantId]` (current
+  level, an adjustment form posting a signed quantity with a reason, and
+  recent movement history), `/inventory/purchase-orders` (list),
+  `/inventory/purchase-orders/new` (vendor picker with an inline "add a vendor"
+  fallback when none exist yet, a fixed set of blank line rows rather than a
+  client-side add-row control -- consistent with the rest of the app having no
+  client components at all), `/inventory/purchase-orders/[id]` (lines,
+  ordered/received quantities, and a receive form that defaults every quantity
+  to blank rather than the remaining amount, so posting a receipt is always a
+  deliberate choice per line, never an accidental full-receive from clicking
+  submit without editing anything).
+- Fixed a real bug found through browser verification, not code review: the
+  purchase-orders list endpoint compared `po.status = $2` where `po.status` is
+  the `po_status` enum and `$2` is bound as text -- Postgres has no `=` operator
+  across those types regardless of the `$2 IS NULL OR` short-circuit, since SQL
+  type-checks the whole expression before evaluating it. Fixed the same way an
+  existing sales-list query already had it right: cast the column
+  (`po.status::text = $2`), not the parameter.
+
+Verified against the real dev database and through the dashboard's own UI:
+posted a count-adjustment through the browser and confirmed the on-hand number
+and ledger history updated correctly, then reverted it (a correction is a new
+ledger row, never an edit, so the net-zero pair both stay in history, by
+design). Created a vendor and a purchase order through the dashboard's own
+forms, partially received it, confirmed stock rose by exactly the received
+quantity and the status moved to `partial`, received the remainder at a
+different unit cost, confirmed the status moved to `received`, the `total_minor`
+stayed at the originally ordered amount, and `cost_changed`/`variance_flagged`
+were set correctly on the second receipt -- then confirmed a replayed
+Idempotency-Key did not double-post the stock. Cross-checked every step against
+`GET /inventory/reconcile` (no drift) and direct SQL before removing the test
+vendor, PO, and ledger rows.
+
 ## Phase 2 — Back office, fourth slice: reports and dashboards
 
 The foundation slice's home page only ever showed "today" -- no date range, no

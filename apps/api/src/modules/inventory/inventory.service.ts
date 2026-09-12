@@ -61,6 +61,56 @@ export class InventoryService {
     });
   }
 
+  /**
+   * Every active variant for a store, joined with enough catalog context to
+   * show in a list -- starting from `product_variants` rather than
+   * `inventory_levels` so a variant with no stock history yet (just added to
+   * the catalog, never received) still appears, at zero, instead of being
+   * invisible until its first movement.
+   */
+  async stockList(orgId: string, storeId: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query(
+        `SELECT pv.id AS variant_id,
+                p.name AS product_name,
+                pv.variant_name,
+                pv.sku,
+                COALESCE(il.on_hand, 0)::text AS on_hand,
+                COALESCE(il.reserved, 0)::text AS reserved,
+                COALESCE(il.available, 0)::text AS available,
+                il.updated_at
+         FROM product_variants pv
+         JOIN products p ON p.id = pv.product_id
+         LEFT JOIN inventory_levels il ON il.variant_id = pv.id AND il.store_id = $1
+         WHERE pv.status = 'active' AND p.status = 'active'
+         ORDER BY p.name, pv.variant_name`,
+        [storeId],
+      );
+      return rows;
+    });
+  }
+
+  async stockDetail(orgId: string, storeId: string, variantId: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query(
+        `SELECT pv.id AS variant_id,
+                p.name AS product_name,
+                pv.variant_name,
+                pv.sku,
+                COALESCE(il.on_hand, 0)::text AS on_hand,
+                COALESCE(il.reserved, 0)::text AS reserved,
+                COALESCE(il.available, 0)::text AS available,
+                il.updated_at
+         FROM product_variants pv
+         JOIN products p ON p.id = pv.product_id
+         LEFT JOIN inventory_levels il ON il.variant_id = pv.id AND il.store_id = $1
+         WHERE pv.id = $2`,
+        [storeId, variantId],
+      );
+      return rows[0] ?? null;
+    });
+  }
+
   async ledger(
     orgId: string,
     filter: {
