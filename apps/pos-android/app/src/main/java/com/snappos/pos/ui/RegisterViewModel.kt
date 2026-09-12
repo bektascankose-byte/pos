@@ -281,6 +281,21 @@ class RegisterViewModel @Inject constructor(
     _state.value = _state.value.copy(cart = Cart.EMPTY, message = null)
   }
 
+  fun discountLine(lineId: String, amount: Money, reason: String) {
+    val cashier = _state.value.cashier ?: return
+    if (!cashier.can("sale.discount_line")) {
+      _state.value = _state.value.copy(message = Toast("This employee cannot discount items", true))
+      return
+    }
+    runCatching { _state.value.cart.discountLine(lineId, amount, reason) }
+      .onSuccess { cart ->
+        _state.value = _state.value.copy(cart = cart, message = Toast("Discount applied"))
+      }
+      .onFailure { error ->
+        _state.value = _state.value.copy(message = Toast(error.message ?: "Invalid discount", true))
+      }
+  }
+
   fun confirmAgeVerified() {
     _state.value = _state.value.copy(cart = _state.value.cart.markAgeVerified())
   }

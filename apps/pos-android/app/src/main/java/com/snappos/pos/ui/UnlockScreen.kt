@@ -1,6 +1,7 @@
 package com.snappos.pos.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,8 +20,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Backspace
+import androidx.compose.material.icons.filled.PointOfSale
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,20 +63,39 @@ fun UnlockScreen(
   var pin by remember { mutableStateOf("") }
 
   Surface(color = MaterialTheme.colorScheme.background) {
-    Row(Modifier.fillMaxSize().padding(Space.L.dp)) {
+    Row(
+      Modifier.fillMaxSize().padding(horizontal = Space.XL.dp, vertical = Space.M.dp),
+    ) {
 
-      Column(Modifier.weight(1f).fillMaxHeight()) {
+      Column(Modifier.weight(1.15f).fillMaxHeight()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Surface(
+            color = MaterialTheme.colorScheme.primary,
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.size(64.dp),
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(Icons.Default.PointOfSale, contentDescription = null, modifier = Modifier.size(34.dp))
+            }
+          }
+          Spacer(Modifier.width(Space.M.dp))
+          Column {
+            Text("SnapPOS", style = MaterialTheme.typography.displaySmall)
+            Text(
+              "REGISTER 1  •  READY",
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.tertiary,
+            )
+          }
+        }
+        Spacer(Modifier.height(Space.L.dp))
+        Text("Who's ringing?", style = MaterialTheme.typography.headlineMedium)
         Text(
-          "SnapPOS",
-          style = MaterialTheme.typography.displaySmall,
-          fontWeight = FontWeight.SemiBold,
-        )
-        Text(
-          "Select your name to start a shift",
+          "Choose your profile, then enter your secure PIN.",
           style = MaterialTheme.typography.bodyMedium,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(Space.L.dp))
+        Spacer(Modifier.height(Space.M.dp))
 
         if (employees.isEmpty()) {
           // Say which of the four situations this is, not the most likely one.
@@ -132,41 +156,56 @@ fun UnlockScreen(
         }
       }
 
-      Spacer(Modifier.width(Space.XL.dp))
+      Spacer(Modifier.width(48.dp))
 
-      Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.Center) {
-        Text(
-          selected?.displayName ?: "Select a name",
-          style = MaterialTheme.typography.headlineMedium,
-          color = if (selected == null) MaterialTheme.colorScheme.onSurfaceVariant
-          else MaterialTheme.colorScheme.onBackground,
-        )
-        Spacer(Modifier.height(Space.M.dp))
+      Box(Modifier.weight(.85f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+        Surface(
+          color = MaterialTheme.colorScheme.surface,
+          shape = RoundedCornerShape(24.dp),
+          border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+          modifier = Modifier.fillMaxHeight(),
+        ) {
+          Column(
+            Modifier.fillMaxHeight().padding(horizontal = Space.L.dp, vertical = Space.M.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+          ) {
+            Text(
+              selected?.displayName ?: "Select your profile",
+              style = MaterialTheme.typography.headlineMedium,
+              color = if (selected == null) MaterialTheme.colorScheme.onSurfaceVariant
+              else MaterialTheme.colorScheme.onBackground,
+            )
+            Text(
+              if (selected == null) "Your PIN pad will unlock" else "Enter your PIN",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(Space.S.dp))
+            PinDots(pin.length)
 
-        PinDots(pin.length)
-
-        message?.let {
-          Spacer(Modifier.height(Space.S.dp))
-          Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
-        }
-
-        Spacer(Modifier.height(Space.M.dp))
-        PinPad(
-          enabled = selected != null && !busy,
-          onDigit = {
-            if (pin.length < 8) {
-              pin += it
-              // Four digits is the common case, so submit at four rather than
-              // making a cashier reach for a confirm key hundreds of times a day.
-              if (pin.length == 4) {
-                onUnlock(selected!!.id, pin)
-                pin = ""
-              }
+            message?.let {
+              Spacer(Modifier.height(Space.S.dp))
+              Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
             }
-          },
-          onBackspace = { pin = pin.dropLast(1) },
-          onClear = { pin = "" },
-        )
+
+            Spacer(Modifier.height(Space.S.dp))
+            PinPad(
+              enabled = selected != null && !busy,
+              onDigit = {
+                if (pin.length < 8) {
+                  pin += it
+                  if (pin.length == 4) {
+                    onUnlock(selected!!.id, pin)
+                    pin = ""
+                  }
+                }
+              },
+              onBackspace = { pin = pin.dropLast(1) },
+              onClear = { pin = "" },
+            )
+          }
+        }
       }
     }
   }
@@ -180,16 +219,28 @@ private fun EmployeeRow(employee: EmployeeEntity, selected: Boolean, onClick: ()
   Row(
     Modifier
       .fillMaxWidth()
-      .height(Touch.MIN.dp)
-      .clip(RoundedCornerShape(6.dp))
+      .height(68.dp)
+      .clip(RoundedCornerShape(14.dp))
       .background(
         if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
         else MaterialTheme.colorScheme.surface,
+      )
+      .border(
+        1.dp,
+        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+        RoundedCornerShape(14.dp),
       )
       .clickable(enabled = !locked, onClick = onClick)
       .padding(horizontal = Space.M.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
+    Box(
+      Modifier.size(38.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant),
+      contentAlignment = Alignment.Center,
+    ) {
+      Text(employee.displayName.take(1).uppercase(), fontWeight = FontWeight.Bold)
+    }
+    Spacer(Modifier.width(Space.M.dp))
     Text(
       employee.displayName,
       style = MaterialTheme.typography.bodyLarge,
@@ -251,7 +302,7 @@ private fun PinPad(
             Modifier
               .weight(1f)
               .height(Touch.MIN.dp)
-              .clip(RoundedCornerShape(6.dp))
+              .clip(RoundedCornerShape(12.dp))
               .background(
                 if (enabled) MaterialTheme.colorScheme.surfaceVariant
                 else MaterialTheme.colorScheme.surface,
@@ -265,12 +316,27 @@ private fun PinPad(
               },
             contentAlignment = Alignment.Center,
           ) {
-            Text(
-              key,
-              style = MaterialTheme.typography.headlineMedium.merge(MoneyTextStyle),
-              color = if (enabled) MaterialTheme.colorScheme.onSurface
-              else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            // The backspace key renders its icon *inside* this same clickable
+            // box, not as a sibling next to it. A sibling icon has no click
+            // handler of its own and sits outside the box's clip/background,
+            // so tapping the visible glyph would miss the clickable region
+            // entirely — the one control on this pad a cashier reaches for
+            // the moment they mistype a PIN.
+            if (key == "<") {
+              Icon(
+                Icons.AutoMirrored.Filled.Backspace,
+                contentDescription = "Delete digit",
+                tint = if (enabled) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            } else {
+              Text(
+                key,
+                style = MaterialTheme.typography.headlineMedium.merge(MoneyTextStyle),
+                color = if (enabled) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
           }
         }
       }

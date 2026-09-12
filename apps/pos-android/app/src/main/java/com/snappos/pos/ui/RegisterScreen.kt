@@ -26,12 +26,22 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.PointOfSale
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.Percent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -124,6 +135,9 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
 
   var showPayment by remember { mutableStateOf(false) }
   var showClose by remember { mutableStateOf(false) }
+  var selectedLineId by remember { mutableStateOf<String?>(null) }
+  var showDiscount by remember { mutableStateOf(false) }
+  var confirmClear by remember { mutableStateOf(false) }
 
   val syncState = when {
     dead > 0 -> SyncState.Error
@@ -180,6 +194,10 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
             onQuantity = viewModel::setQuantity,
             onVerifyAge = viewModel::confirmAgeVerified,
             onPay = { showPayment = true },
+            selectedLineId = selectedLineId,
+            onSelectLine = { selectedLineId = it },
+            onDiscount = { showDiscount = true },
+            onClear = { confirmClear = true },
             modifier = Modifier.width(if (compact) 280.dp else 340.dp).fillMaxHeight(),
           )
         }
@@ -218,6 +236,37 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
       },
     )
   }
+
+  if (showDiscount) {
+    state.cart.lines.firstOrNull { it.id == selectedLineId }?.let { line ->
+      DiscountDialog(
+        lineName = line.description,
+        maximum = line.gross - line.discount,
+        onDismiss = { showDiscount = false },
+        onApply = { amount, reason ->
+          viewModel.discountLine(line.id, amount, reason)
+          showDiscount = false
+        },
+      )
+    } ?: run { showDiscount = false }
+  }
+
+  if (confirmClear) {
+    AlertDialog(
+      onDismissRequest = { confirmClear = false },
+      shape = RoundedCornerShape(20.dp),
+      title = { Text("Clear this sale?") },
+      text = { Text("Every item and discount in the current cart will be removed.") },
+      confirmButton = {
+        Button(onClick = {
+          viewModel.clearCart()
+          selectedLineId = null
+          confirmClear = false
+        }) { Text("Clear sale") }
+      },
+      dismissButton = { OutlinedButton(onClick = { confirmClear = false }) { Text("Keep sale") } },
+    )
+  }
 }
 
 enum class SyncState { Online, Syncing, Offline, Error }
@@ -238,13 +287,24 @@ private fun RegisterHeader(
     Modifier
       .fillMaxWidth()
       .background(MaterialTheme.colorScheme.surface)
-      .padding(horizontal = Space.M.dp, vertical = Space.S.dp),
+      .padding(horizontal = Space.M.dp, vertical = Space.XS.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
+    Surface(
+      color = MaterialTheme.colorScheme.primary,
+      shape = RoundedCornerShape(10.dp),
+      modifier = Modifier.size(42.dp),
+    ) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.PointOfSale, "SnapPOS") } }
+    Spacer(Modifier.width(Space.S.dp))
+    Column {
+      Text("SnapPOS", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+      Text(register, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    Spacer(Modifier.width(Space.L.dp))
     SyncPill(state, pending)
     Spacer(Modifier.width(Space.M.dp))
     Text(
-      "$register · $cashier",
+      cashier,
       style = MaterialTheme.typography.bodyMedium,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -252,11 +312,11 @@ private fun RegisterHeader(
     // Only once there is a sale to show one for. A receipt button that opens
     // nothing teaches a cashier to stop trusting the button.
     if (hasReceipt) {
-      TextButton(onClick = onReceipt) { Text("Receipt") }
+      IconButton(onClick = onReceipt) { Icon(Icons.AutoMirrored.Filled.ReceiptLong, "Last receipt") }
     }
-    TextButton(onClick = onRefund) { Text("Refund") }
-    TextButton(onClick = onCloseDrawer) { Text("Close drawer") }
-    TextButton(onClick = onLock) { Text("Lock") }
+    TextButton(onClick = onRefund) { Text("Returns") }
+    TextButton(onClick = onCloseDrawer) { Text("Close shift") }
+    IconButton(onClick = onLock) { Icon(Icons.Default.Lock, "Lock register") }
   }
 }
 
@@ -312,8 +372,8 @@ private fun CategoryRail(
   onSelect: (String?) -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  LazyColumn(modifier.padding(Space.S.dp)) {
-    item { SectionLabel("CATEGORIES") }
+  LazyColumn(modifier.background(MaterialTheme.colorScheme.surface).padding(Space.S.dp)) {
+    item { SectionLabel("SHOP") }
     item { RailRow("All", selectedId == null) { onSelect(null) } }
     items(categories) { category ->
       RailRow(category.name, selectedId == category.id) { onSelect(category.id) }
@@ -327,10 +387,10 @@ private fun RailRow(label: String, selected: Boolean, onClick: () -> Unit) {
     Modifier
       .fillMaxWidth()
       .height(Touch.MIN.dp)
-      .clip(RoundedCornerShape(6.dp))
+      .clip(RoundedCornerShape(12.dp))
       .background(
         if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-        else MaterialTheme.colorScheme.background,
+        else Color.Transparent,
       )
       .clickable(onClick = onClick)
       .padding(horizontal = Space.M.dp),
@@ -367,10 +427,10 @@ private fun ProductGrid(
 private fun ProductTileCard(tile: ResolvedProduct, onTap: () -> Unit) {
   Column(
     Modifier
-      .height(Touch.TILE.dp)
-      .clip(RoundedCornerShape(12.dp))
+      .height(132.dp)
+      .clip(RoundedCornerShape(16.dp))
       .background(MaterialTheme.colorScheme.surface)
-      .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
+      .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = .8f), RoundedCornerShape(16.dp))
       .clickable(onClick = onTap)
       .padding(Space.S.dp),
     verticalArrangement = Arrangement.SpaceBetween,
@@ -398,8 +458,9 @@ private fun ProductTileCard(tile: ResolvedProduct, onTap: () -> Unit) {
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Text(
-        tile.price?.toMajorString() ?: "—",
-        style = MaterialTheme.typography.bodyLarge.merge(MoneyTextStyle),
+        tile.price?.let { "$${it.toMajorString()}" } ?: "No price",
+        style = MaterialTheme.typography.titleLarge.merge(MoneyTextStyle),
+        color = if (tile.price == null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
       )
       // A bare red "0" beside the price read as "24.990". An out of stock
       // marker has to be unmistakably not part of the number.
@@ -427,36 +488,79 @@ private fun CartPanel(
   onQuantity: (String, Int) -> Unit,
   onVerifyAge: () -> Unit,
   onPay: () -> Unit,
+  selectedLineId: String?,
+  onSelectLine: (String) -> Unit,
+  onDiscount: () -> Unit,
+  onClear: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   Column(modifier.background(MaterialTheme.colorScheme.surface)) {
     Row(
-      Modifier.fillMaxWidth().padding(Space.M.dp),
+      Modifier.fillMaxWidth().padding(if (compact) Space.S.dp else Space.M.dp),
       horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-      Text(
-        "CART",
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-      Text(
-        "${cart.itemCount} items",
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
+      Column {
+        Text("Current sale", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Text(
+          "Walk-in customer  •  ${cart.itemCount} ${if (cart.itemCount == 1) "item" else "items"}",
+          style = MaterialTheme.typography.labelMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+      if (compact) {
+        Row {
+          IconButton(onClick = onDiscount, enabled = selectedLineId != null) {
+            Icon(Icons.Default.Percent, "Discount selected item")
+          }
+          IconButton(onClick = onClear, enabled = !cart.isEmpty) {
+            Icon(Icons.Default.RestartAlt, "Clear sale")
+          }
+        }
+      }
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+
+    if (!compact) {
+      Row(
+        Modifier.fillMaxWidth().padding(horizontal = Space.S.dp, vertical = Space.XS.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.XS.dp),
+      ) {
+        RegisterAction(
+          label = "Discount",
+          icon = { Icon(Icons.Default.Percent, null) },
+          enabled = selectedLineId != null,
+          onClick = onDiscount,
+          modifier = Modifier.weight(1f),
+        )
+        RegisterAction(
+          label = "Clear",
+          icon = { Icon(Icons.Default.RestartAlt, null) },
+          enabled = !cart.isEmpty,
+          onClick = onClear,
+          modifier = Modifier.weight(1f),
+        )
+      }
+      HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+    }
 
     LazyColumn(Modifier.weight(1f).heightIn(min = 88.dp)) {
       items(cart.effectiveLines, key = { it.id }) { line ->
-        CartRow(line, onRemove = { onRemove(line.id) }, onQuantity = { onQuantity(line.id, it) })
+        CartRow(
+          line,
+          compact = compact,
+          selected = selectedLineId == line.id,
+          onSelect = { onSelectLine(line.id) },
+          onRemove = { onRemove(line.id) },
+          onQuantity = { onQuantity(line.id, it) },
+        )
       }
+      if (cart.isEmpty) item { EmptyCart() }
     }
 
     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 
-    if (cart.requiresAgeVerification) {
-      AgeGate(cart.minimumAgeRequired ?: 21, onVerifyAge)
+    if (cart.requiresAgeVerification && !compact) {
+      AgeGate(cart.minimumAgeRequired ?: 21, compact, onVerifyAge)
     }
 
     Column(Modifier.padding(if (compact) Space.S.dp else Space.M.dp)) {
@@ -467,17 +571,28 @@ private fun CartPanel(
       TotalRow("TOTAL", cart.total, emphasised = true)
       Spacer(Modifier.height(if (compact) Space.S.dp else Space.M.dp))
       Button(
-        onClick = onPay,
-        enabled = !cart.isEmpty && !busy && !cart.requiresAgeVerification,
+        onClick = if (cart.requiresAgeVerification) onVerifyAge else onPay,
+        enabled = !cart.isEmpty && !busy,
         // Never below the 56dp minimum even when squeezed: PAY is the most
         // pressed control in the building.
         modifier = Modifier
           .fillMaxWidth()
           .height(if (compact) Touch.MIN.dp else Touch.PRIMARY.dp),
-        shape = RoundedCornerShape(6.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+        shape = RoundedCornerShape(14.dp),
+        colors = ButtonDefaults.buttonColors(
+          containerColor = if (cart.requiresAgeVerification) MaterialTheme.colorScheme.secondary
+          else MaterialTheme.colorScheme.primary,
+        ),
       ) {
-        Text("PAY", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+        Text(
+          if (cart.requiresAgeVerification) {
+            "VERIFY ${cart.minimumAgeRequired ?: 21}+ ID"
+          } else {
+            "CHARGE  $${cart.total.toMajorString()}"
+          },
+          style = MaterialTheme.typography.titleLarge.merge(MoneyTextStyle),
+          fontWeight = FontWeight.Bold,
+        )
       }
     }
   }
@@ -490,33 +605,90 @@ private fun CartPanel(
  * during a rush is not a compliance control, it is a suggestion.
  */
 @Composable
-private fun AgeGate(minimumAge: Int, onVerify: () -> Unit) {
-  Column(
-    Modifier
-      .fillMaxWidth()
-      .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f))
-      .padding(Space.M.dp),
-  ) {
-    Text(
-      "$minimumAge+ ID REQUIRED",
-      style = MaterialTheme.typography.titleLarge,
-      color = MaterialTheme.colorScheme.secondary,
-    )
-    Spacer(Modifier.height(Space.S.dp))
-    Button(
-      onClick = onVerify,
-      modifier = Modifier.fillMaxWidth().height(Touch.MIN.dp),
-      shape = RoundedCornerShape(6.dp),
-      colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-    ) {
-      Text("ID CHECKED", fontWeight = FontWeight.SemiBold)
+private fun AgeGate(minimumAge: Int, compact: Boolean, onVerify: () -> Unit) {
+  val background = Modifier
+    .fillMaxWidth()
+    .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f))
+    .padding(if (compact) Space.S.dp else Space.M.dp)
+
+  if (compact) {
+    Row(background, verticalAlignment = Alignment.CenterVertically) {
+      Text(
+        "$minimumAge+ ID REQUIRED",
+        style = MaterialTheme.typography.titleLarge,
+        color = MaterialTheme.colorScheme.secondary,
+        modifier = Modifier.weight(1f),
+      )
+      Button(
+        onClick = onVerify,
+        modifier = Modifier.height(Touch.MIN.dp),
+        shape = RoundedCornerShape(10.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
+      ) { Text("ID CHECKED", fontWeight = FontWeight.SemiBold) }
+    }
+  } else {
+    Column(background) {
+      Text(
+        "$minimumAge+ ID REQUIRED",
+        style = MaterialTheme.typography.titleLarge,
+        color = MaterialTheme.colorScheme.secondary,
+      )
+      Spacer(Modifier.height(Space.S.dp))
+      Button(
+        onClick = onVerify,
+        modifier = Modifier.fillMaxWidth().height(Touch.MIN.dp),
+        shape = RoundedCornerShape(10.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
+      ) {
+        Text("ID CHECKED", fontWeight = FontWeight.SemiBold)
+      }
     }
   }
 }
 
 @Composable
-private fun CartRow(line: CartLine, onRemove: () -> Unit, onQuantity: (Int) -> Unit) {
-  Column(Modifier.fillMaxWidth().padding(horizontal = Space.M.dp, vertical = Space.S.dp)) {
+private fun CartRow(
+  line: CartLine,
+  compact: Boolean,
+  selected: Boolean,
+  onSelect: () -> Unit,
+  onRemove: () -> Unit,
+  onQuantity: (Int) -> Unit,
+) {
+  if (compact) {
+    Row(
+      Modifier.fillMaxWidth()
+        .height(Touch.MIN.dp)
+        .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .10f) else MaterialTheme.colorScheme.surface)
+        .clickable(onClick = onSelect)
+        .padding(horizontal = Space.S.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Column(Modifier.weight(1f)) {
+        Text(line.description, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+          "${line.quantity} × ${line.unitPrice.toMajorString()}",
+          style = MaterialTheme.typography.labelMedium.merge(MoneyTextStyle),
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+      QuantityButton("−") { onQuantity(line.quantity - 1) }
+      Spacer(Modifier.width(Space.XS.dp))
+      QuantityButton("+") { onQuantity(line.quantity + 1) }
+      Spacer(Modifier.width(Space.S.dp))
+      Text(line.total.toMajorString(), style = MaterialTheme.typography.bodyLarge.merge(MoneyTextStyle))
+      TextButton(onClick = onRemove) { Text("×", style = MaterialTheme.typography.titleLarge) }
+    }
+    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+    return
+  }
+
+  Column(
+    Modifier.fillMaxWidth()
+      .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .10f) else MaterialTheme.colorScheme.surface)
+      .clickable(onClick = onSelect)
+      .padding(horizontal = Space.M.dp, vertical = Space.S.dp),
+  ) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
       Text(
         line.description,
@@ -567,6 +739,49 @@ private fun QuantityButton(label: String, onClick: () -> Unit) {
     contentAlignment = Alignment.Center,
   ) {
     Text(label, style = MaterialTheme.typography.titleLarge)
+  }
+}
+
+@Composable
+private fun RegisterAction(
+  label: String,
+  icon: @Composable () -> Unit,
+  enabled: Boolean,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  OutlinedButton(
+    onClick = onClick,
+    enabled = enabled,
+    modifier = modifier.height(Touch.MIN.dp),
+    shape = RoundedCornerShape(12.dp),
+    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = Space.S.dp),
+  ) {
+    icon()
+    Spacer(Modifier.width(Space.XS.dp))
+    Text(label, maxLines = 1)
+  }
+}
+
+@Composable
+private fun EmptyCart() {
+  Column(
+    Modifier.fillMaxWidth().padding(horizontal = Space.L.dp, vertical = Space.XL.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
+  ) {
+    Icon(
+      Icons.Default.PointOfSale,
+      contentDescription = null,
+      tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .45f),
+      modifier = Modifier.size(42.dp),
+    )
+    Spacer(Modifier.height(Space.S.dp))
+    Text("Ready to ring", style = MaterialTheme.typography.titleLarge)
+    Text(
+      "Scan a barcode or tap a product",
+      style = MaterialTheme.typography.bodyMedium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
   }
 }
 

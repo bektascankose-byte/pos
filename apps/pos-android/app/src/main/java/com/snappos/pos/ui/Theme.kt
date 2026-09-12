@@ -7,7 +7,6 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
@@ -19,18 +18,18 @@ import androidx.compose.ui.unit.sp
  * brightest thing in the room, which is where the cashier's eyes belong. Light
  * mode is fully supported and is a per device setting.
  */
-private val Ink = Color(0xFF0B0F14)
-private val Surface = Color(0xFF121822)
-private val SurfaceHigh = Color(0xFF1A2230)
-private val Line = Color(0xFF263141)
-private val TextPrimary = Color(0xFFF2F5F9)
-private val TextSecondary = Color(0xFF9AA7B8)
+private val Ink = Color(0xFF080B12)
+private val Surface = Color(0xFF101621)
+private val SurfaceHigh = Color(0xFF182131)
+private val Line = Color(0xFF273246)
+private val TextPrimary = Color(0xFFF7F9FC)
+private val TextSecondary = Color(0xFF9EABC0)
 
 /** One accent, used only for actions. When something is this colour it means something. */
-private val Accent = Color(0xFF3B82F6)
-private val Positive = Color(0xFF10B981)
-private val Warning = Color(0xFFF59E0B)
-private val Danger = Color(0xFFEF4444)
+private val Accent = Color(0xFF6D7CFF)
+private val Positive = Color(0xFF2DD4A8)
+private val Warning = Color(0xFFFFB84D)
+private val Danger = Color(0xFFFF647C)
 
 private val DarkScheme = darkColorScheme(
   primary = Accent,
@@ -70,18 +69,17 @@ private val LightScheme = lightColorScheme(
  * digits change width. `tnum` fixes every digit to the same advance.
  */
 val MoneyTextStyle = TextStyle(
-  fontFamily = FontFamily.Monospace,
   fontFeatureSettings = "tnum",
   fontWeight = FontWeight.Medium,
 )
 
 private val PosTypography = Typography(
-  displaySmall = TextStyle(fontSize = 32.sp, fontWeight = FontWeight.SemiBold),
-  headlineMedium = TextStyle(fontSize = 24.sp, fontWeight = FontWeight.SemiBold),
-  titleLarge = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Medium),
+  displaySmall = TextStyle(fontSize = 34.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.5).sp),
+  headlineMedium = TextStyle(fontSize = 25.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.25).sp),
+  titleLarge = TextStyle(fontSize = 19.sp, fontWeight = FontWeight.SemiBold),
   bodyLarge = TextStyle(fontSize = 16.sp),
   bodyMedium = TextStyle(fontSize = 14.sp),
-  labelMedium = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Medium),
+  labelMedium = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.2.sp),
 )
 
 /**

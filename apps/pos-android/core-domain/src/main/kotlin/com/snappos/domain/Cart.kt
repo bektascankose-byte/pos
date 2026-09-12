@@ -269,13 +269,18 @@ data class Cart(
         .mapIndexed { index, line -> line.copy(lineNo = index + 1) },
     )
 
-  fun discountLine(lineId: String, amount: Money, reason: String): Cart =
-    copy(
+  fun discountLine(lineId: String, amount: Money, reason: String): Cart {
+    require(!amount.isZero && !amount.isNegative) { "discount must be greater than zero" }
+    return copy(
       lines = lines.map {
         if (it.id != lineId) it
-        else it.copy(adjustments = it.adjustments + LineAdjustment.ManualDiscount(amount, reason))
+        else {
+          require(it.discount + amount <= it.gross) { "discount cannot exceed the line amount" }
+          it.copy(adjustments = it.adjustments + LineAdjustment.ManualDiscount(amount, reason))
+        }
       },
     )
+  }
 
   /**
    * Override a price. Requires the manager who authorized it.

@@ -149,4 +149,16 @@ class MoneyTest {
       Money(Long.MAX_VALUE) + Money(1)
     }
   }
+
+  @Test
+  fun `line discounts cannot turn a sale line negative`() {
+    val cart = Cart.EMPTY.addItem(
+      id = "line", variantId = "variant", description = "Item", sku = "SKU",
+      unitPrice = Money.fromMajor("10.00"),
+    )
+    assertEquals("9.00", cart.discountLine("line", Money.fromMajor("1.00"), "promo").total.toMajorString())
+    assertThrows(IllegalArgumentException::class.java) {
+      cart.discountLine("line", Money.fromMajor("10.01"), "bad")
+    }
+  }
 }

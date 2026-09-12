@@ -2,6 +2,19 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — Modern register workspace
+
+- Reworked the Android register into a high-contrast, touch-first workspace with a persistent operational header, prominent scanner/search field, category rail, product cards, current-sale context, and responsive cart.
+- Added a real permission-checked line-discount flow with bounded amounts, required reason codes, domain invariants, and automated over-discount coverage.
+- Added selected-line actions, cart clearing with confirmation, clearer empty-cart guidance, receipt/return/shift shortcuts, and compact quantity controls.
+- On short landscape devices, age verification becomes the blocking primary action so the cart line, totals, and compliance requirement remain visible together.
+- Redesigned employee unlock with profile cards, secure PIN panel, clear register readiness state, and a fully visible landscape keypad.
+- Added `docs/POS_DESIGN_SYSTEM.md` to keep future POS screens consistent and prevent non-functional controls from entering the cashier workflow.
+
+### Fixed
+
+- **The unlock PIN pad's backspace key was unreachable.** Its icon rendered as a sibling of the clickable box rather than inside it, so the visible glyph sat outside the tappable region and had no click handler of its own -- tapping it did nothing, and the actual clickable area was a blank square to its left. Caught by reading the layout rather than trusting that it compiled; moved the icon into the same `Box` as the other keys, matching the working pattern in `DrawerScreen.SimpleKeypad`. Not yet re-verified on hardware -- no device was connected when this was found.
+
 ## Phase 2 — Atomic incremental catalog projections
 
 - `GET /v1/sync/catalog` now accepts the register's last cursor and returns only
