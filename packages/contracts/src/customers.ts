@@ -11,7 +11,8 @@
  * Not part of the register's bootstrap or incremental sync. A register looks
  * a customer up live, by phone or name, when it needs one -- see
  * `customerSearchSchema` -- rather than holding a copy of the whole table on
- * a device that can be stolen.
+ * a device that can be stolen. The back office browses the same endpoint
+ * with no filter at all.
  */
 
 import { z } from 'zod';
@@ -51,21 +52,38 @@ export const createCustomerSchema = z
   .refine(contactable, { message: 'a customer needs a phone or an email', path: ['phone'] });
 
 /**
+ * Editing an existing customer. The same fields as create, but none are
+ * required here -- a partial update only touches what it sends. This does
+ * NOT mean a customer can end up with neither a phone nor an email: that
+ * rule still holds, checked against the row as it would read after the
+ * update, in `CustomersService.update`, not by this schema (the schema has
+ * no way to know what the row already has).
+ */
+export const updateCustomerSchema = z.object({
+  first_name: z.string().max(120).optional(),
+  last_name: z.string().max(120).optional(),
+  phone: phone.optional(),
+  email: email.optional(),
+  birth_month: z.number().int().min(1).max(12).optional(),
+  birth_day: z.number().int().min(1).max(31).optional(),
+  home_store_id: uuid.optional(),
+  notes: z.string().max(2000).optional(),
+});
+
+/**
  * A register searches one of two ways: an exact phone match (a loyalty
  * lookup -- the cashier types the number the program already knows the
- * customer by), or a free text match on name and email. At least one is
- * required; an unfiltered scan of every customer in an org is not a lookup.
+ * customer by), or a free text match on name and email. The back office
+ * browses a third way: no filter at all, a plain paginated list. All three
+ * are the same endpoint and the same `customer.view` permission; nothing
+ * here requires a filter to be present.
  */
-export const customerSearchSchema = pagination
-  .extend({
-    phone: phone.optional(),
-    q: z.string().min(1).max(128).optional(),
-  })
-  .refine((v) => v.phone !== undefined || v.q !== undefined, {
-    message: 'search needs a phone or a name/email query',
-    path: ['q'],
-  });
+export const customerSearchSchema = pagination.extend({
+  phone: phone.optional(),
+  q: z.string().min(1).max(128).optional(),
+});
 
 export type Customer = z.infer<typeof customerSchema>;
 export type CreateCustomer = z.infer<typeof createCustomerSchema>;
+export type UpdateCustomer = z.infer<typeof updateCustomerSchema>;
 export type CustomerSearch = z.infer<typeof customerSearchSchema>;

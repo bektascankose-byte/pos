@@ -8,6 +8,7 @@ dist-e2e/
 build/
 .next/
 out/
+next-env.d.ts
 *.tsbuildinfo
 
 # Environment and secrets. Never commit these.

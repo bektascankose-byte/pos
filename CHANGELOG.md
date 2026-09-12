@@ -2,6 +2,42 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — Back office, first slice: foundation, sales dashboard, customers
+
+A back-office web app has never existed in this repo -- only the register and the API. This is the
+first slice: a working `apps/dashboard` (Next.js 15 App Router) reachable from a browser, with real
+auth, a sales overview, and full customer management. Deliberately not in this slice: catalog
+editing, employee/permissions management, EDI, an AI catalog manager, and loyalty settings -- each
+is sequenced for its own build, not stubbed out now.
+
+- **Auth is backend-for-frontend, not tokens in browser JS.** The dashboard's own Server Actions and
+  Middleware call the API's existing `/v1/auth/login`/`/refresh`/`/logout` -- unchanged, the same
+  endpoints the register uses -- and store both tokens as httpOnly cookies the client never sees.
+  `middleware.ts` decodes the access token's own `exp` (no signature check needed here; the API
+  verifies that on every real request) and refreshes proactively on every matched request, since
+  Next.js only allows writing a cookie from Middleware, a Server Action, or a Route Handler -- never
+  from a Server Component's render, which is where the actual page data fetching happens.
+- **Reporting, additive**: `saleQuerySchema` gained `from`/`to` (the columns already existed;
+  `SalesService.list` never applied them until now), and a new `apps/api/src/modules/reports/`
+  module adds `GET /v1/reports/sales/summary` (count, gross, tax, average ticket over a range, voids
+  excluded) -- gated on the `report.sales` permission that already existed for the sales list.
+- **Customers, extended for browsing**: `customerSearchSchema`'s "must supply phone or q" rule
+  existed for the register's live-lookup use case; the back office needed to list with no filter at
+  all, so the rule is dropped rather than replaced (the register's own call sites are unaffected --
+  they always pass one). `q` now also matches phone as a fragment, not just an exact match, since an
+  admin's one search box shouldn't need to know the register's phone/name distinction. New
+  `PATCH /v1/customers/:id` (`customer.manage`, same gate as create) updates only the fields sent --
+  an omitted field keeps its existing value by `COALESCE`, which is also why there's no repeated
+  "needs a phone or an email" check on update: this endpoint has no way to null one out.
+
+Verified end to end against the real dev database, not just typechecked: signed in as a seeded
+manager, the dashboard's "today" totals came back zero (correctly -- all seeded sales are from the
+day before) while an unfiltered range matched a direct SQL aggregate exactly; created, searched by
+partial phone, opened, and edited a customer, with the change persisting after a fresh fetch; an
+unauthenticated request to a protected route received a 307 to `/login`; and the `auth_sessions`
+table's own rotation history showed the middleware's silent refresh firing correctly, unprompted,
+several times over the course of testing.
+
 ## Phase 2 — Customer attachment
 
 Customers have had a table, a `sale.customer_id` foreign key and `customer.view`/`customer.manage` permissions since the schema's first migration, and the register's own `Cart.customerId`/`withCustomer` since early in the domain layer — nothing on either side ever called it.

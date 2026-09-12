@@ -19,6 +19,8 @@ export class SalesController {
       registerId: params.register_id,
       cashierUserId: params.cashier_user_id,
       status: params.status,
+      from: params.from,
+      to: params.to,
       limit: params.limit,
     });
   }

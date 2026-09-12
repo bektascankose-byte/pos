@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+/*
+ * Light by default, per docs/POS_DESIGN_SYSTEM.md's dashboard principles:
+ * dense, not cramped; one accent color used only for actions, never
+ * decoration; no gradients or drop shadows on data. The register's own dark
+ * palette (#080B12 background, #6D7CFF accent) is a counter under one light
+ * source at night -- a phone screen at 11pm checking yesterday's numbers is
+ * a different context, and starts light instead.
+ */
+:root {
+  --color-bg: #f7f7f8;
+  --color-surface: #ffffff;
+  --color-border: #e4e4e7;
+  --color-text: #18181b;
+  --color-text-muted: #71717a;
+  --color-accent: #4f46e5;
+  --color-accent-contrast: #ffffff;
+  --color-error: #dc2626;
+  --color-success: #16a34a;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+}

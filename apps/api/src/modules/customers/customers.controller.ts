@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
-import { createCustomerSchema, customerSearchSchema } from '@snappos/contracts';
+import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { createCustomerSchema, customerSearchSchema, updateCustomerSchema } from '@snappos/contracts';
 import { CustomersService } from './customers.service.js';
 import { zodBody } from '../../platform/validation/zod.pipe.js';
 import { CurrentUser } from '../../platform/auth/current-user.decorator.js';
@@ -30,5 +30,15 @@ export class CustomersController {
     @Body(zodBody(createCustomerSchema)) body: ReturnType<typeof createCustomerSchema.parse>,
   ) {
     return this.customers.create(user.orgId, user.userId, body);
+  }
+
+  @Patch(':id')
+  @RequirePermissions('customer.manage')
+  update(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(zodBody(updateCustomerSchema)) body: ReturnType<typeof updateCustomerSchema.parse>,
+  ) {
+    return this.customers.update(user.orgId, user.userId, id, body);
   }
 }

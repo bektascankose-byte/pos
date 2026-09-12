@@ -562,6 +562,8 @@ export class SalesService {
       registerId?: string | undefined;
       cashierUserId?: string | undefined;
       status?: string | undefined;
+      from?: string | undefined;
+      to?: string | undefined;
       limit: number;
     },
   ) {
@@ -574,13 +576,17 @@ export class SalesService {
            AND ($2::uuid IS NULL OR register_id = $2)
            AND ($3::uuid IS NULL OR cashier_user_id = $3)
            AND ($4::text  IS NULL OR status::text = $4)
+           AND ($5::timestamptz IS NULL OR completed_at >= $5)
+           AND ($6::timestamptz IS NULL OR completed_at < $6)
          ORDER BY completed_at DESC NULLS LAST
-         LIMIT $5`,
+         LIMIT $7`,
         [
           filter.storeId ?? null,
           filter.registerId ?? null,
           filter.cashierUserId ?? null,
           filter.status ?? null,
+          filter.from ?? null,
+          filter.to ?? null,
           filter.limit,
         ],
       );
