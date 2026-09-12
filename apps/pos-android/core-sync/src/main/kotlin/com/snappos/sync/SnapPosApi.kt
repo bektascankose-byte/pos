@@ -30,6 +30,22 @@ interface SnapPosApi {
   suspend fun catalog(@Query("store_id") storeId: String): Response<CatalogSnapshot>
 
   /**
+   * What has changed since a cursor.
+   *
+   * Asked before pulling, so a register that polls all day transfers nothing on
+   * the overwhelmingly common answer: nothing. `limit=1` because the register
+   * only needs to know *whether* something changed, not what — one row is
+   * enough to decide, and asking for more would move data to reach the same
+   * conclusion.
+   */
+  @GET("api/v1/sync/changes")
+  suspend fun changes(
+    @Query("since") since: String,
+    @Query("store_id") storeId: String,
+    @Query("limit") limit: Int = 1,
+  ): Response<ChangesResponse>
+
+  /**
    * Upload. Ordered but not atomic on the server: entity 7 failing does not
    * block entities 1 to 6, and each comes back with its own verdict.
    */
@@ -143,6 +159,21 @@ data class SyncBatchResponse(
 )
 
 // ----------------------------------------------------------------- catalog
+
+@Serializable
+data class ChangeDto(
+  val id: String,
+  val entity_type: String,
+  val op: String,
+  val scope: String,
+)
+
+@Serializable
+data class ChangesResponse(
+  val changes: List<ChangeDto> = emptyList(),
+  val next_cursor: String,
+  val has_more: Boolean = false,
+)
 
 @Serializable
 data class CatalogSnapshot(

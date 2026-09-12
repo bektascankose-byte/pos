@@ -42,12 +42,59 @@ class CatalogSync @Inject constructor(
     val categories: Int = 0,
     val employees: Int = 0,
     val failure: String? = null,
+    /** The server had nothing new, so nothing was transferred or written. */
+    val unchanged: Boolean = false,
   ) {
     val ok: Boolean get() = failure == null
   }
 
+  /**
+   * Ask what changed, and only pull if something did.
+   *
+   * A register polls all day and the answer is almost always "nothing". Pulling
+   * the whole catalog to discover that is the cost this avoids: with a few
+   * thousand SKUs it is the largest thing the device transfers, repeated every
+   * fifteen minutes, to arrive back where it started.
+   *
+   * The cursor is `change_log.id`, held by the server below any change whose
+   * transaction might still be in flight. That means a change can arrive twice,
+   * which is harmless — applying it is idempotent — and none is ever missed,
+   * which is the property that matters.
+   *
+   * **This is incremental detection, not yet incremental application.** When
+   * something has changed the register still pulls the full snapshot rather
+   * than fetching the individual rows named in the feed. Per-entity fetching
+   * needs endpoints that return a row in the register's own projection shape,
+   * and those do not exist yet. The win banked here is the idle case, which is
+   * almost all of them.
+   */
   suspend fun pull(): Result {
     val registerConfig = config.get() ?: return Result(failure = "device not claimed")
+
+    // "0" is what provisioning seeds, and blank is a device that has never
+    // completed a pull. Either way there is nothing to be incremental against,
+    // so the first pull is always the full bootstrap.
+    val cursor = registerConfig.lastCatalogCursor.trim()
+    if (cursor.isNotBlank() && cursor != "0") {
+      val changed = try {
+        api.changes(since = cursor, storeId = registerConfig.storeId)
+      } catch (e: Exception) {
+        Log.i(TAG, "change feed could not reach the server: ${e.message}")
+        return Result(failure = e.message ?: "network unavailable")
+      }
+
+      // A feed that cannot be read is not evidence that nothing changed, so a
+      // failure here falls through to a full pull rather than concluding the
+      // catalog is current.
+      if (changed.isSuccessful) {
+        val body = changed.body()
+        if (body != null && body.changes.isEmpty()) {
+          Log.i(TAG, "catalog current at cursor $cursor; nothing pulled")
+          return Result(unchanged = true)
+        }
+        Log.i(TAG, "changes since $cursor; refreshing the catalog")
+      }
+    }
 
     val response = try {
       api.catalog(registerConfig.storeId)

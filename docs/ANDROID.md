@@ -281,6 +281,40 @@ A voided sale is not refundable — the money already went back — but the scre
 says **"HH01-R1-7 was voided"** rather than "no such sale". The receipt is in the
 cashier's hand; telling them it does not exist sends them looking for it.
 
+## Pulling the catalog only when it changed
+
+The register asks `GET /v1/sync/changes?since=<cursor>&limit=1` before pulling.
+Nothing changed — the overwhelmingly common answer — and it returns having
+transferred nothing. `limit=1` because it only needs to know *whether*
+something changed, not what; one row settles it, and asking for more would move
+data to reach the same conclusion.
+
+The cursor is `change_log.id`, held by the server below any change whose
+transaction might still be in flight. A change can therefore arrive twice, which
+is harmless because applying it is idempotent, and none is ever missed — which
+is the property that matters.
+
+A failed feed read falls through to a full pull. Not being able to read the feed
+is not evidence that nothing changed, and treating it as such leaves a register
+quietly stale.
+
+**This is incremental detection, not yet incremental application.** When
+something has changed the register still pulls the whole snapshot rather than
+fetching the individual rows the feed names. Per-entity fetching needs endpoints
+returning a row in the register's own projection shape and those do not exist
+yet. The win banked here is the idle case, which is almost all of them: before
+this, a register polling every fifteen minutes transferred the entire catalog
+every time to arrive back where it started.
+
+**Verified on a Galaxy S22 Ultra**, both branches and back:
+
+```
+catalog current at cursor 7; nothing pulled
+changes since 7; refreshing the catalog        (a brand renamed server side)
+catalog: 12 variants, 12 barcodes, 3 employees, cursor 8
+catalog current at cursor 9; nothing pulled
+```
+
 ## Handing sales over when the network returns
 
 Three things trigger an upload, in order of how quickly they fire:

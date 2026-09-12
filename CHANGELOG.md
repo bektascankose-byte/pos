@@ -30,6 +30,15 @@ only way to learn about a price change was to pull the whole catalog again.
   cashier can answer "have we got more", explicitly not gating a sale. Stock
   arrives with the bootstrap snapshot instead.
 
+- **The register asks before it pulls.** `CatalogSync` now calls the feed with
+  `limit=1` and returns immediately when nothing changed, transferring nothing.
+  A failed feed read falls through to a full pull rather than concluding the
+  catalog is current. Incremental *detection*, not yet incremental
+  *application*: when something has changed the register still pulls the whole
+  snapshot, because per-entity fetching needs endpoints that return a row in the
+  register's projection shape and those do not exist. Verified on a Galaxy S22
+  Ultra across both branches and back to idle.
+
 ### Fixed
 
 - **The change feed returned its pages in the wrong order.** The query was
