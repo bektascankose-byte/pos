@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.PointOfSale
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Percent
+import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -137,6 +138,7 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
   var showClose by remember { mutableStateOf(false) }
   var selectedLineId by remember { mutableStateOf<String?>(null) }
   var showDiscount by remember { mutableStateOf(false) }
+  var showOverridePrice by remember { mutableStateOf(false) }
   var confirmClear by remember { mutableStateOf(false) }
 
   val syncState = when {
@@ -197,6 +199,7 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
             selectedLineId = selectedLineId,
             onSelectLine = { selectedLineId = it },
             onDiscount = { showDiscount = true },
+            onOverridePrice = { showOverridePrice = true },
             onClear = { confirmClear = true },
             modifier = Modifier.width(if (compact) 280.dp else 340.dp).fillMaxHeight(),
           )
@@ -249,6 +252,34 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
         },
       )
     } ?: run { showDiscount = false }
+  }
+
+  if (showOverridePrice) {
+    state.cart.lines.firstOrNull { it.id == selectedLineId }?.let { line ->
+      OverridePriceDialog(
+        lineName = line.description,
+        currentPrice = line.unitPrice,
+        onDismiss = { showOverridePrice = false },
+        onApply = { newPrice, reason ->
+          viewModel.requestPriceOverride(line.id, newPrice, reason)
+          showOverridePrice = false
+        },
+      )
+    } ?: run { showOverridePrice = false }
+  }
+
+  // A price override is requested from the selling stage, not the refund
+  // stage, so it needs its own mount of the same approval prompt refunds and
+  // voids use — otherwise the manager PIN prompt would have nowhere to render.
+  state.approvalPrompt?.let { prompt ->
+    if (state.approvalKind == ApprovalKind.PriceOverride) {
+      ApprovalDialog(
+        action = prompt,
+        error = state.approvalError,
+        onApprove = viewModel::approve,
+        onDismiss = viewModel::dismissApproval,
+      )
+    }
   }
 
   if (confirmClear) {
@@ -491,6 +522,7 @@ private fun CartPanel(
   selectedLineId: String?,
   onSelectLine: (String) -> Unit,
   onDiscount: () -> Unit,
+  onOverridePrice: () -> Unit,
   onClear: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -512,6 +544,9 @@ private fun CartPanel(
           IconButton(onClick = onDiscount, enabled = selectedLineId != null) {
             Icon(Icons.Default.Percent, "Discount selected item")
           }
+          IconButton(onClick = onOverridePrice, enabled = selectedLineId != null) {
+            Icon(Icons.Default.AttachMoney, "Override selected item's price")
+          }
           IconButton(onClick = onClear, enabled = !cart.isEmpty) {
             Icon(Icons.Default.RestartAlt, "Clear sale")
           }
@@ -530,6 +565,13 @@ private fun CartPanel(
           icon = { Icon(Icons.Default.Percent, null) },
           enabled = selectedLineId != null,
           onClick = onDiscount,
+          modifier = Modifier.weight(1f),
+        )
+        RegisterAction(
+          label = "Override",
+          icon = { Icon(Icons.Default.AttachMoney, null) },
+          enabled = selectedLineId != null,
+          onClick = onOverridePrice,
           modifier = Modifier.weight(1f),
         )
         RegisterAction(

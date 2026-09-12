@@ -54,7 +54,7 @@ enum class RegisterStage { Locked, DrawerClosed, Selling, Refunding }
  * partial refund and approving the reversal of a whole sale are different
  * amounts of money and different permissions.
  */
-enum class ApprovalKind { Refund, VoidSale }
+enum class ApprovalKind { Refund, VoidSale, PriceOverride }
 
 data class RegisterUiState(
   val stage: RegisterStage = RegisterStage.Locked,
@@ -91,7 +91,18 @@ data class RegisterUiState(
   val approvalPrompt: String? = null,
   val approvalKind: ApprovalKind? = null,
   val approvalError: String? = null,
+  // ---------------------------------------------------------- price override
+  val pendingOverride: PendingOverride? = null,
 )
+
+/**
+ * A price override waiting on a manager PIN.
+ *
+ * Held here rather than applied optimistically, because the authorizer's
+ * name has to be on the change before it exists — an override with nobody's
+ * name attached is indistinguishable from a mispriced product after the fact.
+ */
+data class PendingOverride(val lineId: String, val newPrice: Money, val reason: String)
 
 data class CategoryTile(val id: String, val name: String)
 
@@ -279,6 +290,25 @@ class RegisterViewModel @Inject constructor(
 
   fun clearCart() {
     _state.value = _state.value.copy(cart = Cart.EMPTY, message = null)
+  }
+
+  /**
+   * Ask for a manager before changing what a line rings up at.
+   *
+   * Unlike a line discount, a cashier does not hold `sale.price_override`
+   * themselves by default — the whole point is that the person ringing the
+   * sale cannot reprice it alone. So this always goes through the same
+   * manager PIN prompt as a refund or a void, never a plain permission check
+   * on the signed-in cashier.
+   */
+  fun requestPriceOverride(lineId: String, newPrice: Money, reason: String) {
+    if (_state.value.cart.lines.none { it.id == lineId }) return
+    _state.value = _state.value.copy(
+      pendingOverride = PendingOverride(lineId, newPrice, reason),
+      approvalPrompt = "Override this item's price",
+      approvalKind = ApprovalKind.PriceOverride,
+      approvalError = null,
+    )
   }
 
   fun discountLine(lineId: String, amount: Money, reason: String) {
@@ -518,6 +548,7 @@ class RegisterViewModel @Inject constructor(
       approvalPrompt = null,
       approvalKind = null,
       approvalError = null,
+      pendingOverride = null,
     )
   }
 
@@ -526,7 +557,57 @@ class RegisterViewModel @Inject constructor(
     when (_state.value.approvalKind) {
       ApprovalKind.Refund -> approveRefund(pin)
       ApprovalKind.VoidSale -> approveVoid(pin)
+      ApprovalKind.PriceOverride -> approvePriceOverride(pin)
       null -> Unit
+    }
+  }
+
+  /**
+   * A manager PIN, checked against every employee holding `sale.price_override`.
+   *
+   * `Cart.overridePrice` re-runs `CartLine`'s own invariants on copy, so a
+   * negative price is refused by the domain regardless of what the dialog let
+   * through — this is not the only place that gets checked, just the first.
+   */
+  private fun approvePriceOverride(pin: String) {
+    val pending = _state.value.pendingOverride ?: return
+
+    viewModelScope.launch {
+      _state.value = _state.value.copy(busy = true)
+      val manager = shift.approve("sale.price_override", pin)
+      if (manager == null) {
+        _state.value = _state.value.copy(
+          busy = false,
+          approvalError = "That PIN cannot override a price",
+        )
+        return@launch
+      }
+
+      runCatching {
+        _state.value.cart.overridePrice(
+          lineId = pending.lineId,
+          newPrice = pending.newPrice,
+          authorizedBy = manager.userId,
+          reason = pending.reason,
+        )
+      }.onSuccess { cart ->
+        _state.value = _state.value.copy(
+          busy = false,
+          cart = cart,
+          pendingOverride = null,
+          approvalPrompt = null,
+          approvalKind = null,
+          message = Toast("Price overridden, approved by ${manager.displayName}"),
+        )
+      }.onFailure { error ->
+        _state.value = _state.value.copy(
+          busy = false,
+          pendingOverride = null,
+          approvalPrompt = null,
+          approvalKind = null,
+          message = Toast(error.message ?: "Could not override that price", isError = true),
+        )
+      }
     }
   }
 

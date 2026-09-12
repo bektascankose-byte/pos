@@ -195,6 +195,23 @@ class CartTest {
   }
 
   @Test
+  fun `a price override cannot make a line negative`() {
+    // overridePrice replaces unitPrice via copy(), which re-runs CartLine's own
+    // init block — the same guard an ordinary sale line gets, checked again
+    // regardless of what a dialog upstream already validated.
+    val cart = Cart.EMPTY
+      .addItem("a", "v1", "Geek Bar", "GB", Money.fromMajor("24.99"), taxRate = TAX)
+
+    assertThrows(IllegalArgumentException::class.java) {
+      cart.overridePrice("a", Money.fromMajor("-1.00"), authorizedBy = "manager-1", reason = "typo")
+    }
+
+    // Zero is a legitimate override (a discretionary give-away), unlike negative.
+    val given = cart.overridePrice("a", Money.ZERO, authorizedBy = "manager-1", reason = "goodwill")
+    assertEquals(Money.ZERO, given.lines.first().unitPrice)
+  }
+
+  @Test
   fun `a zero quantity line cannot be constructed`() {
     assertThrows(IllegalArgumentException::class.java) {
       CartLine(

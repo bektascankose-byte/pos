@@ -2,6 +2,27 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — Manager-authorized price override
+
+Wired up `Cart.overridePrice`, which had existed in the domain layer with no
+caller. Unlike a line discount, a cashier does not hold `sale.price_override`
+by default, so this always goes through the same manager PIN prompt as a
+refund or a void -- never a plain permission check on the signed-in cashier,
+which would defeat the point of the permission existing.
+
+- `RegisterViewModel.requestPriceOverride` stores the pending line, new price
+  and reason and raises the same `ApprovalDialog` refunds and voids use, now
+  also mounted at the selling stage rather than only inside the refund flow.
+- On approval, `shift.approve("sale.price_override", pin)` names the manager;
+  `Cart.overridePrice` re-runs `CartLine`'s own invariants on `copy()`, so a
+  negative price is refused by the domain regardless of what the dialog let
+  through -- checked twice, not trusted once.
+- Added the missing negative-price-override test alongside the existing
+  positive-path coverage: a price override cannot make a line negative, and a
+  price of exactly zero is accepted as a legitimate discretionary give-away.
+
+Not yet verified on hardware -- no device was connected while this was built.
+
 ## Phase 2 — Modern register workspace
 
 - Reworked the Android register into a high-contrast, touch-first workspace with a persistent operational header, prominent scanner/search field, category rail, product cards, current-sale context, and responsive cart.
