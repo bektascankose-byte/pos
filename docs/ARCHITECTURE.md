@@ -107,7 +107,7 @@ Kotlin's real advantage is not throughput. It is that the pricing, promotion and
 
 I am still choosing TypeScript, for three reasons. Two of the four applications are Next.js, so a shared TypeScript contracts package removes far more duplication than KMP would add. The integration surface in this brief is enormous (payment gateways, Twilio, delivery APIs, EDI, tax, S3, FCM) and the Node SDK ecosystem for those is materially better maintained. And KMP tooling would sit on the critical path of every backend change, which is a real tax paid every day for a benefit collected in one module.
 
-**The mitigation for the duplicated engine is not optional, it is a hard requirement.** `packages/pricing-spec/` holds a language neutral conformance suite: hundreds of JSON files, each with a cart, a rule set, a timestamp and an expected output down to the cent. The TypeScript engine and the Kotlin engine both run that suite in CI. A rule change is not merged until both pass. Every pricing bug found in production becomes a new fixture. This is the mechanism that keeps two implementations honest, and it is cheap to maintain.
+**The mitigation for the duplicated engine is not optional, it is a hard requirement.** `packages/pricing-spec/` holds a growing language-neutral conformance suite. Its first 51 cases pin the shared money primitives down to the cent; cart, promotion, rule-set and timestamp fixtures expand it as those engines arrive. The TypeScript engine and the Kotlin engine both run the same JSON in CI. A rule change is not merged until both pass. Every pricing bug found in production becomes a new fixture. This is the mechanism that keeps two implementations honest, and it is cheap to maintain.
 
 ### Money representation
 

@@ -1,0 +1,82 @@
+{
+  "operation": "costToMinor",
+  "about": "Post a fractional catalog cost to minor units. Cost is numeric(14,6) on the server: a case of 12 at $5.00 is $0.416667 a unit, and rounding that to cents per unit corrupts margin reporting within weeks. It rounds exactly once, at the moment it is posted.",
+  "cases": [
+    {
+      "name": "a whole dollar cost",
+      "cost": "9.85",
+      "quantity": "1",
+      "expect": "985"
+    },
+    {
+      "name": "six decimal places, rounded once",
+      "about": "0.416667 of a dollar is 41.6667 cents, which posts as 42.",
+      "cost": "0.416667",
+      "quantity": "1",
+      "expect": "42"
+    },
+    {
+      "name": "the rounding happens once, on the total, not per unit",
+      "about": "Twelve units at 0.416667 is 5.000004 dollars, which posts as 500. Rounding each unit to 42 first and multiplying would give 504 — four cents of margin invented out of nothing, on every case received.",
+      "cost": "0.416667",
+      "quantity": "12",
+      "expect": "500"
+    },
+    {
+      "name": "a cost with no decimal part",
+      "cost": "5",
+      "quantity": "3",
+      "expect": "1500"
+    },
+    {
+      "name": "zero cost",
+      "cost": "0",
+      "quantity": "10",
+      "expect": "0"
+    },
+    {
+      "name": "zero quantity posts nothing",
+      "cost": "9.85",
+      "quantity": "0",
+      "expect": "0"
+    },
+    {
+      "name": "exactly half a cent rounds up",
+      "cost": "0.005",
+      "quantity": "1",
+      "expect": "1"
+    },
+    {
+      "name": "just under half a cent rounds down",
+      "cost": "0.004999",
+      "quantity": "1",
+      "expect": "0"
+    },
+    {
+      "name": "a negative cost keeps its sign",
+      "about": "A credit from a vendor is a negative cost, and it must round away from zero like every other amount.",
+      "cost": "-0.005",
+      "quantity": "1",
+      "expect": "-1"
+    },
+    {
+      "name": "surrounding whitespace is trimmed",
+      "cost": "  9.85  ",
+      "quantity": "1",
+      "expect": "985"
+    },
+    {
+      "name": "a large receipt posts through a wider intermediate",
+      "about": "The posted cents fit in bigint, while scaled cost times cents times quantity does not fit in a signed 64-bit intermediate.",
+      "cost": "99999999.999999",
+      "quantity": "1000",
+      "expect": "10000000000000"
+    },
+    {
+      "name": "a cost that is not a number is refused",
+      "cost": "$9.85",
+      "quantity": "1",
+      "expectError": true
+    }
+  ]
+}

@@ -1,0 +1,80 @@
+{
+  "operation": "allocateByWeight",
+  "about": "Spread a cart level discount across lines proportionally, so the line amounts still sum to the cart total. The remainder goes to the largest weights first.",
+  "cases": [
+    {
+      "name": "proportional with nothing left over",
+      "amount": "1000",
+      "weights": ["500", "300", "200"],
+      "expect": ["500", "300", "200"]
+    },
+    {
+      "name": "the remainder goes to the largest weight",
+      "about": "100 over weights 333, 333 and 334 gives 33 each and leaves a cent. It lands on the 334 line, and both engines must choose the same one or two registers ringing the same cart disagree by a cent.",
+      "amount": "100",
+      "weights": ["333", "333", "334"],
+      "expect": ["33", "33", "34"]
+    },
+    {
+      "name": "proportions that divide exactly leave nothing to place",
+      "amount": "1000",
+      "weights": ["333", "333", "334"],
+      "expect": ["333", "333", "334"]
+    },
+    {
+      "name": "equal weights tie, and the tie breaks toward the earlier line",
+      "about": "Pinned deliberately. With equal weights the sort has nothing to separate them, so the answer depends on the sort being stable in both languages — exactly the kind of assumption that drifts silently.",
+      "amount": "10",
+      "weights": ["100", "100", "100"],
+      "expect": ["4", "3", "3"]
+    },
+    {
+      "name": "weights that are all zero fall back to an even split",
+      "about": "There is no proportion to honour, so the amount is shared as evenly as it can be rather than vanishing.",
+      "amount": "1000",
+      "weights": ["0", "0", "0"],
+      "expect": ["334", "333", "333"]
+    },
+    {
+      "name": "one weight carries everything",
+      "amount": "1000",
+      "weights": ["500", "0"],
+      "expect": ["1000", "0"]
+    },
+    {
+      "name": "a single weight takes the whole amount",
+      "amount": "2499",
+      "weights": ["1000"],
+      "expect": ["2499"]
+    },
+
+    {
+      "name": "a negative amount allocates proportionally too",
+      "about": "A cart level discount is negative. It has to sum back to the discount exactly, or the cart total and the line totals disagree.",
+      "amount": "-100",
+      "weights": ["400", "300", "300"],
+      "expect": ["-40", "-30", "-30"]
+    },
+    {
+      "name": "a negative amount places its remainder on the largest weight too",
+      "amount": "-100",
+      "weights": ["333", "333", "334"],
+      "expect": ["-33", "-33", "-34"]
+    },
+
+    {
+      "name": "seven equal weights over an odd amount still sum back exactly",
+      "about": "9999 over seven gives 1428 each and leaves three cents, which go to the first three lines. The property the whole function exists for, stated as a case so a future change cannot quietly break it.",
+      "amount": "9999",
+      "weights": ["1", "1", "1", "1", "1", "1", "1"],
+      "expect": ["1429", "1429", "1429", "1428", "1428", "1428", "1428"]
+    },
+    {
+      "name": "large proportional shares use wider intermediates",
+      "about": "The final shares fit in bigint, while amount times weight does not fit in a signed 64-bit intermediate.",
+      "amount": "9223372036854775800",
+      "weights": ["5", "5"],
+      "expect": ["4611686018427387900", "4611686018427387900"]
+    }
+  ]
+}

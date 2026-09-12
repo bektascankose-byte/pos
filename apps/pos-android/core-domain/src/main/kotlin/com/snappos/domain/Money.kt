@@ -1,5 +1,7 @@
 package com.snappos.domain
 
+import java.math.BigInteger
+
 /**
  * Money, in minor units.
  *
@@ -40,10 +42,11 @@ value class Money(val minor: Long) : Comparable<Money> {
 
   /** Display only. Never parse this back for arithmetic. */
   fun toMajorString(): String {
-    val negative = minor < 0
-    val abs = if (negative) -minor else minor
-    val whole = abs / 100
-    val frac = abs % 100
+    val value = BigInteger.valueOf(minor)
+    val negative = value.signum() < 0
+    val absolute = value.abs()
+    val whole = absolute.divide(HUNDRED)
+    val frac = absolute.remainder(HUNDRED).toInt()
     return buildString {
       if (negative) append('-')
       append(whole)
@@ -87,8 +90,10 @@ value class Money(val minor: Long) : Comparable<Money> {
       val match = MAJOR.matchEntire(text.trim())
         ?: throw MoneyFormatException("\"$text\" is not a valid amount with at most two decimals")
       val (sign, whole, frac) = match.destructured
-      val cents = whole.toLong() * 100 + frac.padEnd(2, '0').ifEmpty { "0" }.toLong()
-      return Money(if (sign == "-") -cents else cents)
+      val cents = BigInteger(whole)
+        .multiply(HUNDRED)
+        .add(BigInteger(frac.padEnd(2, '0').ifEmpty { "0" }))
+      return Money((if (sign == "-") cents.negate() else cents).longValueExact())
     }
 
     fun sum(values: Iterable<Money>): Money = values.fold(ZERO) { acc, v -> acc + v }
@@ -98,6 +103,9 @@ value class Money(val minor: Long) : Comparable<Money> {
 class MoneyFormatException(message: String) : IllegalArgumentException(message)
 
 private val RATE = Regex("""^(-?)(\d+)(?:\.(\d+))?$""")
+private val COST = Regex("""^(-?)(\d+)(?:\.(\d{1,6}))?$""")
+private val TEN = BigInteger.TEN
+private val HUNDRED = BigInteger.valueOf(100)
 
 /**
  * Apply a rate (tax, percentage discount) and round half up.
@@ -111,13 +119,14 @@ fun Money.applyRate(rate: String): Money {
     ?: throw MoneyFormatException("\"$rate\" is not a valid rate")
   val (sign, whole, frac) = match.destructured
 
-  var scale = 1L
-  repeat(frac.length) { scale *= 10 }
+  val scale = TEN.pow(frac.length)
+  val scaledRate = BigInteger(whole)
+    .multiply(scale)
+    .add(BigInteger(frac.ifEmpty { "0" }))
+    .let { if (sign == "-") it.negate() else it }
 
-  val scaledRate = (whole.toLong() * scale + (frac.ifEmpty { "0" }).toLong()) *
-    (if (sign == "-") -1 else 1)
-
-  return Money(divideRoundHalfUp(Math.multiplyExact(minor, scaledRate), scale))
+  val rounded = divideRoundHalfUp(BigInteger.valueOf(minor).multiply(scaledRate), scale)
+  return Money(rounded.longValueExact())
 }
 
 /**
@@ -153,8 +162,12 @@ fun Money.allocateByWeight(weights: List<Money>): List<Money> {
   val total = Money.sum(weights)
   if (total.isZero) return allocate(weights.size)
 
-  val shares = weights.map { minor * it.minor / total.minor }.toMutableList()
-  val remainder = minor - shares.sum()
+  val amountValue = BigInteger.valueOf(minor)
+  val totalValue = BigInteger.valueOf(total.minor)
+  val shares = weights.map {
+    amountValue.multiply(BigInteger.valueOf(it.minor)).divide(totalValue).longValueExact()
+  }.toMutableList()
+  val remainder = Math.subtractExact(minor, shares.fold(0L, Math::addExact))
 
   val order = weights.withIndex().sortedByDescending { it.value.minor }.map { it.index }
   val step = if (remainder < 0) -1L else 1L
@@ -169,14 +182,15 @@ fun Money.allocateByWeight(weights: List<Money>): List<Money> {
 }
 
 /** Integer division rounding half away from zero. */
-internal fun divideRoundHalfUp(numerator: Long, denominator: Long): Long {
-  val negative = (numerator < 0) != (denominator < 0)
-  val n = if (numerator < 0) -numerator else numerator
-  val d = if (denominator < 0) -denominator else denominator
-  val quotient = n / d
-  val doubled = (n % d) * 2
-  val rounded = if (doubled >= d) quotient + 1 else quotient
-  return if (negative) -rounded else rounded
+internal fun divideRoundHalfUp(numerator: BigInteger, denominator: BigInteger): BigInteger {
+  require(denominator.signum() != 0) { "denominator must not be zero" }
+  val negative = numerator.signum() != denominator.signum()
+  val n = numerator.abs()
+  val d = denominator.abs()
+  val quotient = n.divide(d)
+  val doubled = n.remainder(d).multiply(BigInteger.TWO)
+  val rounded = if (doubled >= d) quotient + BigInteger.ONE else quotient
+  return if (negative) rounded.negate() else rounded
 }
 
 /**
@@ -188,14 +202,17 @@ internal fun divideRoundHalfUp(numerator: Long, denominator: Long): Long {
  * at the moment it is posted.
  */
 fun costToMinor(cost: String, quantity: Int = 1): Money {
-  val match = RATE.matchEntire(cost.trim())
-    ?: throw MoneyFormatException("\"$cost\" is not a valid cost")
+  val match = COST.matchEntire(cost.trim())
+    ?: throw MoneyFormatException("\"$cost\" is not a valid cost (max six decimal places)")
   val (sign, whole, frac) = match.destructured
 
-  var scale = 1L
-  repeat(frac.length) { scale *= 10 }
-
-  val scaled = whole.toLong() * scale + (frac.ifEmpty { "0" }).toLong()
-  val minor = divideRoundHalfUp(scaled * 100 * quantity, scale)
-  return Money(if (sign == "-") -minor else minor)
+  val scale = TEN.pow(frac.length)
+  val scaled = BigInteger(whole)
+    .multiply(scale)
+    .add(BigInteger(frac.ifEmpty { "0" }))
+  val numerator = scaled.multiply(HUNDRED).multiply(BigInteger.valueOf(quantity.toLong()))
+  val minor = divideRoundHalfUp(numerator, scale).let {
+    if (sign == "-") it.negate() else it
+  }
+  return Money(minor.longValueExact())
 }

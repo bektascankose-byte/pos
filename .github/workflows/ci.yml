@@ -24,6 +24,36 @@ jobs:
       - run: npm ci
       - run: npm test -w @snappos/db
 
+  # The mitigation for the duplicated pricing engine, and section B calls it
+  # "not optional". The money arithmetic exists twice — TypeScript on the
+  # server, Kotlin on the register — and two implementations of the same rules
+  # drift. Both run the same JSON fixtures here. If this job is ever allowed to
+  # be skipped, risk 6 becomes the number one risk instead.
+  pricing-conformance:
+    name: Pricing conformance (both engines)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm ci
+
+      - name: TypeScript engine
+        run: npm test -w @snappos/pricing-spec
+
+      # Pure JVM, no emulator: core-domain may not import anything from
+      # `android.*`, which is what keeps this cheap enough to run on every
+      # commit.
+      - name: Kotlin engine
+        working-directory: apps/pos-android
+        run: ./gradlew :core-domain:test
+
   # The authoritative gate. Row level security is a no-op for a table owner, so
   # it can only be proven against a real server with a real non-owner role.
   # A green PGlite run does not mean tenancy is enforced.

@@ -27,6 +27,7 @@ class MoneyTest {
     assertEquals("24.00", Money.fromMajor("24").toMajorString())
     assertEquals("0.05", Money.fromMajor("0.05").toMajorString())
     assertEquals("-3.50", Money.fromMajor("-3.50").toMajorString())
+    assertEquals("-92233720368547758.08", Money(Long.MIN_VALUE).toMajorString())
     assertEquals(2499L, Money.fromMajor("24.99").minor)
   }
 

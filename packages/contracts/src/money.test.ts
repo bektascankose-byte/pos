@@ -25,6 +25,7 @@ test('minor units round trip through major-unit strings', () => {
   assert.equal(toMajorString(fromMajor('24')), '24.00');
   assert.equal(toMajorString(fromMajor('0.05')), '0.05');
   assert.equal(toMajorString(fromMajor('-3.50')), '-3.50');
+  assert.equal(toMajorString(money('-9223372036854775808')), '-92233720368547758.08');
   assert.equal(fromMajor('24.99'), 2499n);
 });
 

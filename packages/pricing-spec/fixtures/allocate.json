@@ -1,0 +1,71 @@
+{
+  "operation": "allocate",
+  "about": "Split an amount into n parts that sum back to exactly the original. Split tender, proportional discounts and tax distribution all depend on it.",
+  "cases": [
+    {
+      "name": "ten dollars three ways keeps the cent",
+      "about": "334 + 333 + 333 = 1000. Three times 333 loses a cent, and a cent lost per split adds up to a drawer that is short for no traceable reason.",
+      "amount": "1000",
+      "parts": "3",
+      "expect": ["334", "333", "333"]
+    },
+    {
+      "name": "an exact split has no remainder to place",
+      "amount": "900",
+      "parts": "3",
+      "expect": ["300", "300", "300"]
+    },
+    {
+      "name": "one part is the whole amount",
+      "amount": "2499",
+      "parts": "1",
+      "expect": ["2499"]
+    },
+    {
+      "name": "zero splits into zeros",
+      "amount": "0",
+      "parts": "4",
+      "expect": ["0", "0", "0", "0"]
+    },
+    {
+      "name": "the remainder goes to the earliest parts",
+      "about": "Pinned because it is arbitrary but must be identical in both engines: two registers splitting the same tender have to agree on which part carries the odd cent.",
+      "amount": "1002",
+      "parts": "4",
+      "expect": ["251", "251", "250", "250"]
+    },
+    {
+      "name": "more parts than cents",
+      "amount": "2",
+      "parts": "5",
+      "expect": ["1", "1", "0", "0", "0"]
+    },
+
+    {
+      "name": "a negative amount spreads the remainder the same way",
+      "about": "A refund split across tenders is negative, and it must sum back exactly like a sale does.",
+      "amount": "-1000",
+      "parts": "3",
+      "expect": ["-334", "-333", "-333"]
+    },
+    {
+      "name": "a negative exact split",
+      "amount": "-900",
+      "parts": "3",
+      "expect": ["-300", "-300", "-300"]
+    },
+
+    {
+      "name": "zero parts is refused",
+      "amount": "1000",
+      "parts": "0",
+      "expectError": true
+    },
+    {
+      "name": "a negative number of parts is refused",
+      "amount": "1000",
+      "parts": "-2",
+      "expectError": true
+    }
+  ]
+}

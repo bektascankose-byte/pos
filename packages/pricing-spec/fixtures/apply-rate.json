@@ -1,0 +1,122 @@
+{
+  "operation": "applyRate",
+  "about": "Tax and percentage discounts. Half up, away from zero, once per line.",
+  "cases": [
+    {
+      "name": "the ordinary case: 8.25% of 24.99",
+      "amount": "2499",
+      "rate": "0.0825",
+      "expect": "206"
+    },
+    {
+      "name": "a rate of zero takes nothing",
+      "amount": "2499",
+      "rate": "0",
+      "expect": "0"
+    },
+    {
+      "name": "a rate of one takes everything",
+      "amount": "2499",
+      "rate": "1",
+      "expect": "2499"
+    },
+    {
+      "name": "zero taxed at any rate is zero",
+      "amount": "0",
+      "rate": "0.0825",
+      "expect": "0"
+    },
+
+    {
+      "name": "exactly half rounds up, not to even",
+      "about": "200 at 2.5% is 5.00 exactly; 50 at 5% is 2.5, the half case. Banker's rounding would give 2 here and a customer comparing two identical receipts would see different totals.",
+      "amount": "50",
+      "rate": "0.05",
+      "expect": "3"
+    },
+    {
+      "name": "just below half rounds down",
+      "amount": "49",
+      "rate": "0.05",
+      "expect": "2"
+    },
+    {
+      "name": "just above half rounds up",
+      "amount": "51",
+      "rate": "0.05",
+      "expect": "3"
+    },
+
+    {
+      "name": "a negative amount rounds away from zero, not toward it",
+      "about": "A refund line is the mirror of the sale line that created it. Rounding a refund toward zero would return a cent less than was taken, every time, in the shop's favour.",
+      "amount": "-50",
+      "rate": "0.05",
+      "expect": "-3"
+    },
+    {
+      "name": "a negative rate on a positive amount",
+      "amount": "2499",
+      "rate": "-0.0825",
+      "expect": "-206"
+    },
+    {
+      "name": "a negative rate on a negative amount is positive",
+      "amount": "-2499",
+      "rate": "-0.0825",
+      "expect": "206"
+    },
+
+    {
+      "name": "a rate with no decimal point",
+      "amount": "1000",
+      "rate": "2",
+      "expect": "2000"
+    },
+    {
+      "name": "trailing zeros in the rate do not change the answer",
+      "amount": "2499",
+      "rate": "0.08250000",
+      "expect": "206"
+    },
+    {
+      "name": "six decimal places, the deepest a cost is allowed",
+      "amount": "100000",
+      "rate": "0.123456",
+      "expect": "12346"
+    },
+    {
+      "name": "surrounding whitespace is trimmed",
+      "amount": "2499",
+      "rate": "  0.0825  ",
+      "expect": "206"
+    },
+    {
+      "name": "a safe result may require a wider intermediate",
+      "about": "Half of the largest bigint fits in bigint, but multiplying that amount by the scaled rate overflows a 64-bit intermediate before division.",
+      "amount": "9223372036854775807",
+      "rate": "0.5",
+      "expect": "4611686018427387904"
+    },
+
+    {
+      "name": "a rate that is not a number is refused",
+      "amount": "2499",
+      "rate": "8.25%",
+      "expectError": true
+    },
+    {
+      "name": "an empty rate is refused",
+      "amount": "2499",
+      "rate": "",
+      "expectError": true
+    },
+    {
+      "name": "a rate in exponent notation is refused",
+      "about": "Accepting it would mean parsing a float somewhere, which is the one thing this type exists to prevent.",
+      "amount": "2499",
+      "rate": "8.25e-2",
+      "expectError": true
+    }
+  ]
+}

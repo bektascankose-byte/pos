@@ -219,8 +219,8 @@ export function decimal(value: string | number): Decimal {
 
 /** Post a fractional cost to minor units, rounding half up exactly once. */
 export function costToMinor(cost: Decimal | string, quantity = 1): Money {
-  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(String(cost).trim());
-  if (!match) throw new MoneyError(`"${cost}" is not a valid cost`);
+  const match = /^(-?)(\d+)(?:\.(\d{1,6}))?$/.exec(String(cost).trim());
+  if (!match) throw new MoneyError(`"${cost}" is not a valid cost (max six decimal places)`);
   const [, sign, whole, frac = ''] = match;
   const scale = 10n ** BigInt(frac.length);
   const scaled = BigInt(whole!) * scale + BigInt(frac || '0');

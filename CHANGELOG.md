@@ -2,6 +2,37 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — One pricing specification, two engines
+
+The backend and offline register must calculate identical amounts even though
+one is TypeScript and the other Kotlin. A language-neutral fixture suite now
+makes that agreement a required CI property instead of an architectural promise.
+
+### Added
+
+- **51 shared pricing cases** covering half-up rounding, negative sale/refund
+  amounts, exact allocation, deterministic remainder placement, weighted
+  allocation and six-decimal catalog costs. Every value is encoded as a string
+  so the specification never depends on a language's JSON-number behavior.
+- **Two independent runners.** Node executes the TypeScript money engine and a
+  pure JVM test executes Kotlin against the same four JSON files. CI runs both
+  in one `Pricing conformance (both engines)` job on every commit.
+- **Vacuous-pass guards and mutation proof.** Missing fixtures, empty files and
+  an unexpectedly small case set fail. Removing Kotlin half-up rounding was
+  verified to fail on the exact named fixture that distinguishes it from
+  truncation.
+
+### Fixed
+
+- Kotlin rate and weighted-allocation intermediates now use `BigInteger` before
+  converting the final posted amount back to `Long`. A valid final amount can
+  otherwise overflow an intermediate multiplication and fail only on one side
+  of synchronization.
+- Both cost parsers now enforce PostgreSQL's `numeric(14,6)` fractional scale
+  instead of accepting precision the database cannot preserve.
+- Kotlin money formatting now handles `Long.MIN_VALUE`; negating that value in
+  `Long` overflows back to itself.
+
 ## Phase 2 — The incremental change feed, populated
 
 `change_log`, its cursor index, `sync_changes_watermark()` and

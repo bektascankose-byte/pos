@@ -8,15 +8,31 @@
 | Schema invariants | `packages/db/test/invariants.test.mjs` | 26 | both |
 | Row level security | `packages/db/test/rls.test.mjs` | 9 | PostgreSQL only |
 | Money and schemas | `packages/contracts/src/{money,schemas}.test.ts` | 24 | n/a |
+| Pricing conformance | `packages/pricing-spec/fixtures/*.json` | 51 cases | TypeScript + Kotlin |
 | End to end HTTP | `apps/api/scripts/e2e.mjs` | 83 | PostgreSQL only |
 
 44 on PostgreSQL. 34 plus 2 skipped on PGlite.
 
 ```bash
 npm test                          # PGlite
+npm test -w @snappos/pricing-spec # TypeScript side of shared pricing fixtures
 npm run test:pg -w @snappos/db    # PostgreSQL, needs npm run db:up first
 npm run e2e                       # end to end, needs npm run db:up first
+cd apps/pos-android && ./gradlew :core-domain:test # Kotlin side
 ```
+
+## Pricing must agree offline and online
+
+The TypeScript backend and Kotlin register execute the same 51 language-neutral
+JSON cases from `packages/pricing-spec/fixtures`. Neither implementation is the
+reference; the fixtures are. They pin rounding, negative amounts, proportional
+allocation, tie-breaking and six-decimal catalog-cost posting. CI runs both
+engines on every commit in one required job.
+
+The Kotlin runner refuses to pass when it finds no files, no cases, or fewer
+than 40 cases. The suite was also mutation-tested by removing half-up rounding:
+it failed on the named half-cent fixture, proving that this gate detects a real
+pricing disagreement rather than only proving that both runners start.
 
 ## The end to end suite has its own database
 
@@ -84,7 +100,6 @@ already drifted by two before anyone ran it.
 
 Per the architecture, in the phase that introduces each:
 
-- Pricing conformance suite across the TypeScript and Kotlin engines (Phase 2, §B)
 - Offline sync harness driving the register through Toxiproxy: dropped, delayed, duplicated and
   reordered requests (Phase 2, §M risk 4)
 - Instrumented Android tests: the Room migrations currently have no automated
