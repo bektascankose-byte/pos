@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Language neutral conformance fixtures for the money and pricing arithmetic. Run by both the TypeScript and the Kotlin engine.",
   "scripts": {
+    "pretest": "npm run build -w @snappos/contracts",
     "test": "node --test test/conformance.test.mjs"
   },
   "dependencies": {
