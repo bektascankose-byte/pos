@@ -281,39 +281,30 @@ A voided sale is not refundable — the money already went back — but the scre
 says **"HH01-R1-7 was voided"** rather than "no such sale". The receipt is in the
 cashier's hand; telling them it does not exist sends them looking for it.
 
-## Pulling the catalog only when it changed
+## Pulling only catalog projections that changed
 
-The register asks `GET /v1/sync/changes?since=<cursor>&limit=1` before pulling.
-Nothing changed — the overwhelmingly common answer — and it returns having
-transferred nothing. `limit=1` because it only needs to know *whether*
-something changed, not what; one row settles it, and asking for more would move
-data to reach the same conclusion.
+The register calls `GET /v1/sync/catalog?store_id=...&since=<cursor>`. Nothing
+changed—the overwhelmingly common answer—and the response contains no
+projections. A price-only change returns prices but no products, barcodes,
+inventory, or employees. Product, brand, barcode, and compliance changes return
+the denormalized catalog projection because that is the shape the register
+queries; Android does not recreate server joins.
 
 The cursor is `change_log.id`, held by the server below any change whose
 transaction might still be in flight. A change can therefore arrive twice, which
 is harmless because applying it is idempotent, and none is ever missed — which
 is the property that matters.
 
-A failed feed read falls through to a full pull. Not being able to read the feed
-is not evidence that nothing changed, and treating it as such leaves a register
-quietly stale.
+Change detection, projection reads, and cursor selection happen in one server
+transaction. Splitting them into “check” then “fetch” requests creates a race:
+a category can commit between a price-only check and fetch, then be skipped by
+the new global cursor. The combined response cannot make that claim.
 
-**This is incremental detection, not yet incremental application.** When
-something has changed the register still pulls the whole snapshot rather than
-fetching the individual rows the feed names. Per-entity fetching needs endpoints
-returning a row in the register's own projection shape and those do not exist
-yet. The win banked here is the idle case, which is almost all of them: before
-this, a register polling every fifteen minutes transferred the entire catalog
-every time to arrive back where it started.
-
-**Verified on a Galaxy S22 Ultra**, both branches and back:
-
-```
-catalog current at cursor 7; nothing pulled
-changes since 7; refreshing the catalog        (a brand renamed server side)
-catalog: 12 variants, 12 barcodes, 3 employees, cursor 8
-catalog current at cursor 9; nothing pulled
-```
+Room clears and replaces only the named projections and advances the cursor in
+one local transaction. A crash therefore leaves either the old projection and
+old cursor or the new projection and new cursor. Unknown scopes trigger a full
+snapshot. A cursor ahead of the server—after a restore or reset—also forces a
+bootstrap instead of preserving stale rows.
 
 ## Handing sales over when the network returns
 

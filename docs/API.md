@@ -192,13 +192,14 @@ write is retried.
 ```
 POST /api/v1/sync/batch                          sync.upload
 GET  /api/v1/sync/changes?since=&scopes=&limit=  sync.download
-GET  /api/v1/sync/catalog?store_id=              sync.download
+GET  /api/v1/sync/catalog?store_id=&since=       sync.download
 ```
 
-`/sync/catalog` is the **bootstrap**: everything one store sells, in a single
-response, plus a cursor to resume the change feed from. A register calls it once
-when claimed. The change feed cannot serve this purpose — it is a log of what
-changed, and a device with an empty database has nothing to apply changes to.
+Without `since`, `/sync/catalog` is the **bootstrap**: everything one store
+sells plus a cursor. With `since`, it is an atomic projection delta. The server
+derives affected scopes, reads their current register-shaped projections, and
+chooses the cursor in one transaction. `included_scopes` tells Room exactly
+which local projections to replace; an empty list means nothing changed.
 
 Deliberately scoped to one store, and it carries **no customer data**: caching
 the customer table on a terminal is a privacy problem with no operational

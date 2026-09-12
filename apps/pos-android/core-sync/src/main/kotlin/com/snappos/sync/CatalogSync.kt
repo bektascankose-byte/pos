@@ -1,6 +1,8 @@
 package com.snappos.sync
 
 import android.util.Log
+import androidx.room.withTransaction
+import com.snappos.data.SnapPosDatabase
 import com.snappos.data.dao.CatalogDao
 import com.snappos.data.dao.ConfigDao
 import com.snappos.data.dao.EmployeeDao
@@ -33,6 +35,7 @@ class CatalogSync @Inject constructor(
   private val catalog: CatalogDao,
   private val employees: EmployeeDao,
   private val config: ConfigDao,
+  private val database: SnapPosDatabase,
 ) {
 
   data class Result(
@@ -49,7 +52,7 @@ class CatalogSync @Inject constructor(
   }
 
   /**
-   * Ask what changed, and only pull if something did.
+   * Ask for an atomic projection delta, and only pull scopes that changed.
    *
    * A register polls all day and the answer is almost always "nothing". Pulling
    * the whole catalog to discover that is the cost this avoids: with a few
@@ -61,12 +64,9 @@ class CatalogSync @Inject constructor(
    * which is harmless — applying it is idempotent — and none is ever missed,
    * which is the property that matters.
    *
-   * **This is incremental detection, not yet incremental application.** When
-   * something has changed the register still pulls the full snapshot rather
-   * than fetching the individual rows named in the feed. Per-entity fetching
-   * needs endpoints that return a row in the register's own projection shape,
-   * and those do not exist yet. The win banked here is the idle case, which is
-   * almost all of them.
+   * Detection, projection reads and the returned cursor happen in one server
+   * transaction. Keeping those together prevents a category commit between a
+   * feed request and a price-only fetch from being skipped by a global cursor.
    */
   suspend fun pull(): Result {
     val registerConfig = config.get() ?: return Result(failure = "device not claimed")
@@ -75,29 +75,8 @@ class CatalogSync @Inject constructor(
     // completed a pull. Either way there is nothing to be incremental against,
     // so the first pull is always the full bootstrap.
     val cursor = registerConfig.lastCatalogCursor.trim()
-    if (cursor.isNotBlank() && cursor != "0") {
-      val changed = try {
-        api.changes(since = cursor, storeId = registerConfig.storeId)
-      } catch (e: Exception) {
-        Log.i(TAG, "change feed could not reach the server: ${e.message}")
-        return Result(failure = e.message ?: "network unavailable")
-      }
-
-      // A feed that cannot be read is not evidence that nothing changed, so a
-      // failure here falls through to a full pull rather than concluding the
-      // catalog is current.
-      if (changed.isSuccessful) {
-        val body = changed.body()
-        if (body != null && body.changes.isEmpty()) {
-          Log.i(TAG, "catalog current at cursor $cursor; nothing pulled")
-          return Result(unchanged = true)
-        }
-        Log.i(TAG, "changes since $cursor; refreshing the catalog")
-      }
-    }
-
     val response = try {
-      api.catalog(registerConfig.storeId)
+      api.catalog(registerConfig.storeId, cursor.takeIf { it.isNotBlank() && it != "0" })
     } catch (e: Exception) {
       Log.i(TAG, "catalog pull could not reach the server: ${e.message}")
       return Result(failure = e.message ?: "network unavailable")
@@ -106,9 +85,24 @@ class CatalogSync @Inject constructor(
     if (!response.isSuccessful) {
       return Result(failure = "HTTP ${response.code()}")
     }
-    val snapshot = response.body() ?: return Result(failure = "empty response")
+    var snapshot = response.body() ?: return Result(failure = "empty response")
+    val knownScopes = setOf("catalog", "prices", "tax", "employees", "inventory")
+    if (snapshot.included_scopes.any { it !in knownScopes }) {
+      Log.w(TAG, "unsupported delta scope; requesting a complete snapshot")
+      val fallback = try { api.catalog(registerConfig.storeId) } catch (e: Exception) {
+        return Result(failure = e.message ?: "network unavailable")
+      }
+      if (!fallback.isSuccessful) return Result(failure = "HTTP ${fallback.code()}")
+      snapshot = fallback.body() ?: return Result(failure = "empty fallback response")
+    }
+    val scopes = snapshot.included_scopes.toSet()
+    if (scopes.isEmpty()) {
+      config.setCatalogCursor(snapshot.cursor)
+      Log.i(TAG, "catalog current at cursor ${snapshot.cursor}; nothing pulled")
+      return Result(unchanged = true)
+    }
 
-    catalog.upsertCategories(
+    val categoryRows =
       snapshot.categories.map {
         CategoryEntity(
           id = it.id,
@@ -120,8 +114,7 @@ class CatalogSync @Inject constructor(
           tileColor = it.tile_color,
           isDepartment = it.is_department,
         )
-      },
-    )
+      }
 
     // Barcodes are needed to build each variant's search text, so they are
     // grouped first. Search matching a barcode matters more than it sounds:
@@ -129,7 +122,7 @@ class CatalogSync @Inject constructor(
     val barcodesByVariant = snapshot.barcodes.groupBy { it.variant_id }
     val now = System.currentTimeMillis()
 
-    catalog.upsertVariants(
+    val variantRows =
       snapshot.variants.map { v ->
         VariantEntity(
           id = v.id,
@@ -163,10 +156,9 @@ class CatalogSync @Inject constructor(
           }.joinToString(" ").lowercase(),
           updatedAt = now,
         )
-      },
-    )
+      }
 
-    catalog.upsertBarcodes(
+    val barcodeRows =
       snapshot.barcodes.map {
         BarcodeEntity(
           barcode = it.barcode,
@@ -175,10 +167,9 @@ class CatalogSync @Inject constructor(
           units = it.units,
           isPrimary = it.is_primary,
         )
-      },
-    )
+      }
 
-    catalog.upsertPrices(
+    val priceRows =
       snapshot.prices.map {
         PriceEntity(
           id = it.id,
@@ -188,10 +179,9 @@ class CatalogSync @Inject constructor(
           effectiveFrom = it.effective_from.toEpochMillisOrZero(),
           effectiveTo = it.effective_to?.toEpochMillisOrZero(),
         )
-      },
-    )
+      }
 
-    catalog.upsertInventory(
+    val inventoryRows =
       snapshot.inventory.map {
         InventoryEntity(
           variantId = it.variant_id,
@@ -199,18 +189,11 @@ class CatalogSync @Inject constructor(
           available = it.available,
           updatedAt = now,
         )
-      },
-    )
+      }
 
     // One rate for now. Per category rates are Phase 4, when the tax engine
     // grows past a single store with a single rate.
-    snapshot.tax_rates.firstOrNull()?.let { rate ->
-      config.get()?.let { current -> config.upsert(current.copy(taxRate = rate.rate)) }
-    }
-
-    // Staff who may unlock this register. Replicated so a shift can start with
-    // no network, which is when shifts usually start.
-    employees.upsert(
+    val employeeRows =
       snapshot.employees.map {
         com.snappos.data.entities.EmployeeEntity(
           id = it.id,
@@ -220,10 +203,39 @@ class CatalogSync @Inject constructor(
           permissions = it.permissions.joinToString(","),
           status = it.status,
         )
-      },
-    )
+      }
 
-    config.setCatalogCursor(snapshot.cursor)
+    // Projection replacement and cursor advancement are one local commit. A
+    // crash can leave the old projection and old cursor, or the new projection
+    // and new cursor, but never a cursor claiming rows Room did not apply.
+    database.withTransaction {
+      if ("catalog" in scopes) {
+        catalog.clearBarcodes()
+        catalog.clearVariants()
+        catalog.clearCategories()
+        catalog.upsertCategories(categoryRows)
+        catalog.upsertVariants(variantRows)
+        catalog.upsertBarcodes(barcodeRows)
+      }
+      if ("prices" in scopes) {
+        catalog.clearPrices()
+        catalog.upsertPrices(priceRows)
+      }
+      if ("inventory" in scopes) {
+        catalog.clearInventory()
+        catalog.upsertInventory(inventoryRows)
+      }
+      if ("employees" in scopes) {
+        employees.clear()
+        employees.upsert(employeeRows)
+      }
+      if ("tax" in scopes) {
+        snapshot.tax_rates.firstOrNull()?.let { rate ->
+          config.get()?.let { current -> config.upsert(current.copy(taxRate = rate.rate)) }
+        }
+      }
+      config.setCatalogCursor(snapshot.cursor)
+    }
 
     Log.i(
       TAG,

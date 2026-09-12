@@ -130,6 +130,12 @@ interface CatalogDao {
 
   @Upsert suspend fun upsertInventory(levels: List<InventoryEntity>)
 
+  @Query("DELETE FROM barcodes") suspend fun clearBarcodes()
+  @Query("DELETE FROM variants") suspend fun clearVariants()
+  @Query("DELETE FROM categories") suspend fun clearCategories()
+  @Query("DELETE FROM prices") suspend fun clearPrices()
+  @Query("DELETE FROM inventory") suspend fun clearInventory()
+
   @Query("SELECT count(*) FROM variants")
   suspend fun variantCount(): Int
 }
@@ -161,6 +167,8 @@ interface EmployeeDao {
   suspend fun byCode(code: String): EmployeeEntity?
 
   @Upsert suspend fun upsert(employees: List<EmployeeEntity>)
+
+  @Query("DELETE FROM employees") suspend fun clear()
 
   /**
    * PIN lockout, counted on device.

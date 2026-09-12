@@ -145,6 +145,8 @@ export const syncScope = z.enum([
  */
 export const catalogQuerySchema = z.object({
   store_id: uuid,
+  /** Omit for bootstrap; provide the last applied cursor for an atomic delta. */
+  since: z.string().regex(/^\d+$/).optional(),
 });
 
 export const changesQuerySchema = z.object({

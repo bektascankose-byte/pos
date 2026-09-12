@@ -2,6 +2,22 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — Atomic incremental catalog projections
+
+- `GET /v1/sync/catalog` now accepts the register's last cursor and returns only
+  affected projections through `included_scopes`. A price-only edit no longer
+  retransfers products, barcodes, inventory, or the employee roster.
+- Change detection, projection reads, and cursor selection share one PostgreSQL
+  transaction, closing the cross-scope race created by separate check/fetch
+  requests.
+- Android replaces only named Room projections and advances its cursor in the
+  same local transaction. Deletions are reconciled by absence, and a crash
+  cannot leave a new cursor over old data.
+- A cursor ahead of a restored server forces a complete bootstrap. Unknown
+  projection scopes fall back to the complete snapshot.
+- End-to-end coverage proves unchanged pulls transfer nothing, price-only pulls
+  remain price-only, cursors stay stable, and reset recovery bootstraps.
+
 ## Phase 2 — One pricing specification, two engines
 
 The backend and offline register must calculate identical amounts even though

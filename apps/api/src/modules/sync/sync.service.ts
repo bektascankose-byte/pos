@@ -566,7 +566,7 @@ export class SyncService {
    * terminal is a privacy problem with no operational payoff: the register
    * looks a customer up by phone number when it needs one.
    */
-  async catalogSnapshot(orgId: string, storeId: string) {
+  async catalogSnapshot(orgId: string, storeId: string, since?: string) {
     return this.db.withOrg(orgId, async (tx) => {
       // The store has to exist in this org before anything is read. RLS already
       // makes another org's store invisible, but invisible here means every
@@ -582,14 +582,48 @@ export class SyncService {
         throw new NotFoundException('no such store in this organization');
       }
 
+      // Detect and read in this same transaction. A separate changes request
+      // followed by a scoped snapshot can advance past a different scope that
+      // commits between the two calls, making that change invisible forever.
+      const { rows: watermarkRows } = await tx.query<{ cursor: string }>(
+        `SELECT COALESCE(sync_changes_watermark(), 0)::text AS cursor`,
+      );
+      const watermark = watermarkRows[0]?.cursor ?? '0';
+      let includedScopes = ['catalog', 'prices', 'tax', 'employees', 'inventory'];
+      // A cursor ahead of this database means the server was restored/reset.
+      // Treat it as bootstrap; moving the cursor backwards while returning no
+      // rows would leave stale device data claiming to be current.
+      if (since !== undefined && BigInt(since) <= BigInt(watermark)) {
+        const { rows: changedRows } = await tx.query<{ entity_type: string }>(
+          `SELECT DISTINCT entity_type FROM change_log
+           WHERE id > $1::bigint AND id <= $2::bigint
+             AND (store_id IS NULL OR store_id = $3)`,
+          [since, watermark, storeId],
+        );
+        const scopes = new Set(changedRows.map((row) => scopeFor(row.entity_type)));
+        // Compliance is embedded in the variant projection. Register/store
+        // configuration is rare and safest as a complete refresh.
+        if (scopes.has('register_config')) {
+          includedScopes = ['catalog', 'prices', 'tax', 'employees', 'inventory'];
+        } else {
+          includedScopes = [];
+          if (scopes.has('catalog') || scopes.has('compliance')) includedScopes.push('catalog');
+          if (scopes.has('prices')) includedScopes.push('prices');
+          if (scopes.has('tax')) includedScopes.push('tax');
+          if (scopes.has('employees')) includedScopes.push('employees');
+        }
+      }
+      const includes = (scope: string) => includedScopes.includes(scope);
+      const empty = Promise.resolve({ rows: [] as any[] });
+
       const [{ rows: categories }, { rows: variants }, { rows: barcodes }, { rows: prices },
              { rows: levels }, { rows: taxRates }] = await Promise.all([
-        tx.query(
+        includes('catalog') ? tx.query(
           `SELECT id, parent_id, slug, name, path, depth, sort_order, tile_color,
                   is_department
            FROM categories WHERE status = 'active' ORDER BY path`,
-        ),
-        tx.query(
+        ) : empty,
+        includes('catalog') ? tx.query(
           `SELECT v.id, v.product_id, p.name AS product_name, v.variant_name, v.sku, v.plu,
                   p.brand_id, b.name AS brand_name, p.category_id, p.tax_category_id,
                   v.cost::text, v.case_quantity, v.sort_order, v.is_default, v.status,
@@ -600,37 +634,37 @@ export class SyncService {
            LEFT JOIN brands b ON b.id = p.brand_id
            LEFT JOIN product_compliance pc ON pc.product_id = p.id
            WHERE v.status = 'active' AND p.status = 'active'`,
-        ),
-        tx.query(
+        ) : empty,
+        includes('catalog') ? tx.query(
           `SELECT vb.id, vb.variant_id, vb.barcode, vb.kind, vb.units::text, vb.is_primary
            FROM variant_barcodes vb
            JOIN product_variants v ON v.id = vb.variant_id
            WHERE v.status = 'active'`,
-        ),
+        ) : empty,
         // Store specific prices win over the organization default, and both are
         // sent: a price scheduled for Monday has to be on the register on
         // Sunday night, because the register may be offline on Monday.
-        tx.query(
+        includes('prices') ? tx.query(
           `SELECT id, variant_id, kind, price_minor::text,
                   effective_from, effective_to
            FROM variant_prices
            WHERE (store_id = $1 OR store_id IS NULL)
              AND (effective_to IS NULL OR effective_to > now())`,
           [storeId],
-        ),
-        tx.query(
+        ) : empty,
+        includes('inventory') ? tx.query(
           `SELECT variant_id, on_hand::text, available::text, updated_at
            FROM inventory_levels WHERE store_id = $1`,
           [storeId],
-        ),
-        tx.query(
+        ) : empty,
+        includes('tax') ? tx.query(
           `SELECT tax_category_id, rate::text, name
            FROM tax_rates
            WHERE (store_id = $1 OR store_id IS NULL)
              AND effective_from <= now()
              AND (effective_to IS NULL OR effective_to > now())`,
           [storeId],
-        ),
+        ) : empty,
       ]);
 
       // Employees who may unlock this register.
@@ -648,7 +682,7 @@ export class SyncService {
       // A four digit PIN is 10,000 combinations, so the hash was never what
       // protected it. Lockout is, and the register counts failures locally
       // because that is where the attempts happen.
-      const { rows: employees } = await tx.query(
+      const { rows: employees } = includes('employees') ? await tx.query(
         `SELECT DISTINCT u.id, COALESCE(u.display_name, u.full_name) AS display_name,
                 u.employee_code, p.pin_hash, u.status,
                 COALESCE(
@@ -664,15 +698,11 @@ export class SyncService {
          WHERE u.status = 'active'
            AND (ur.store_id = $1 OR ur.store_id IS NULL)`,
         [storeId],
-      );
+      ) : { rows: [] };
 
       // The cursor the register resumes the change feed from. Taken AFTER the
       // snapshot reads so nothing committed during them is missed; re-applying
       // a change already in the snapshot is harmless, skipping one is not.
-      const { rows: cursorRows } = await tx.query<{ cursor: string }>(
-        `SELECT COALESCE(sync_changes_watermark(), 0)::text AS cursor`,
-      );
-
       return {
         categories,
         variants,
@@ -681,7 +711,8 @@ export class SyncService {
         inventory: levels,
         tax_rates: taxRates,
         employees,
-        cursor: cursorRows[0]?.cursor ?? '0',
+        included_scopes: includedScopes,
+        cursor: watermark,
         server_time: new Date().toISOString(),
       };
     });

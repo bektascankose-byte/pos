@@ -13,6 +13,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import pg from 'pg';
 
 export async function runSalesChecks({ api, check, uuidV7, ownerToken, managerToken, cashierToken, storeId }) {
   // ------------------------------------------------------------------ context
@@ -764,6 +765,86 @@ export async function runSalesChecks({ api, check, uuidV7, ownerToken, managerTo
     'the snapshot carries a cursor to resume the change feed from',
     /^\d+$/.test(snapshot.body?.cursor ?? ''),
     `cursor was ${snapshot.body?.cursor}`,
+  );
+  check(
+    'a bootstrap identifies every projection it contains',
+    ['catalog', 'prices', 'tax', 'employees', 'inventory'].every((scope) =>
+      snapshot.body?.included_scopes?.includes(scope)),
+    JSON.stringify(snapshot.body?.included_scopes),
+  );
+
+  const unchangedDelta = await api(
+    `/api/v1/sync/catalog?store_id=${storeId}&since=${snapshot.body?.cursor}`,
+    { token: cashierToken },
+  );
+  check(
+    'an unchanged incremental pull transfers no projections',
+    unchangedDelta.status === 200 &&
+      unchangedDelta.body?.included_scopes?.length === 0 &&
+      unchangedDelta.body?.variants?.length === 0 &&
+      unchangedDelta.body?.prices?.length === 0 &&
+      unchangedDelta.body?.employees?.length === 0,
+    JSON.stringify(unchangedDelta.body?.included_scopes),
+  );
+  check(
+    'an unchanged pull keeps the cursor stable',
+    unchangedDelta.body?.cursor === snapshot.body?.cursor,
+    `${snapshot.body?.cursor} -> ${unchangedDelta.body?.cursor}`,
+  );
+
+  // Write through the same non-owner role production uses. This is test setup,
+  // not a back door in the API, and it proves a price-only transaction returns
+  // prices without retransferring products, barcodes, inventory or staff.
+  const direct = new pg.Pool({
+    connectionString: process.env.E2E_DATABASE_URL ??
+      'postgres://snappos_app:dev_only_not_a_secret@localhost:5432/snappos_e2e',
+  });
+  const client = await direct.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SELECT set_config('app.org_id', $1, true)`, [ownerSession.body?.org_id]);
+    await client.query(
+      `UPDATE variant_prices SET price_minor = price_minor + 1
+       WHERE id = (SELECT id FROM variant_prices WHERE variant_id = $1 LIMIT 1)`,
+      [variantId],
+    );
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+    await direct.end();
+  }
+
+  const priceDelta = await api(
+    `/api/v1/sync/catalog?store_id=${storeId}&since=${snapshot.body?.cursor}`,
+    { token: cashierToken },
+  );
+  check(
+    'a price-only change returns only the price projection',
+    priceDelta.status === 200 &&
+      JSON.stringify(priceDelta.body?.included_scopes) === JSON.stringify(['prices']) &&
+      priceDelta.body?.prices?.length >= 12 &&
+      priceDelta.body?.variants?.length === 0 &&
+      priceDelta.body?.barcodes?.length === 0 &&
+      priceDelta.body?.employees?.length === 0,
+    JSON.stringify({
+      scopes: priceDelta.body?.included_scopes,
+      prices: priceDelta.body?.prices?.length,
+      variants: priceDelta.body?.variants?.length,
+    }),
+  );
+
+  const aheadDelta = await api(
+    `/api/v1/sync/catalog?store_id=${storeId}&since=9223372036854775807`,
+    { token: cashierToken },
+  );
+  check(
+    'a cursor from a reset database forces bootstrap instead of preserving stale rows',
+    aheadDelta.status === 200 && aheadDelta.body?.included_scopes?.includes('catalog') &&
+      aheadDelta.body?.variants?.length === snapshot.body?.variants?.length,
+    JSON.stringify(aheadDelta.body?.included_scopes),
   );
   // A terminal can be stolen, so it holds the smallest useful copy.
   check(

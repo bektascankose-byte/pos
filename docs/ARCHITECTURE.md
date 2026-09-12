@@ -284,7 +284,16 @@ Batches are ordered but not atomic: entity 7 failing does not block entities 1 t
 
 ### Downloading
 
-Registers poll `GET /v1/sync/changes?since={cursor}&scopes=catalog,prices,promos,compliance`. The cursor is the `bigserial` id from `change_log`, not a timestamp. Timestamps are wrong here for two reasons: device clocks drift, and two transactions committing at the same instant are not distinguishable.
+Registers poll `GET /v1/sync/catalog?store_id={store}&since={cursor}`. The server
+uses `change_log` to select affected register projections, reads those
+projections, and returns their cursor in one transaction. A price-only change
+therefore returns prices only; an empty `included_scopes` transfers no catalog
+rows. The separate `/sync/changes` notification endpoint remains available for
+integrations and diagnostics, but the register does not split detection from
+fetching because doing so introduces a cross-scope cursor race. The cursor is
+the `bigserial` id from `change_log`, not a timestamp. Timestamps are wrong here
+for two reasons: device clocks drift, and two transactions committing at the
+same instant are not distinguishable.
 
 There is one subtlety that most implementations get wrong. A `bigserial` value is allocated before the transaction commits, so a row with id 500 can become visible after a row with id 501. A naive reader that consumes up to `max(id)` will permanently skip row 500. The fix is to only consume rows below the transaction watermark:
 

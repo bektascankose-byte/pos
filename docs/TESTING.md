@@ -9,7 +9,7 @@
 | Row level security | `packages/db/test/rls.test.mjs` | 9 | PostgreSQL only |
 | Money and schemas | `packages/contracts/src/{money,schemas}.test.ts` | 24 | n/a |
 | Pricing conformance | `packages/pricing-spec/fixtures/*.json` | 51 cases | TypeScript + Kotlin |
-| End to end HTTP | `apps/api/scripts/e2e.mjs` | 83 | PostgreSQL only |
+| End to end HTTP | `apps/api/scripts/e2e.mjs` | 105 | PostgreSQL only |
 
 44 on PostgreSQL. 34 plus 2 skipped on PGlite.
 

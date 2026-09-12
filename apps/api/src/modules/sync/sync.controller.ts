@@ -41,7 +41,7 @@ export class SyncController {
     // produce a 200 carrying an empty roster, no prices and no stock, which a
     // register cannot tell apart from a store that genuinely has none.
     const params = catalogQuerySchema.parse(query);
-    return this.sync.catalogSnapshot(user.orgId, params.store_id);
+    return this.sync.catalogSnapshot(user.orgId, params.store_id, params.since);
   }
 
   @Get('changes')

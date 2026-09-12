@@ -20,6 +20,7 @@ android {
 dependencies {
   implementation(project(":core-domain"))
   implementation(project(":core-data"))
+  implementation(libs.room.ktx)
 
   implementation(libs.work.runtime.ktx)
   implementation(libs.hilt.android)

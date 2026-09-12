@@ -27,7 +27,10 @@ interface SnapPosApi {
 
   /** Bootstrap. Everything this store sells, in one response. */
   @GET("api/v1/sync/catalog")
-  suspend fun catalog(@Query("store_id") storeId: String): Response<CatalogSnapshot>
+  suspend fun catalog(
+    @Query("store_id") storeId: String,
+    @Query("since") since: String? = null,
+  ): Response<CatalogSnapshot>
 
   /**
    * What has changed since a cursor.
@@ -184,6 +187,7 @@ data class CatalogSnapshot(
   val inventory: List<InventoryDto>,
   val tax_rates: List<TaxRateDto>,
   val employees: List<EmployeeDto> = emptyList(),
+  val included_scopes: List<String> = listOf("catalog", "prices", "tax", "employees", "inventory"),
   val cursor: String,
   val server_time: String,
 )
