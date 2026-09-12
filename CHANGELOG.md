@@ -2,6 +2,34 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — Upload the moment the network returns
+
+### Added
+
+- **`ConnectivityWatcher`** — a default-network callback that calls `syncNow`
+  when the network becomes usable. `VALIDATED`, not merely connected: a register
+  walking back into range is associated-but-unproven for a second or two, and
+  uploading into that state burns a retry. Only a transition into usable fires
+  it, because wifi-to-mobile handover and radio re-association produce callbacks
+  while the register was online throughout.
+
+  It exists because **a satisfied constraint does not shorten a backoff**.
+  WorkManager releases constraint-blocked work as soon as connectivity returns,
+  so a register that was merely offline would have coped; a worker that already
+  failed and was rescheduled carries a timing delay that connectivity does not
+  clear, and `syncNow`'s `REPLACE` cancels it.
+
+  It does **not** cover a healthy network with a dead server — nothing changes
+  from Android's point of view, so no callback fires. That falls to the next
+  sale or the periodic job, and closing it would mean polling a server that is
+  already failing to answer.
+
+  Verified on a Galaxy S22 Ultra: airplane mode on, sale queued, airplane mode
+  off, and the log reads `network usable again; draining the outbox` followed by
+  `upload: 1 accepted, 0 duplicate, 0 rejected, 0 dead, 0 left` — on the server
+  within twelve seconds, landing exactly once, ledger in agreement, no dead
+  letters.
+
 ## Phase 2 — Receipts
 
 A receipt is described, not formatted: `ReceiptRenderer` produces an abstract

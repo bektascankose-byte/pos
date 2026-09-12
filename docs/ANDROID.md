@@ -281,6 +281,37 @@ A voided sale is not refundable — the money already went back — but the scre
 says **"HH01-R1-7 was voided"** rather than "no such sale". The receipt is in the
 cashier's hand; telling them it does not exist sends them looking for it.
 
+## Handing sales over when the network returns
+
+Three things trigger an upload, in order of how quickly they fire:
+
+1. **Committing a sale** enqueues an immediate run with `REPLACE`, which also
+   cancels any run sitting in backoff.
+2. **`ConnectivityWatcher`** calls the same thing when the default network
+   becomes usable again — `VALIDATED`, not merely connected, because a register
+   walking back into range is associated-but-unproven for a second or two and
+   uploading into that just burns a retry. Only a transition into usable fires
+   it; wifi-to-mobile handover and radio re-association produce callbacks while
+   the register was online throughout, and syncing on each would have a busy
+   till hammering the endpoint.
+3. **The periodic job**, every fifteen minutes, as the net underneath.
+
+The watcher exists because a satisfied constraint does not shorten a backoff.
+WorkManager will release constraint-blocked work the moment connectivity
+returns, so for a register that was simply offline it would have coped on its
+own — but a worker that already *failed* and was rescheduled carries a timing
+delay that connectivity does not clear. `syncNow`'s `REPLACE` cancels it.
+
+**It does not cover a healthy network with a dead server.** Nothing changes from
+Android's point of view, so no callback fires; that case falls to the next sale
+or the periodic job. Closing it properly would mean polling a server that is by
+definition already failing to answer.
+
+**Verified on a Galaxy S22 Ultra**: airplane mode on, a sale rung and queued,
+airplane mode off — `ConnectivityWatcher: network usable again; draining the
+outbox`, then `SyncWorker: upload: 1 accepted, 0 duplicate, 0 rejected, 0 dead,
+0 left`, on the server within twelve seconds and landing exactly once.
+
 ## Receipts
 
 A receipt is **described, not formatted**. `ReceiptRenderer` produces an
