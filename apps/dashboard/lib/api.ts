@@ -25,7 +25,10 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
-      "Content-Type": "application/json",
+      // Only when there's actually a body -- Fastify refuses a
+      // Content-Type: application/json request with no body at all, which
+      // every no-body DELETE (like removing a role assignment) otherwise is.
+      ...(init.body ? { "Content-Type": "application/json" } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...init.headers,
     },

@@ -94,6 +94,8 @@ function describeCheck(constraint?: string): string {
       return 'a tax exempt sale must record why';
     case 'customers_contactable':
       return 'a customer needs a phone or an email';
+    case 'users_contactable':
+      return 'an employee needs a phone or an email';
     default:
       return 'the request violates a rule the database enforces';
   }
@@ -113,6 +115,10 @@ function describeUnique(constraint?: string): string {
       return 'a customer with that phone number already exists';
     case 'customers_org_email_key':
       return 'a customer with that email already exists';
+    case 'users_org_email_key':
+      return 'an employee with that email already exists';
+    case 'users_org_code_key':
+      return 'an employee with that employee code already exists';
     default:
       return 'that record already exists';
   }

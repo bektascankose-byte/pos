@@ -2,6 +2,47 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — Back office, third slice: employee & permissions management
+
+Browse, edit, invite, and manage roles for employees from the dashboard -- the third sequenced slice.
+Scoped by the user to cover everything except editing what a role itself grants: `roles.org_id IS
+NULL` marks a system role (cashier, manager, owner, ...) as a platform default shared by every
+organization, so letting one org's admin edit what one of those grants would be a global change
+wearing a per-org settings screen. That stays out of scope; assigning and removing an employee's
+role *memberships* does not.
+
+- New `apps/api/src/modules/employees/` module: `GET /v1/employees` (list with assigned role
+  names), `GET /v1/employees/roles` (for pickers -- registered ahead of `:id` so Nest doesn't match
+  "roles" as an employee id), `GET /v1/employees/:id`, `PATCH /v1/employees/:id`
+  (COALESCE-per-column, same partial-update shape as customers and catalog), `POST
+  /v1/employees/:id/pin` (upserts `employee_pins`, resetting the failed-attempt lockout), `POST
+  /v1/employees/:id/roles` and `DELETE /v1/employees/:id/roles/:userRoleId` (assign/remove one role
+  membership), and `POST /v1/employees` to invite a brand-new employee in one transaction (user row,
+  one role assignment, optional PIN and/or dashboard password). All gated on the existing
+  `employee.view`/`employee.manage` permissions. Reuses the `phone`-or-`email` contactable rule
+  already established for customers, as its own `users_contactable` check constraint.
+- New `packages/contracts/src/employees.ts`. While wiring it up, found that `identity.ts` already
+  had an unused, incorrect `roleSchema` (wrong field names -- `code`/`is_platform` instead of the
+  real `key`/`is_system`) plus an unused, incorrect `userSchema`/`createUserSchema` (missing fields,
+  wrong status enum) that didn't match the live schema and weren't referenced anywhere in the API or
+  the Android app. Replaced them with one corrected `roleSchema` rather than routing around the
+  collision, so `identity.ts` stops being a source of wrong information about what a role or a user
+  actually looks like.
+- Dashboard: `/employees` (list), `/employees/[id]` (own-field edit, role list with remove buttons,
+  an add-role picker that excludes roles already held, and a reset-PIN form), `/employees/new`
+  (invite form: name, contact, one initial role, optional PIN/password).
+- Found and fixed a real bug during browser verification, not just in code review:
+  `apps/dashboard/lib/api.ts`'s fetch wrapper sent `Content-Type: application/json` on every
+  request, including the no-body `DELETE` that removing a role assignment is -- Fastify refuses that
+  combination outright. Confirmed via direct SQL that the failed request never reached the database
+  (no partial state), fixed the header to only be sent when there's actually a body, then re-ran the
+  same removal through the browser and confirmed it now persists.
+
+Verified end to end against the real dev database and through the dashboard's own UI in a browser:
+added and then removed a role from a seeded manager (confirming the DELETE bug above and its fix),
+and invited a brand-new employee through the "Add employee" form, confirming their user row, role
+assignment, and hashed PIN all landed correctly before removing the test data.
+
 ## Phase 2 — Back office, second slice: catalog management
 
 Browse, edit, and add products from the dashboard -- the next sequenced slice after the back

@@ -141,42 +141,22 @@ export const permissionSchema = z.object({
   description: z.string(),
 });
 
+/**
+ * A role, as read for display -- assigning one, resetting a PIN, and editing
+ * an employee's own fields live in `employees.ts`, wired to real endpoints.
+ * What a role itself grants is not editable through this API: `key` and
+ * `is_system` match `roles.key`/`roles.is_system` exactly, because a system
+ * role (`is_system`, `org_id IS NULL`) is a platform default shared by every
+ * organization, and letting one org's admin change what it grants would be a
+ * global change wearing a per-org settings screen.
+ */
 export const roleSchema = z.object({
   id: uuid,
-  code: slug,
+  key: slug,
   name: z.string().min(1).max(64),
   description: z.string().max(256).nullable(),
-  /** Null org means a platform default role, shared by every organization. */
-  is_platform: z.boolean(),
+  is_system: z.boolean(),
   permissions: z.array(z.string()),
-});
-
-export const createRoleSchema = z.object({
-  code: slug,
-  name: z.string().min(1).max(64),
-  description: z.string().max(256).optional(),
-  permissions: z.array(z.string()).default([]),
-});
-
-export const userSchema = z.object({
-  id: uuid,
-  email,
-  display_name: z.string().min(1).max(128),
-  phone: phone.nullable(),
-  status: z.enum(['active', 'inactive', 'archived']),
-  roles: z.array(z.string()),
-  last_login_at: timestamp.nullable(),
-});
-
-export const createUserSchema = z.object({
-  email,
-  display_name: z.string().min(1).max(128),
-  phone: phone.optional(),
-  password: z.string().min(12).max(256).optional(),
-  role_codes: z.array(slug).min(1),
-  store_ids: z.array(uuid).default([]),
-  /** Four to eight digits, for register unlock only. Never for the HTTP API. */
-  pin: z.string().regex(/^\d{4,8}$/).optional(),
 });
 
 export type Session = z.infer<typeof sessionSchema>;
