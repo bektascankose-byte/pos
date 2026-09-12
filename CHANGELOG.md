@@ -2,6 +2,40 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — Back office, second slice: catalog management
+
+Browse, edit, and add products from the dashboard -- the next sequenced slice after the back
+office's foundation. `updateProductSchema` and the full `productSchema` (with variants nested) had
+existed in contracts since the beginning with no endpoint behind them; this is what finally calls
+them.
+
+- New `GET /v1/catalog/products/:id` (one product, every variant, each variant's barcodes and its
+  current price at a given store -- store-specific beats org default, the same precedence
+  `scan`/`search` already used), `PATCH /v1/catalog/products/:id` and `PATCH
+  /v1/catalog/variants/:id` (both `product.update`, COALESCE-per-column partial updates, the same
+  shape as the customer endpoints from the previous slice), and `GET /v1/catalog/brands` /
+  `GET /v1/catalog/tax-categories` for the edit form's dropdowns.
+- **Price is its own action, never a field edit.** `POST /v1/catalog/variants/:id/price` inserts a
+  new `variant_prices` row and closes whatever was open before it, in that order, inside one
+  transaction -- because `variant_prices_open_regular_key` models a price as a history, not a
+  mutable column, and a plain `UPDATE` would erase the fact that a different price ever existed.
+  `updateVariantSchema` deliberately excludes price (and SKU, and barcodes) for the same reason.
+- Dashboard: `/catalog` (search, reusing the register's own search endpoint), `/catalog/[id]`
+  (product fields, and one form per variant for its own fields plus a separate price-change form),
+  `/catalog/new` (single-variant product creation, reusing `POST /catalog/products` -- which
+  already existed and needed no changes). Multi-variant products (several flavors of one item) can't
+  be created from the dashboard yet; adding a variant to an existing product is a natural next
+  addition, not built this round.
+- This app has no store switcher yet: `lib/store.ts` reads the org's first store and uses it
+  everywhere pricing needs one. Fine while the shop this ships to first has exactly one -- add a
+  real selector before a second store exists.
+
+Verified end to end against the real dev database: browsed and opened the seeded "Geek Bar Pulse X"
+product, changed one variant's price and confirmed the old `variant_prices` row closed at the exact
+instant the new one opened (no gap, no overlap) with a direct SQL query, reverted it, then created a
+brand-new single-variant product end to end and confirmed its product/variant/price/barcode rows
+all landed correctly before removing the test data.
+
 ## Phase 2 — Back office, first slice: foundation, sales dashboard, customers
 
 A back-office web app has never existed in this repo -- only the register and the API. This is the

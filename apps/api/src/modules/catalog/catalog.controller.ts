@@ -1,9 +1,12 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import {
   createProductSchema,
   productSearchSchema,
   scanSchema,
   createCategorySchema,
+  updateProductSchema,
+  updateVariantSchema,
+  setVariantPriceSchema,
 } from '@snappos/contracts';
 import { CatalogService } from './catalog.service.js';
 import { zodBody } from '../../platform/validation/zod.pipe.js';
@@ -56,5 +59,57 @@ export class CatalogController {
     @Body(zodBody(createCategorySchema)) body: ReturnType<typeof createCategorySchema.parse>,
   ) {
     return this.catalog.createCategory(user.orgId, body);
+  }
+
+  @Get('brands')
+  @RequirePermissions('product.view')
+  brands(@CurrentUser() user: AuthenticatedUser) {
+    return this.catalog.listBrands(user.orgId);
+  }
+
+  @Get('tax-categories')
+  @RequirePermissions('product.view')
+  taxCategories(@CurrentUser() user: AuthenticatedUser) {
+    return this.catalog.listTaxCategories(user.orgId);
+  }
+
+  @Get('products/:id')
+  @RequirePermissions('product.view')
+  getProduct(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Query('store_id') storeId?: string,
+  ) {
+    return this.catalog.getProduct(user.orgId, id, storeId ?? null);
+  }
+
+  @Patch('products/:id')
+  @RequirePermissions('product.update')
+  updateProduct(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(zodBody(updateProductSchema)) body: ReturnType<typeof updateProductSchema.parse>,
+  ) {
+    return this.catalog.updateProduct(user.orgId, user.userId, id, body);
+  }
+
+  @Patch('variants/:id')
+  @RequirePermissions('product.update')
+  updateVariant(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(zodBody(updateVariantSchema)) body: ReturnType<typeof updateVariantSchema.parse>,
+  ) {
+    return this.catalog.updateVariant(user.orgId, user.userId, id, body);
+  }
+
+  @Post('variants/:id/price')
+  @RequirePermissions('product.update')
+  setVariantPrice(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(zodBody(setVariantPriceSchema)) body: ReturnType<typeof setVariantPriceSchema.parse>,
+  ) {
+    return this.catalog.setVariantPrice(user.orgId, user.userId, id, body);
   }
 }

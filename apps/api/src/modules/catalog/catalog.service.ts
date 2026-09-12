@@ -1,12 +1,24 @@
 import { Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
-import type { CreateProduct, ProductSearch } from '@snappos/contracts';
+import type {
+  CreateProduct,
+  ProductSearch,
+  UpdateProduct,
+  UpdateVariant,
+  SetVariantPrice,
+} from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
+import { AuditService } from '../../platform/audit/audit.service.js';
 import { ApiException } from '../../platform/errors/api-exception.js';
+
+const NO_STORE = '00000000-0000-0000-0000-000000000000';
 
 @Injectable()
 export class CatalogService {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly audit: AuditService,
+  ) {}
 
   /**
    * Resolve a scanned barcode to exactly one sellable variant.
@@ -301,6 +313,244 @@ export class CatalogService {
          FROM categories WHERE status = 'active' ORDER BY path`,
       );
       return rows;
+    });
+  }
+
+  async listBrands(orgId: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query(
+        `SELECT id, name, brand_family, logo_url, status
+         FROM brands WHERE status = 'active' ORDER BY name`,
+      );
+      return rows;
+    });
+  }
+
+  async listTaxCategories(orgId: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query(
+        `SELECT id, code, name, description FROM tax_categories ORDER BY code`,
+      );
+      return rows;
+    });
+  }
+
+  /**
+   * One product, every variant, every variant's barcodes and its current
+   * price at `storeId` -- store specific beats org default, same precedence
+   * `scan`/`search` already use, so a variant priced differently at this
+   * store shows that price here and not the org default.
+   */
+  async getProduct(orgId: string, id: string, storeId: string | null) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows: productRows } = await tx.query(
+        `SELECT id, name, short_name, description, brand_id, category_id, tax_category_id,
+                unit_type, has_variants, variant_axes, image_url, tags, status,
+                created_at, updated_at
+         FROM products WHERE id = $1`,
+        [id],
+      );
+      const product = productRows[0];
+      if (!product) throw ApiException.notFound('product');
+
+      const { rows: complianceRows } = await tx.query(
+        `SELECT minimum_age, id_scan_required, regulated_class,
+                contains_nicotine, contains_cannabinoid, is_smokable
+         FROM product_compliance WHERE product_id = $1`,
+        [id],
+      );
+
+      const { rows: variantRows } = await tx.query<{ id: string }>(
+        `SELECT v.id, v.product_id, v.sku, v.plu, v.variant_name, v.attributes,
+                v.is_default, v.sort_order, v.cost::text, v.average_cost::text,
+                v.last_cost::text, v.case_quantity, v.pack_quantity,
+                v.reorder_point::text, v.reorder_quantity::text, v.status,
+                pr.price_minor::text
+         FROM product_variants v
+         LEFT JOIN LATERAL (
+           SELECT price_minor FROM variant_prices
+           WHERE variant_id = v.id
+             AND (store_id = $2 OR store_id IS NULL)
+             AND kind = 'regular'
+             AND effective_from <= now()
+             AND (effective_to IS NULL OR effective_to > now())
+           ORDER BY store_id NULLS LAST, effective_from DESC
+           LIMIT 1
+         ) pr ON true
+         WHERE v.product_id = $1
+         ORDER BY v.sort_order`,
+        [id, storeId],
+      );
+
+      const variantIds = variantRows.map((v) => v.id);
+      const barcodeRows = variantIds.length
+        ? (
+            await tx.query(
+              `SELECT id, variant_id, barcode, kind, units::text, is_primary
+               FROM variant_barcodes WHERE variant_id = ANY($1::uuid[])`,
+              [variantIds],
+            )
+          ).rows
+        : [];
+
+      const barcodesByVariant = new Map<string, unknown[]>();
+      for (const b of barcodeRows as { variant_id: string }[]) {
+        const list = barcodesByVariant.get(b.variant_id) ?? [];
+        list.push(b);
+        barcodesByVariant.set(b.variant_id, list);
+      }
+
+      return {
+        ...product,
+        compliance: complianceRows[0] ?? null,
+        variants: variantRows.map((v) => ({
+          ...v,
+          barcodes: barcodesByVariant.get(v.id) ?? [],
+        })),
+      };
+    });
+  }
+
+  /**
+   * Edit a product's own fields. Never touches its variants -- see
+   * `updateVariant` and `setVariantPrice` for those, kept separate the same
+   * way the schema keeps price, cost and barcodes off the product row.
+   */
+  async updateProduct(orgId: string, actorUserId: string, id: string, input: UpdateProduct) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query(
+        `UPDATE products SET
+           name            = COALESCE($2, name),
+           short_name      = COALESCE($3, short_name),
+           description     = COALESCE($4, description),
+           brand_id        = COALESCE($5, brand_id),
+           category_id     = COALESCE($6, category_id),
+           tax_category_id = COALESCE($7, tax_category_id),
+           unit_type       = COALESCE($8, unit_type),
+           tags            = COALESCE($9, tags)
+         WHERE id = $1
+         RETURNING id, name, short_name, description, brand_id, category_id, tax_category_id,
+                   unit_type, has_variants, variant_axes, image_url, tags, status,
+                   created_at, updated_at`,
+        [
+          id,
+          input.name ?? null,
+          input.short_name ?? null,
+          input.description ?? null,
+          input.brand_id ?? null,
+          input.category_id ?? null,
+          input.tax_category_id ?? null,
+          input.unit_type ?? null,
+          input.tags ?? null,
+        ],
+      );
+      const product = rows[0];
+      if (!product) throw ApiException.notFound('product');
+
+      await this.audit.record(tx, {
+        action: 'product.update',
+        entityType: 'product',
+        entityId: id,
+        actorUserId,
+        newValue: input,
+      });
+
+      return product;
+    });
+  }
+
+  /** Edit a variant's own fields -- never its price; see `setVariantPrice`. */
+  async updateVariant(orgId: string, actorUserId: string, id: string, input: UpdateVariant) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query(
+        `UPDATE product_variants SET
+           variant_name     = COALESCE($2, variant_name),
+           cost             = COALESCE($3, cost),
+           case_quantity    = COALESCE($4, case_quantity),
+           pack_quantity    = COALESCE($5, pack_quantity),
+           reorder_point    = COALESCE($6, reorder_point),
+           reorder_quantity = COALESCE($7, reorder_quantity),
+           status           = COALESCE($8, status)
+         WHERE id = $1
+         RETURNING id, product_id, sku, plu, variant_name, attributes, is_default, sort_order,
+                   cost::text, average_cost::text, last_cost::text, case_quantity, pack_quantity,
+                   reorder_point::text, reorder_quantity::text, status`,
+        [
+          id,
+          input.variant_name ?? null,
+          input.cost ?? null,
+          input.case_quantity ?? null,
+          input.pack_quantity ?? null,
+          input.reorder_point ?? null,
+          input.reorder_quantity ?? null,
+          input.status ?? null,
+        ],
+      );
+      const variant = rows[0];
+      if (!variant) throw ApiException.notFound('variant');
+
+      await this.audit.record(tx, {
+        action: 'variant.update',
+        entityType: 'product_variant',
+        entityId: id,
+        actorUserId,
+        newValue: input,
+      });
+
+      return variant;
+    });
+  }
+
+  /**
+   * Change what a variant sells for.
+   *
+   * Never a plain UPDATE. `variant_prices_open_regular_key` allows at most one
+   * open-ended regular price per (variant, store scope), which models price
+   * as a history: closing the row that was open and inserting a new one is
+   * how a price change is recorded here, the same way a sale is never edited
+   * in place elsewhere in this schema. Closing before inserting, in that
+   * order, is what keeps the unique index from ever seeing two open rows at
+   * once.
+   */
+  async setVariantPrice(
+    orgId: string,
+    actorUserId: string,
+    variantId: string,
+    input: SetVariantPrice,
+  ) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const storeId = input.store_id ?? null;
+
+      const { rows: variantRows } = await tx.query(
+        `SELECT id FROM product_variants WHERE id = $1`,
+        [variantId],
+      );
+      if (!variantRows[0]) throw ApiException.notFound('variant');
+
+      await tx.query(
+        `UPDATE variant_prices SET effective_to = now()
+         WHERE variant_id = $1 AND kind = 'regular' AND effective_to IS NULL
+           AND COALESCE(store_id, $3::uuid) = COALESCE($2::uuid, $3::uuid)`,
+        [variantId, storeId, NO_STORE],
+      );
+
+      const { rows } = await tx.query(
+        `INSERT INTO variant_prices (org_id, variant_id, store_id, kind, price_minor, created_by)
+         VALUES (current_setting('app.org_id')::uuid, $1, $2, 'regular', $3, $4)
+         RETURNING id, variant_id, store_id, kind, price_minor::text, effective_from, effective_to`,
+        [variantId, storeId, input.price_minor.toString(), actorUserId],
+      );
+      const price = rows[0]!;
+
+      await this.audit.record(tx, {
+        action: 'product.price_change',
+        entityType: 'variant_price',
+        entityId: price.id,
+        actorUserId,
+        newValue: { variant_id: variantId, store_id: storeId, price_minor: price.price_minor },
+      });
+
+      return price;
     });
   }
 }

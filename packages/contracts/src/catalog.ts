@@ -208,6 +208,46 @@ export const updateProductSchema = createProductSchema
   .omit({ variants: true })
   .partial();
 
+/**
+ * Editing an existing variant. Deliberately excludes price and barcodes:
+ * price is its own event (see `setVariantPriceSchema` -- a variant's price
+ * is a history, not a field to overwrite) and barcodes are their own
+ * sub-resource. `sku` is also excluded -- it is what the register's own
+ * receipts and reports already reference a sale line by, and changing it
+ * out from under existing history is a different, much more dangerous
+ * operation than this endpoint is for.
+ */
+export const updateVariantSchema = z.object({
+  variant_name: z.string().max(128).optional(),
+  cost: costDecimal.optional(),
+  case_quantity: z.number().int().min(1).optional(),
+  pack_quantity: z.number().int().min(1).optional(),
+  reorder_point: quantity.optional(),
+  reorder_quantity: quantity.optional(),
+  status: entityStatus.optional(),
+});
+
+/**
+ * Changing what a variant sells for. This always inserts a new
+ * `variant_prices` row and closes out whatever was open before it -- see
+ * `CatalogService.setVariantPrice` -- because the schema's own
+ * `variant_prices_open_regular_key` models price as a history, not a
+ * mutable field, and a plain UPDATE would erase the fact that a different
+ * price ever existed.
+ */
+export const setVariantPriceSchema = z.object({
+  price_minor: moneyNonNegative,
+  /** Omitted (or explicitly null) means the org-wide default price. */
+  store_id: uuid.nullable().optional(),
+});
+
+export const taxCategorySchema = z.object({
+  id: uuid,
+  code: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+});
+
 // -------------------------------------------------------------------- search
 
 export const productSearchSchema = pagination.extend({
@@ -228,4 +268,8 @@ export type Brand = z.infer<typeof brandSchema>;
 export type Product = z.infer<typeof productSchema>;
 export type Variant = z.infer<typeof variantSchema>;
 export type CreateProduct = z.infer<typeof createProductSchema>;
+export type UpdateProduct = z.infer<typeof updateProductSchema>;
+export type UpdateVariant = z.infer<typeof updateVariantSchema>;
+export type SetVariantPrice = z.infer<typeof setVariantPriceSchema>;
+export type TaxCategory = z.infer<typeof taxCategorySchema>;
 export type ProductSearch = z.infer<typeof productSearchSchema>;
