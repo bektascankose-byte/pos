@@ -102,6 +102,8 @@ function describeCheck(constraint?: string): string {
       return 'unit cost cannot be negative';
     case 'po_receipt_lines_quantity_received_check':
       return 'quantity received must be greater than zero';
+    case 'shifts_time_order':
+      return 'a shift must end after it starts';
     default:
       return 'the request violates a rule the database enforces';
   }

@@ -17,5 +17,6 @@ export * from './inventory.js';
 export * from './purchasing.js';
 export * from './reports.js';
 export * from './sales.js';
+export * from './scheduling.js';
 export * from './sync.js';
 export * from './errors.js';

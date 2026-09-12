@@ -2,6 +2,51 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — Back office, sixth slice: employee scheduling
+
+A shift roster -- assign employees to upcoming shifts so everyone knows when
+to work. Nothing in the schema answered "when is this employee supposed to
+work" before this: `time_clock_entries` (0001, still unbuilt behind any API)
+only records actual clock-in/out after the fact, and `cash_sessions` is a
+register till session, not a work schedule. Scoped by the user to a roster
+only -- time clock/timesheets stay deferred, and the register app is
+untouched; scheduling is dashboard-only for now.
+
+- New migration `0011_scheduling.sql`: a `shifts` table (`store_id`, `user_id`,
+  `starts_at`, `ends_at`, `status` (`scheduled`/`cancelled`), `note`,
+  `created_by`) plus two new permissions, `schedule.view` and
+  `schedule.manage`, granted to owner/administrator/manager (both) and
+  shift_lead (view only). Cancelling a shift is a status change, never a
+  `DELETE` -- the same reason most other entities in this schema are
+  soft-stated rather than erased -- which also means the table needs no
+  `DELETE` grant at all; 0005's blanket `SELECT`/`INSERT`/`UPDATE` already
+  covers everything it does. Overlap prevention (an employee can't be
+  double-booked) is enforced in the service layer, not a database exclusion
+  constraint -- that needs the `btree_gist` extension, which nothing else in
+  this schema uses, for a UX nicety rather than a financial or inventory
+  invariant. Updated `packages/db/test/migrate.test.mjs`'s schema-shape counts
+  for the new table, enum, foreign keys, checks, and trigger.
+- New `apps/api/src/modules/scheduling/` module: `GET /v1/scheduling/shifts`
+  (a required date range, the same reasoning as the reports module's range
+  queries -- an unbounded shift list isn't a useful roster view), `POST
+  /v1/scheduling/shifts`, `PATCH /v1/scheduling/shifts/:id` (time and note
+  only -- moving a shift to a different employee or store is a
+  cancel-and-recreate, not an edit), and `POST
+  /v1/scheduling/shifts/:id/cancel`.
+- Dashboard: `/scheduling`, a week-at-a-time grid (employee rows × day
+  columns, previous/next week navigation) with an add-shift form and a cancel
+  button per shift. Built with the same plain server-rendered forms as every
+  other page in this app -- no client components, no client-side date-picker
+  library.
+
+Verified against the real dev database and through the dashboard's own UI:
+created a shift through the schedule grid, confirmed an overlapping shift for
+the same employee was rejected with a clear error, rescheduled it, cancelled
+it through the UI, and confirmed via direct SQL that the row stayed in the
+table with `status = 'cancelled'` rather than disappearing. Re-ran the full
+Postgres and PGlite schema suites after the migration to confirm the updated
+table/foreign-key/enum/check/trigger counts are exactly right.
+
 ## Phase 2 — Back office, fifth slice: inventory management
 
 Stock levels, manual adjustments, movement history, and a full purchase-order
