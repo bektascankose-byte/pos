@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master, refunds-and-voids-on-device]
   pull_request:
 
 concurrency:
