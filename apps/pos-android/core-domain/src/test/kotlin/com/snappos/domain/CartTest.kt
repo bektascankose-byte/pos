@@ -212,6 +212,25 @@ class CartTest {
   }
 
   @Test
+  fun `cart discount cannot make the cart negative`() {
+    val cart = Cart.EMPTY.addItem("a", "v1", "Item", "SKU", Money.fromMajor("10.00"))
+    assertEquals("8.00", cart.applyCartDiscount(Money.fromMajor("2.00"), "coupon").total.toMajorString())
+    assertThrows(IllegalArgumentException::class.java) {
+      cart.applyCartDiscount(Money.fromMajor("10.01"), "invalid")
+    }
+  }
+
+  @Test
+  fun `price override cannot undercut an existing line discount`() {
+    val cart = Cart.EMPTY
+      .addItem("a", "v1", "Item", "SKU", Money.fromMajor("10.00"))
+      .discountLine("a", Money.fromMajor("6.00"), "courtesy")
+    assertThrows(IllegalArgumentException::class.java) {
+      cart.overridePrice("a", Money.fromMajor("5.00"), "manager", "override")
+    }
+  }
+
+  @Test
   fun `a zero quantity line cannot be constructed`() {
     assertThrows(IllegalArgumentException::class.java) {
       CartLine(

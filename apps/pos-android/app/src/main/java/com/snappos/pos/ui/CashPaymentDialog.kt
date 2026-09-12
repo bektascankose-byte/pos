@@ -59,6 +59,13 @@ fun CashPaymentDialog(
   /** "Total due" when taking a tender, "Expected" when counting a drawer. */
   title: String = "Total due",
   confirmLabel: String = "TAKE CASH",
+  /**
+   * Null when this dialog is reused for counting a drawer, which has no tender
+   * to split. Otherwise, swap to [SplitPaymentDialog] instead of committing a
+   * single cash tender — a link rather than a second button, so it costs no
+   * extra height on the already-tight compact layout.
+   */
+  onSplitPayment: (() -> Unit)? = null,
 ) {
   // Digits as typed, interpreted as minor units: typing 5 0 0 0 means $50.00.
   // Cashiers on every POS enter cash this way, and a decimal point is a keypress
@@ -95,6 +102,9 @@ fun CashPaymentDialog(
               QuickCashRow(total) { digits = it }
               Spacer(Modifier.weight(1f))
               Actions(sufficient || counting, confirmLabel, onDismiss) { onConfirm(tendered) }
+              onSplitPayment?.let { split ->
+                TextButton(onClick = split, modifier = Modifier.fillMaxWidth()) { Text("Split payment") }
+              }
             }
             Box(Modifier.weight(1f)) {
               Keypad(
@@ -117,6 +127,9 @@ fun CashPaymentDialog(
             )
             Spacer(Modifier.height(Space.M.dp))
             Actions(sufficient || counting, confirmLabel, onDismiss) { onConfirm(tendered) }
+            onSplitPayment?.let { split ->
+              TextButton(onClick = split, modifier = Modifier.fillMaxWidth()) { Text("Split payment") }
+            }
           }
         }
       }
@@ -217,8 +230,9 @@ private fun RowScope.QuickCash(label: String, modifier: Modifier = Modifier, onC
   }
 }
 
+/** Internal, not private: [SplitPaymentDialog] reuses this same keypad for each tender it adds. */
 @Composable
-private fun Keypad(onDigit: (String) -> Unit, onBackspace: () -> Unit, onClear: () -> Unit) {
+internal fun Keypad(onDigit: (String) -> Unit, onBackspace: () -> Unit, onClear: () -> Unit) {
   val rows = listOf(
     listOf("1", "2", "3"),
     listOf("4", "5", "6"),

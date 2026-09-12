@@ -11,6 +11,7 @@ import com.snappos.data.dao.EmployeeDao
 import com.snappos.data.dao.OutboxDao
 import com.snappos.data.dao.RefundsDao
 import com.snappos.data.dao.SalesDao
+import com.snappos.data.dao.HoldsDao
 import com.snappos.data.entities.AgeVerificationEntity
 import com.snappos.data.entities.CashMovementEntity
 import com.snappos.data.entities.CashSessionEntity
@@ -27,6 +28,8 @@ import com.snappos.data.entities.RegisterConfigEntity
 import com.snappos.data.entities.SaleEntity
 import com.snappos.data.entities.SaleLineEntity
 import com.snappos.data.entities.VariantEntity
+import com.snappos.data.entities.HeldCartEntity
+import com.snappos.data.entities.HeldCartLineEntity
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 
 @Database(
@@ -47,8 +50,10 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
     CashMovementEntity::class,
     RefundEntity::class,
     RefundLineEntity::class,
+    HeldCartEntity::class,
+    HeldCartLineEntity::class,
   ],
-  version = 3,
+  version = 4,
   exportSchema = true,
 )
 abstract class SnapPosDatabase : RoomDatabase() {
@@ -59,6 +64,7 @@ abstract class SnapPosDatabase : RoomDatabase() {
   abstract fun config(): ConfigDao
   abstract fun cash(): CashDao
   abstract fun refunds(): RefundsDao
+  abstract fun holds(): HoldsDao
 
   companion object {
     const val NAME = "snappos.db"

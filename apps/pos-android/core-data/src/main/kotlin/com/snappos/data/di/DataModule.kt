@@ -10,6 +10,7 @@ import com.snappos.data.dao.EmployeeDao
 import com.snappos.data.dao.OutboxDao
 import com.snappos.data.dao.RefundsDao
 import com.snappos.data.dao.SalesDao
+import com.snappos.data.dao.HoldsDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -46,4 +47,6 @@ object DataModule {
   @Provides fun cashDao(db: SnapPosDatabase): CashDao = db.cash()
 
   @Provides fun refundsDao(db: SnapPosDatabase): RefundsDao = db.refunds()
+
+  @Provides fun holdsDao(db: SnapPosDatabase): HoldsDao = db.holds()
 }

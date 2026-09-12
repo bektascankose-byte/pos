@@ -37,7 +37,8 @@ On compact landscape devices, the category and cart columns use fixed operationa
 - `CartRow`: selectable line with quantity controls, line total, and age state.
 - `RegisterAction`: secondary cart action with permission enforced below the UI.
 - `DiscountDialog`: bounded amount and required reason code.
-- `OverridePriceDialog`: manager-PIN-authorized, bounded at zero or above.
+- `OverridePriceDialog`: permission-gated on the signed-in cashier, bounded at zero or above.
+- `SplitPaymentDialog`: multiple tenders covering one sale; cash makes change, everything else is exact.
 - `AgeGate`: blocking compliance action shown before payment.
 - `UnlockScreen`: offline-capable employee selection and private PIN entry.
 
@@ -51,4 +52,4 @@ On compact landscape devices, the category and cart columns use fixed operationa
 
 ## Planned Functional Surfaces
 
-The next register milestones are durable hold/resume, customer attachment, manager-authorized tax exemption, configurable quick keys, split tender, and hardware status. Manager-authorized price override shipped: see `RegisterViewModel.requestPriceOverride` and `OverridePriceDialog`. Each remaining item is added only with persistence, permission checks, audit data, and offline behavior implemented.
+The next register milestones are customer attachment, configurable quick keys, and hardware status. Durable hold/resume, manager-authorized tax exemption, cashier-authorized price override, and split tender have shipped: see `RegisterViewModel.holdCart`/`resumeHeldCart`, `requestTaxExemption`/`approveTaxExemption`, `overridePrice`, and `paySplit` with `SplitPaymentDialog`. Each remaining item is added only with persistence, permission checks, audit data, and offline behavior implemented.

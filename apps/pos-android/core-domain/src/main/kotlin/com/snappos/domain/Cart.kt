@@ -293,18 +293,28 @@ data class Cart(
     copy(
       lines = lines.map {
         if (it.id != lineId) it
-        else it.copy(
-          unitPrice = newPrice,
-          priceOverriddenBy = authorizedBy,
-          overrideReason = reason,
-        )
+        else {
+          require(!newPrice.isNegative) { "price cannot be negative" }
+          require(it.discount <= newPrice * it.quantity) {
+            "new price cannot be lower than discounts already applied"
+          }
+          it.copy(
+            unitPrice = newPrice,
+            priceOverriddenBy = authorizedBy,
+            overrideReason = reason,
+          )
+        }
       },
     )
 
   fun markAgeVerified(): Cart = copy(lines = lines.map { it.copy(ageVerified = true) })
 
-  fun applyCartDiscount(amount: Money, reason: String): Cart =
-    copy(cartDiscount = CartDiscount(amount, reason))
+  fun applyCartDiscount(amount: Money, reason: String): Cart {
+    require(!amount.isZero && !amount.isNegative) { "discount must be greater than zero" }
+    val available = Money.sum(lines.map { it.taxable })
+    require(amount <= available) { "discount cannot exceed the cart amount" }
+    return copy(cartDiscount = CartDiscount(amount, reason))
+  }
 
   fun clearCartDiscount(): Cart = copy(cartDiscount = null)
 
@@ -313,6 +323,10 @@ data class Cart(
   fun withCustomer(id: String?): Cart = copy(customerId = id)
 
   fun exemptTax(reason: String): Cart = copy(taxExempt = true, taxExemptReason = reason)
+
+  fun clearTaxExemption(): Cart = copy(taxExempt = false, taxExemptReason = null)
+
+  fun withNote(note: String?): Cart = copy(note = note?.trim()?.takeIf { it.isNotEmpty() })
 
   companion object {
     val EMPTY = Cart()

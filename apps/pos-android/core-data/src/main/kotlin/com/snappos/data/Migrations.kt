@@ -96,5 +96,58 @@ object Migrations {
     }
   }
 
-  val ALL = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+  /** 3 -> 4: unpaid carts that survive process death, restart and connectivity loss. */
+  val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+      db.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS held_carts (
+          id TEXT NOT NULL PRIMARY KEY,
+          label TEXT NOT NULL,
+          cashierUserId TEXT NOT NULL,
+          customerId TEXT,
+          taxExempt INTEGER NOT NULL,
+          taxExemptReason TEXT,
+          note TEXT,
+          cartDiscountMinor INTEGER,
+          cartDiscountReason TEXT,
+          tipMinor INTEGER NOT NULL,
+          createdAtMillis INTEGER NOT NULL,
+          updatedAtMillis INTEGER NOT NULL
+        )
+        """.trimIndent(),
+      )
+      db.execSQL("CREATE INDEX IF NOT EXISTS index_held_carts_updatedAtMillis ON held_carts (updatedAtMillis)")
+      db.execSQL("CREATE INDEX IF NOT EXISTS index_held_carts_cashierUserId ON held_carts (cashierUserId)")
+      db.execSQL(
+        """
+        CREATE TABLE IF NOT EXISTS held_cart_lines (
+          id TEXT NOT NULL PRIMARY KEY,
+          heldCartId TEXT NOT NULL,
+          lineNo INTEGER NOT NULL,
+          variantId TEXT NOT NULL,
+          description TEXT NOT NULL,
+          sku TEXT NOT NULL,
+          quantity INTEGER NOT NULL,
+          unitPriceMinor INTEGER NOT NULL,
+          catalogPriceMinor INTEGER NOT NULL,
+          unitCost TEXT NOT NULL,
+          taxRate TEXT NOT NULL,
+          taxCategoryId TEXT,
+          barcodeScanned TEXT,
+          adjustmentsJson TEXT NOT NULL,
+          priceOverriddenBy TEXT,
+          overrideReason TEXT,
+          minimumAge INTEGER,
+          idScanRequired INTEGER NOT NULL,
+          ageVerified INTEGER NOT NULL
+        )
+        """.trimIndent(),
+      )
+      db.execSQL("CREATE INDEX IF NOT EXISTS index_held_cart_lines_heldCartId ON held_cart_lines (heldCartId)")
+      db.execSQL("CREATE INDEX IF NOT EXISTS index_held_cart_lines_variantId ON held_cart_lines (variantId)")
+    }
+  }
+
+  val ALL = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
 }

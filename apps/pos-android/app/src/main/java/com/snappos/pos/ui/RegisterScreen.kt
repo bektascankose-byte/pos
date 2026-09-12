@@ -43,6 +43,9 @@ import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Percent
 import androidx.compose.material.icons.filled.AttachMoney
+import androidx.compose.material.icons.filled.PauseCircle
+import androidx.compose.material.icons.filled.LocalOffer
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -135,10 +138,16 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
   }
 
   var showPayment by remember { mutableStateOf(false) }
+  var showSplitPayment by remember { mutableStateOf(false) }
   var showClose by remember { mutableStateOf(false) }
   var selectedLineId by remember { mutableStateOf<String?>(null) }
   var showDiscount by remember { mutableStateOf(false) }
+  var showCartDiscount by remember { mutableStateOf(false) }
   var showOverridePrice by remember { mutableStateOf(false) }
+  var showHold by remember { mutableStateOf(false) }
+  var showHeldSales by remember { mutableStateOf(false) }
+  var showSaleDetails by remember { mutableStateOf(false) }
+  var showLineActions by remember { mutableStateOf(false) }
   var confirmClear by remember { mutableStateOf(false) }
 
   val syncState = when {
@@ -159,6 +168,8 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
         onRefund = viewModel::startRefund,
         onReceipt = viewModel::showReceipt,
         hasReceipt = state.lastReceipt != null,
+        heldCount = state.heldCarts.size,
+        onHeldSales = { showHeldSales = true },
       )
       HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 
@@ -197,10 +208,16 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
             onVerifyAge = viewModel::confirmAgeVerified,
             onPay = { showPayment = true },
             selectedLineId = selectedLineId,
-            onSelectLine = { selectedLineId = it },
+            onSelectLine = {
+              selectedLineId = it
+              showLineActions = true
+            },
             onDiscount = { showDiscount = true },
+            onCartDiscount = { showCartDiscount = true },
             onOverridePrice = { showOverridePrice = true },
             onClear = { confirmClear = true },
+            onHold = { showHold = true },
+            onSaleDetails = { showSaleDetails = true },
             modifier = Modifier.width(if (compact) 280.dp else 340.dp).fillMaxHeight(),
           )
         }
@@ -237,6 +254,21 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
         showPayment = false
         viewModel.payCash(tendered)
       },
+      onSplitPayment = {
+        showPayment = false
+        showSplitPayment = true
+      },
+    )
+  }
+
+  if (showSplitPayment) {
+    SplitPaymentDialog(
+      total = state.cart.total,
+      onDismiss = { showSplitPayment = false },
+      onConfirm = { tenders ->
+        showSplitPayment = false
+        viewModel.paySplit(tenders)
+      },
     )
   }
 
@@ -245,6 +277,7 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
       DiscountDialog(
         lineName = line.description,
         maximum = line.gross - line.discount,
+        basis = line.gross,
         onDismiss = { showDiscount = false },
         onApply = { amount, reason ->
           viewModel.discountLine(line.id, amount, reason)
@@ -254,6 +287,33 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
     } ?: run { showDiscount = false }
   }
 
+  if (showLineActions) {
+    state.cart.lines.firstOrNull { it.id == selectedLineId }?.let { line ->
+      LineActionsDialog(
+        lineName = line.description,
+        onDismiss = { showLineActions = false },
+        onDiscount = { showLineActions = false; showDiscount = true },
+        onOverride = { showLineActions = false; showOverridePrice = true },
+      )
+    } ?: run { showLineActions = false }
+  }
+
+  if (showCartDiscount) {
+    val available = Money.sum(state.cart.lines.map { it.taxable })
+    DiscountDialog(
+      title = "Discount entire sale",
+      lineName = "Applies proportionally across every item for accurate tax and refunds.",
+      maximum = available,
+      basis = available,
+      allowTarget = true,
+      onDismiss = { showCartDiscount = false },
+      onApply = { amount, reason ->
+        viewModel.discountCart(amount, reason)
+        showCartDiscount = false
+      },
+    )
+  }
+
   if (showOverridePrice) {
     state.cart.lines.firstOrNull { it.id == selectedLineId }?.let { line ->
       OverridePriceDialog(
@@ -261,18 +321,60 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
         currentPrice = line.unitPrice,
         onDismiss = { showOverridePrice = false },
         onApply = { newPrice, reason ->
-          viewModel.requestPriceOverride(line.id, newPrice, reason)
+          viewModel.overridePrice(line.id, newPrice, reason)
           showOverridePrice = false
         },
       )
     } ?: run { showOverridePrice = false }
   }
 
-  // A price override is requested from the selling stage, not the refund
-  // stage, so it needs its own mount of the same approval prompt refunds and
-  // voids use — otherwise the manager PIN prompt would have nowhere to render.
+  if (showHold) {
+    HoldSaleDialog(
+      onDismiss = { showHold = false },
+      onHold = { label ->
+        showHold = false
+        selectedLineId = null
+        viewModel.holdCart(label)
+      },
+    )
+  }
+
+  if (showHeldSales) {
+    HeldSalesDialog(
+      held = state.heldCarts,
+      onDismiss = { showHeldSales = false },
+      onResume = { id ->
+        showHeldSales = false
+        selectedLineId = null
+        viewModel.resumeHeldCart(id)
+      },
+    )
+  }
+
+  if (showSaleDetails) {
+    SaleDetailsDialog(
+      currentNote = state.cart.note,
+      currentlyTaxExempt = state.cart.taxExempt,
+      onDismiss = { showSaleDetails = false },
+      onSave = { note, exempt, reason ->
+        showSaleDetails = false
+        viewModel.setSaleNote(note)
+        when {
+          exempt && !state.cart.taxExempt -> viewModel.requestTaxExemption(reason)
+          !exempt && state.cart.taxExempt -> viewModel.clearTaxExemption()
+        }
+      },
+    )
+  }
+
+  // Tax exemption is requested from the selling stage, not the refund stage,
+  // so it needs its own mount of the same approval prompt refunds and voids
+  // use — otherwise the manager PIN prompt would have nowhere to render. A
+  // price override no longer goes through this: it applies immediately,
+  // gated on sale.price_override like a line discount is gated on
+  // sale.discount_line, not on a manager PIN.
   state.approvalPrompt?.let { prompt ->
-    if (state.approvalKind == ApprovalKind.PriceOverride) {
+    if (state.approvalKind == ApprovalKind.TaxExemption) {
       ApprovalDialog(
         action = prompt,
         error = state.approvalError,
@@ -313,6 +415,8 @@ private fun RegisterHeader(
   onRefund: () -> Unit,
   onReceipt: () -> Unit,
   hasReceipt: Boolean,
+  heldCount: Int,
+  onHeldSales: () -> Unit,
 ) {
   Row(
     Modifier
@@ -345,6 +449,7 @@ private fun RegisterHeader(
     if (hasReceipt) {
       IconButton(onClick = onReceipt) { Icon(Icons.AutoMirrored.Filled.ReceiptLong, "Last receipt") }
     }
+    TextButton(onClick = onHeldSales) { Text("Holds${if (heldCount > 0) " ($heldCount)" else ""}") }
     TextButton(onClick = onRefund) { Text("Returns") }
     TextButton(onClick = onCloseDrawer) { Text("Close shift") }
     IconButton(onClick = onLock) { Icon(Icons.Default.Lock, "Lock register") }
@@ -522,8 +627,11 @@ private fun CartPanel(
   selectedLineId: String?,
   onSelectLine: (String) -> Unit,
   onDiscount: () -> Unit,
+  onCartDiscount: () -> Unit,
   onOverridePrice: () -> Unit,
   onClear: () -> Unit,
+  onHold: () -> Unit,
+  onSaleDetails: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   Column(modifier.background(MaterialTheme.colorScheme.surface)) {
@@ -539,17 +647,31 @@ private fun CartPanel(
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
       }
-      if (compact) {
-        Row {
-          IconButton(onClick = onDiscount, enabled = selectedLineId != null) {
-            Icon(Icons.Default.Percent, "Discount selected item")
-          }
-          IconButton(onClick = onOverridePrice, enabled = selectedLineId != null) {
-            Icon(Icons.Default.AttachMoney, "Override selected item's price")
-          }
-          IconButton(onClick = onClear, enabled = !cart.isEmpty) {
-            Icon(Icons.Default.RestartAlt, "Clear sale")
-          }
+    }
+    if (compact) {
+      // A row of its own, not squeezed onto the title's line. Four 48dp
+      // minimum touch targets plus the title text do not both fit inside a
+      // 280dp panel: crammed onto one line, the last icon silently clipped
+      // off the edge of the screen with no error and no way to reach it —
+      // "Sale notes and tax exemption" was unreachable on every compact
+      // device before this. Splitting the rows costs one line of height and
+      // guarantees every action stays reachable regardless of how many are
+      // ever added.
+      Row(
+        Modifier.fillMaxWidth().padding(horizontal = Space.S.dp, vertical = Space.XS.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+      ) {
+        IconButton(onClick = onHold, enabled = !cart.isEmpty) {
+          Icon(Icons.Default.PauseCircle, "Hold current sale")
+        }
+        IconButton(onClick = onCartDiscount, enabled = !cart.isEmpty) {
+          Icon(Icons.Default.LocalOffer, "Discount entire sale")
+        }
+        IconButton(onClick = onClear, enabled = !cart.isEmpty) {
+          Icon(Icons.Default.RestartAlt, "Clear sale")
+        }
+        IconButton(onClick = onSaleDetails) {
+          Icon(Icons.Default.MoreVert, "Sale notes and tax exemption")
         }
       }
     }
@@ -561,10 +683,24 @@ private fun CartPanel(
         horizontalArrangement = Arrangement.spacedBy(Space.XS.dp),
       ) {
         RegisterAction(
+          label = "Hold",
+          icon = { Icon(Icons.Default.PauseCircle, null) },
+          enabled = !cart.isEmpty,
+          onClick = onHold,
+          modifier = Modifier.weight(1f),
+        )
+        RegisterAction(
           label = "Discount",
           icon = { Icon(Icons.Default.Percent, null) },
           enabled = selectedLineId != null,
           onClick = onDiscount,
+          modifier = Modifier.weight(1f),
+        )
+        RegisterAction(
+          label = "Cart off",
+          icon = { Icon(Icons.Default.LocalOffer, null) },
+          enabled = !cart.isEmpty,
+          onClick = onCartDiscount,
           modifier = Modifier.weight(1f),
         )
         RegisterAction(
@@ -579,6 +715,13 @@ private fun CartPanel(
           icon = { Icon(Icons.Default.RestartAlt, null) },
           enabled = !cart.isEmpty,
           onClick = onClear,
+          modifier = Modifier.weight(1f),
+        )
+        RegisterAction(
+          label = "Details",
+          icon = { Icon(Icons.Default.MoreVert, null) },
+          enabled = true,
+          onClick = onSaleDetails,
           modifier = Modifier.weight(1f),
         )
       }

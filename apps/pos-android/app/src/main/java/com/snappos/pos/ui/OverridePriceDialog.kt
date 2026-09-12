@@ -22,12 +22,12 @@ import com.snappos.domain.Money
 /**
  * Change what a line rings up at.
  *
- * A manager PIN authorizes this every time — see `RegisterViewModel`'s
- * `requestPriceOverride`, which never checks the signed-in cashier's own
- * permissions the way the discount dialog does. This dialog only bounds the
- * amount at zero or above; the domain enforces the same thing again on
- * `Cart.overridePrice`, and a name has to be attached before either check
- * matters.
+ * Applied immediately on the signed-in cashier's own permission — see
+ * `RegisterViewModel.overridePrice`, gated on `sale.price_override` the same
+ * way a line discount is gated on `sale.discount_line`. No manager PIN. This
+ * dialog only bounds the amount at zero or above; the domain enforces the
+ * same thing again on `Cart.overridePrice`, and the signed-in cashier's own
+ * name is what gets attached as the authorizer either way.
  */
 @Composable
 fun OverridePriceDialog(
@@ -68,7 +68,7 @@ fun OverridePriceDialog(
     },
     confirmButton = {
       Button(onClick = { onApply(parsed!!, reason.trim()) }, enabled = valid) {
-        Text("Request approval")
+        Text("Override price")
       }
     },
     dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Cancel") } },
