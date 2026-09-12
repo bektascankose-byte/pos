@@ -13,6 +13,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <Link href="/" className="rounded-md px-3 py-2 hover:bg-[var(--color-bg)]">
             Dashboard
           </Link>
+          <Link href="/reports" className="rounded-md px-3 py-2 hover:bg-[var(--color-bg)]">
+            Reports
+          </Link>
           <Link href="/customers" className="rounded-md px-3 py-2 hover:bg-[var(--color-bg)]">
             Customers
           </Link>

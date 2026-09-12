@@ -2,6 +2,49 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — Back office, fourth slice: reports and dashboards
+
+The foundation slice's home page only ever showed "today" -- no date range, no
+breakdown beyond a flat list of the last 20 sales. This slice adds a real
+`/reports` page: any custom date range (plus Today/Last 7 days/Last 30 days
+presets), a daily gross-sales trend chart, and three breakdowns -- top
+products (by revenue, not unit count, so a $1 item selling 500 units doesn't
+outrank the case that pays the rent), by cashier, and by payment method.
+CSV export was scoped out of this pass to keep it focused on in-browser
+reporting; the underlying queries are already row-level, so exporting them is
+a fast follow-up whenever it's wanted.
+
+- New `packages/contracts/src/reports.ts` additions: `reportRangeQuerySchema`
+  (`store_id?`, `from`, `to` -- required, unlike the existing summary query's
+  optional range, because a trend or breakdown with no bound is not a useful
+  report), and one schema each for a trend point, a top-product row, a
+  by-cashier row, and a by-payment-method row (reusing the existing
+  `paymentMethod` enum from `sales.ts` rather than redeclaring it).
+- Four new `GET /v1/reports/sales/*` endpoints (`trend`, `top-products`,
+  `by-cashier`, `by-payment-method`), all gated on the same `report.sales`
+  permission the existing summary endpoint uses, all following its exact
+  shape: `DatabaseService.withOrg` for RLS-scoped queries, money summed as
+  `bigint`-safe strings, and the `($n::type IS NULL OR col = $n)` optional-filter
+  idiom instead of building SQL by hand. Top products joins `sale_lines` through
+  `product_variants`/`products`/`categories` (a real materialized-path table,
+  not a text field); by-payment-method joins `payments` to `sales` and requires
+  `status = 'captured'` on a real sale (`sale_id IS NOT NULL`) so a pending,
+  failed, or refund-side payment doesn't get counted as tendered revenue.
+- Dashboard: `/reports`, added to the nav. A plain `<form method="get">` date
+  range plus preset links -- no client-side state, consistent with the rest of
+  the app's server-rendered-forms approach. The trend chart is a small inline
+  SVG bar chart rather than a charting library dependency, since it's one bar
+  per day with no interaction beyond a hover tooltip.
+
+Verified against the real dev database: the four new endpoints' totals
+cross-checked exactly against each other for the same range (trend, by-cashier,
+and by-payment-method gross all summed to the same $637.83), matching what a
+direct SQL aggregate over the seeded sales confirmed independently. Verified
+through the dashboard's own UI in a browser: the default 7-day range, the
+"Today" preset (correctly empty, matching the home page's own "today" card),
+and a custom range submitted through the date-picker form all rendered the
+right numbers.
+
 ## Phase 2 — Back office, third slice: employee & permissions management
 
 Browse, edit, invite, and manage roles for employees from the dashboard -- the third sequenced slice.
