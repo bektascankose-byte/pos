@@ -505,13 +505,21 @@ export class SyncService {
       }>(
         // <= rather than <: the watermark function already returns the last id
         // that is safe to hand out (min in-flight id minus one).
+        // ORDER BY is qualified on purpose. `SELECT id::text` produces an
+        // output column also called `id`, and a bare `ORDER BY id` binds to the
+        // output column ahead of the table's — sorting the cursor as *text*.
+        // That gives 1, 10, 11, ... 2, 20, so `LIMIT` returns an arbitrary
+        // subset and a register paging with `since` skips changes permanently:
+        // a price change or a new product no till ever hears about, with
+        // nothing reporting a fault. `change_log.id` cannot match an output
+        // alias, so it sorts the bigint.
         `SELECT id::text, entity_type, entity_id, op, payload_hash
          FROM change_log
          WHERE id > $1::bigint
            AND id <= sync_changes_watermark()
            AND ($2::uuid IS NULL OR store_id IS NULL OR store_id = $2)
            AND ($3::text[] IS NULL OR $3::text[] @> ARRAY[entity_type])
-         ORDER BY id
+         ORDER BY change_log.id
          LIMIT $4`,
         [
           params.since,

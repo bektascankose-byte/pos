@@ -418,6 +418,90 @@ check(
     JSON.stringify(changes.body),
   );
 
+  // The feed has to actually report things. Until migration 0008 nothing wrote
+  // to change_log, so this endpoint answered "nothing changed" forever and a
+  // register had no way to learn about a price change except to pull the whole
+  // catalog again.
+  check(
+    'the seed produced changes to report',
+    changes.body?.changes?.length > 0,
+    `${changes.body?.changes?.length} changes, cursor ${changes.body?.next_cursor}`,
+  );
+  check(
+    'a change names what changed and carries a hash',
+    changes.body?.changes?.every(
+      (c) => c.entity_type && c.entity_id && c.op && c.scope && c.payload_hash,
+    ),
+    JSON.stringify(changes.body?.changes?.[0]),
+  );
+
+  // Paging: a page smaller than the backlog reports more to come, and the
+  // cursor it hands back is where the next page starts.
+  check(
+    'a partial page says there is more',
+    changes.body?.has_more === true,
+    JSON.stringify({ n: changes.body?.changes?.length, more: changes.body?.has_more }),
+  );
+
+  // The cursor is held below any change whose transaction might still be in
+  // flight, and that is the single most important property of this feed.
+  //
+  // A bigserial is allocated before its transaction commits, so row 500 can
+  // become visible after row 501. A reader that consumed up to max(id) would
+  // skip row 500 permanently — a price change or a new product that no register
+  // ever hears about, with nothing anywhere reporting a problem. The watermark
+  // trades re-delivery for that: the same change may arrive twice, which is
+  // harmless because applying it is idempotent, and none is ever missed.
+  //
+  // So this asserts the cursor never runs ahead of what was delivered. It
+  // deliberately does *not* assert that resuming returns nothing: immediately
+  // after a reset every row still looks recent, and the conservative answer is
+  // the correct one.
+  const drained = await api('/api/v1/sync/changes?since=0&limit=1000', {
+    token: cashierToken,
+  });
+  const ids = (drained.body?.changes ?? []).map((c) => Number(c.id));
+  check(
+    'changes arrive in cursor order',
+    ids.every((id, i) => i === 0 || id > ids[i - 1]),
+    `n=${ids.length} ${JSON.stringify(ids.slice(0, 12))}`,
+  );
+  check(
+    'the cursor is never handed out past a change that might still be in flight',
+    ids.length > 0 && Number(drained.body?.next_cursor) <= Math.max(...ids),
+    `cursor ${drained.body?.next_cursor}, highest delivered ${Math.max(...ids)}`,
+  );
+
+  const scoped = await api('/api/v1/sync/changes?since=0&scopes=prices&limit=50', {
+    token: cashierToken,
+  });
+  check(
+    'a register can ask for one scope and gets only that scope',
+    scoped.body?.changes?.length > 0 &&
+      scoped.body.changes.every((c) => c.scope === 'prices'),
+    JSON.stringify(scoped.body?.changes?.map((c) => c.scope)),
+  );
+
+  // Signing in writes users.last_login_at. Without the ignored-column rule that
+  // would mark the whole employees scope dirty on the most frequent write in
+  // the system — every register refetching its roster because somebody logged
+  // in, on the very feed that exists to avoid pointless refetching.
+  const beforeLogin = await api('/api/v1/sync/changes?since=0&limit=1000', {
+    token: cashierToken,
+  });
+  await api('/api/v1/auth/login', {
+    method: 'POST',
+    body: { email: 'cashier@hhsmoke.test', password: PASSWORD },
+  });
+  const afterLogin = await api('/api/v1/sync/changes?since=0&limit=1000', {
+    token: cashierToken,
+  });
+  check(
+    'signing in does not report a change',
+    afterLogin.body?.next_cursor === beforeLogin.body?.next_cursor,
+    `cursor ${beforeLogin.body?.next_cursor} -> ${afterLogin.body?.next_cursor}`,
+  );
+
   const registers = await api('/api/v1/registers', { token: ownerToken });
   const registerId = registers.body?.data?.[0]?.id;
 

@@ -2,6 +2,49 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — The incremental change feed, populated
+
+`change_log`, its cursor index, `sync_changes_watermark()` and
+`GET /v1/sync/changes` all existed. **Nothing ever wrote a row**, so the feed was
+a skeleton: a register asking what changed was always told "nothing", and the
+only way to learn about a price change was to pull the whole catalog again.
+
+### Added
+
+- **Migration 0008** — one parameterised `log_change()` trigger function and
+  twelve triggers, on the tables a register actually replicates. One function
+  rather than twelve near-identical ones, because those drift, and the way they
+  drift is that one quietly stops logging and a till stops hearing about a
+  category nobody can explain.
+- **Ignored columns.** `updated_at` is stripped on every table, because a
+  `_touch` trigger bumps it on every update — leaving it in means no two
+  versions of a row ever compare equal, the suppression never fires, and the
+  hash changes when the content did not. `users.last_login_at` is stripped too:
+  every sign-in writes it, so without this every sign-in marked the whole
+  `employees` scope dirty for every register in the store. A false positive on
+  the most frequent write in the system, on the very feed that exists to avoid
+  pointless refetching.
+- **`inventory_levels` is deliberately not tracked.** It changes on every line
+  of every sale at every register, so the feed would be almost entirely
+  inventory churn — and the register treats stock as advisory, shown so a
+  cashier can answer "have we got more", explicitly not gating a sale. Stock
+  arrives with the bootstrap snapshot instead.
+
+### Fixed
+
+- **The change feed returned its pages in the wrong order.** The query was
+  `SELECT id::text ... ORDER BY id`, and a bare `ORDER BY id` binds to the
+  *output* column — the text cast — ahead of the table's bigint. So the cursor
+  sorted lexicographically: 1, 10, 11, … 19, 2, 20. With a `LIMIT` that returns
+  an arbitrary subset, and a register paging with `since` would skip changes
+  **permanently** — a price change or a new product that no till ever hears
+  about, with nothing anywhere reporting a fault. Exactly the class of silent
+  loss the watermark exists to prevent, reintroduced one line below it.
+  `ORDER BY change_log.id` cannot bind to an output alias.
+
+  This was invisible while `change_log` was empty, and surfaced the moment the
+  triggers gave it more than nine rows to order.
+
 ## Phase 2 — Upload the moment the network returns
 
 ### Added
