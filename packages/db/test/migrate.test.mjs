@@ -18,12 +18,12 @@ const db = scratch.db;
 const n = async (sql) => Number((await db.query(sql))[0].n);
 
 test(`all ${migrationFiles().length} migrations applied on ${scratch.engine}`, () => {
-  assert.equal(migrationFiles().length, 8);
+  assert.equal(migrationFiles().length, 10);
 });
 
 test('migrations are numbered contiguously from 0001', () => {
   const prefixes = migrationFiles().map((f) => Number(f.name.slice(0, 4)));
-  assert.deepEqual(prefixes, [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(prefixes, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 });
 
 test('63 base tables exist', async () => {
@@ -59,7 +59,7 @@ test('93 foreign keys, 20 enums, 62 table level checks', async () => {
                           and not t.relispartition`), 62);
 });
 
-test('10 functions and 30 user triggers', async () => {
+test('11 functions and 31 user triggers', async () => {
   // Extensions install their own functions into public (pg_trgm adds ~20), so
   // count only what our migrations own.
   assert.equal(await n(`select count(*) n from pg_proc p
@@ -67,11 +67,12 @@ test('10 functions and 30 user triggers', async () => {
                         where ns.nspname='public'
                           and not exists (
                             select 1 from pg_depend d
-                            where d.objid = p.oid and d.deptype = 'e')`), 10);
-  // 18, plus the twelve change_log triggers from migration 0008 — one per
-  // replicated table, which is what makes the incremental feed have anything
-  // to report.
-  assert.equal(await n(`select count(*) n from pg_trigger where not tgisinternal`), 30);
+                            where d.objid = p.oid and d.deptype = 'e')`), 11);
+  // 18, plus the twelve change_log triggers from migration 0008 (one per
+  // replicated table) plus the one from 0010 on role_permissions — the join
+  // table that grants a permission to a role, whose own change_log trigger
+  // has to look up the role's org rather than reading org_id off its own row.
+  assert.equal(await n(`select count(*) n from pg_trigger where not tgisinternal`), 31);
 });
 
 test('every table carrying org_id has RLS enabled and exactly one policy', async () => {
