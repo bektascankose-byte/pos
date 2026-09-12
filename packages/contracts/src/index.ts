@@ -11,6 +11,7 @@ export * from './money.js';
 export * from './primitives.js';
 export * from './identity.js';
 export * from './catalog.js';
+export * from './customers.js';
 export * from './inventory.js';
 export * from './sales.js';
 export * from './sync.js';

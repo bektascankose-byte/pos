@@ -30,6 +30,8 @@ import com.snappos.domain.Cart
 import com.snappos.domain.Money
 import com.snappos.domain.Uuid7
 import com.snappos.sync.CatalogSync
+import com.snappos.sync.CustomerDto
+import com.snappos.sync.CustomerRepository
 import com.snappos.sync.DevSignIn
 import com.snappos.sync.SyncWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -96,6 +98,12 @@ data class RegisterUiState(
   // ---------------------------------------------------------- price override
   val pendingTaxExemptReason: String? = null,
   val heldCarts: List<HeldCartEntity> = emptyList(),
+  // ----------------------------------------------------------------- customer
+  /** Who the sale is attached to, kept alongside `cart.customerId` so a name can be shown. */
+  val attachedCustomer: CustomerDto? = null,
+  val customerResults: List<CustomerDto> = emptyList(),
+  val customerSearchBusy: Boolean = false,
+  val customerError: String? = null,
 )
 
 /**
@@ -121,6 +129,7 @@ class RegisterViewModel @Inject constructor(
   private val refunds: RefundRepository,
   private val voids: VoidRepository,
   private val holds: HoldRepository,
+  private val customers: CustomerRepository,
   private val config: ConfigDao,
 ) : ViewModel() {
 
@@ -297,7 +306,7 @@ class RegisterViewModel @Inject constructor(
   }
 
   fun clearCart() {
-    _state.value = _state.value.copy(cart = Cart.EMPTY, message = null)
+    _state.value = _state.value.copy(cart = Cart.EMPTY, attachedCustomer = null, message = null)
   }
 
   fun holdCart(label: String) {
@@ -311,6 +320,7 @@ class RegisterViewModel @Inject constructor(
           _state.value = _state.value.copy(
             busy = false,
             cart = Cart.EMPTY,
+            attachedCustomer = null,
             message = Toast("Sale held as ${label.trim()}")
           )
         }
@@ -331,11 +341,91 @@ class RegisterViewModel @Inject constructor(
     viewModelScope.launch {
       _state.value = _state.value.copy(busy = true)
       val cart = holds.resume(id)
-      _state.value = if (cart == null) {
-        _state.value.copy(busy = false, message = Toast("That held sale is no longer available", true))
-      } else {
-        _state.value.copy(busy = false, cart = cart, message = Toast("Held sale resumed"))
+      if (cart == null) {
+        _state.value = _state.value.copy(busy = false, message = Toast("That held sale is no longer available", true))
+        return@launch
       }
+      _state.value = _state.value.copy(busy = false, cart = cart, message = Toast("Held sale resumed"))
+
+      // The hold carried the customer's id, never a name — a customer is
+      // never cached, so the name shown before the hold is gone the moment
+      // this ViewModel is. Best effort: if the lookup fails, the sale still
+      // has the right customer_id, it just won't show a name until reattached.
+      cart.customerId?.let { customerId ->
+        customers.get(customerId).onSuccess { found ->
+          _state.value = _state.value.copy(attachedCustomer = found)
+        }
+      }
+    }
+  }
+
+  /**
+   * Search for a customer to attach to the current sale.
+   *
+   * Exactly one of `phone` or `q` is meaningful to the server; the other is
+   * left null rather than sent blank, matching what [CustomerRepository]
+   * itself refuses. Every cashier can search — `customer.view` is granted to
+   * the role by default — but only [createCustomer] is gated further.
+   */
+  fun searchCustomers(phone: String? = null, q: String? = null) {
+    viewModelScope.launch {
+      _state.value = _state.value.copy(customerSearchBusy = true, customerError = null)
+      customers.search(phone = phone, q = q)
+        .onSuccess { results ->
+          _state.value = _state.value.copy(customerSearchBusy = false, customerResults = results)
+        }
+        .onFailure { error ->
+          _state.value = _state.value.copy(
+            customerSearchBusy = false,
+            customerResults = emptyList(),
+            customerError = error.message ?: "customer lookup failed",
+          )
+        }
+    }
+  }
+
+  fun clearCustomerSearch() {
+    _state.value = _state.value.copy(customerResults = emptyList(), customerError = null)
+  }
+
+  fun attachCustomer(customer: CustomerDto) {
+    _state.value = _state.value.copy(
+      cart = _state.value.cart.withCustomer(customer.id),
+      attachedCustomer = customer,
+      customerResults = emptyList(),
+      customerSearchBusy = false,
+      customerError = null,
+    )
+  }
+
+  fun detachCustomer() {
+    _state.value = _state.value.copy(cart = _state.value.cart.withCustomer(null), attachedCustomer = null)
+  }
+
+  /**
+   * A new walk-in, added from the register.
+   *
+   * Gated on `customer.manage` server side; the button that calls this is
+   * gated the same way client side, so a cashier without it never reaches a
+   * refusal — same split as [overridePrice] draws between reading a
+   * permission and reaching for a manager.
+   */
+  fun createCustomer(firstName: String?, lastName: String?, phone: String?, email: String?) {
+    val cashier = _state.value.cashier ?: return
+    if (!cashier.can("customer.manage")) {
+      _state.value = _state.value.copy(customerError = "This employee cannot add customers")
+      return
+    }
+    viewModelScope.launch {
+      _state.value = _state.value.copy(customerSearchBusy = true, customerError = null)
+      customers.create(firstName, lastName, phone, email)
+        .onSuccess { created -> attachCustomer(created) }
+        .onFailure { error ->
+          _state.value = _state.value.copy(
+            customerSearchBusy = false,
+            customerError = error.message ?: "could not add that customer",
+          )
+        }
     }
   }
 
@@ -877,6 +967,7 @@ class RegisterViewModel @Inject constructor(
         _state.value = _state.value.copy(
           busy = false,
           cart = Cart.EMPTY,
+          attachedCustomer = null,
           lastReceiptNo = committed.receiptNo,
           lastChange = committed.change,
           lastReceipt = receipt,
@@ -940,6 +1031,7 @@ class RegisterViewModel @Inject constructor(
       // The cart reached payment, so any age gate on it was satisfied — that is
       // what `requiresAgeVerification` blocking payment guarantees.
       ageVerified = cart.minimumAgeRequired != null,
+      customerName = _state.value.attachedCustomer?.displayName,
     )
   }
 

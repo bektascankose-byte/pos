@@ -147,6 +147,7 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
   var showHold by remember { mutableStateOf(false) }
   var showHeldSales by remember { mutableStateOf(false) }
   var showSaleDetails by remember { mutableStateOf(false) }
+  var showCustomer by remember { mutableStateOf(false) }
   var showLineActions by remember { mutableStateOf(false) }
   var confirmClear by remember { mutableStateOf(false) }
 
@@ -218,6 +219,8 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
             onClear = { confirmClear = true },
             onHold = { showHold = true },
             onSaleDetails = { showSaleDetails = true },
+            customerName = state.attachedCustomer?.displayName,
+            onOpenCustomer = { showCustomer = true },
             modifier = Modifier.width(if (compact) 280.dp else 340.dp).fillMaxHeight(),
           )
         }
@@ -364,6 +367,30 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
           !exempt && state.cart.taxExempt -> viewModel.clearTaxExemption()
         }
       },
+    )
+  }
+
+  if (showCustomer) {
+    CustomerDialog(
+      attached = state.attachedCustomer,
+      results = state.customerResults,
+      busy = state.customerSearchBusy,
+      error = state.customerError,
+      onDismiss = {
+        showCustomer = false
+        viewModel.clearCustomerSearch()
+      },
+      onSearch = viewModel::searchCustomers,
+      onClearSearch = viewModel::clearCustomerSearch,
+      onAttach = { customer ->
+        viewModel.attachCustomer(customer)
+        showCustomer = false
+      },
+      onDetach = {
+        viewModel.detachCustomer()
+        showCustomer = false
+      },
+      onCreate = viewModel::createCustomer,
     )
   }
 
@@ -632,6 +659,8 @@ private fun CartPanel(
   onClear: () -> Unit,
   onHold: () -> Unit,
   onSaleDetails: () -> Unit,
+  customerName: String?,
+  onOpenCustomer: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   Column(modifier.background(MaterialTheme.colorScheme.surface)) {
@@ -641,10 +670,15 @@ private fun CartPanel(
     ) {
       Column {
         Text("Current sale", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        // The existing subtitle line made clickable rather than a new row
+        // added beside it — the compact layout has no vertical room to spare
+        // for one, the same lesson the header overflow above already taught.
         Text(
-          "Walk-in customer  •  ${cart.itemCount} ${if (cart.itemCount == 1) "item" else "items"}",
+          "${customerName ?: "Walk-in customer"}  •  ${cart.itemCount} ${if (cart.itemCount == 1) "item" else "items"}",
           style = MaterialTheme.typography.labelMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          color = if (customerName != null) MaterialTheme.colorScheme.primary
+          else MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.clickable(onClick = onOpenCustomer),
         )
       }
     }

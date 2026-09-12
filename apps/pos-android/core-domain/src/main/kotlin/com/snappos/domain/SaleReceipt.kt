@@ -56,6 +56,13 @@ data class SaleReceipt(
    */
   val minimumAge: Int? = null,
   val ageVerified: Boolean = false,
+  /**
+   * Whoever the sale was attached to, by name only — never a phone or email.
+   * A receipt is a document a customer takes away and a stranger can pick up
+   * off a counter; it names them the way a store greeting would, not the way
+   * a database record would.
+   */
+  val customerName: String? = null,
   /** Return policy and anything else the shop wants at the bottom. */
   val footer: List<String> = emptyList(),
   val reprint: Boolean = false,
@@ -93,6 +100,7 @@ object ReceiptRenderer {
 
       add(ReceiptElement.Row(receipt.receiptNo, timestamp.format(receipt.soldAt.atZone(zone))))
       add(ReceiptElement.Row(receipt.registerName, receipt.cashierName))
+      receipt.customerName?.let { add(ReceiptElement.Text(it)) }
 
       add(ReceiptElement.Separator)
 

@@ -8,14 +8,23 @@ import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.POST
+import retrofit2.http.Path
 import retrofit2.http.Query
 
 /**
  * The server, as the register sees it.
  *
- * Deliberately small. A register talks to four endpoints: sign in, refresh,
- * pull a catalog, push what it sold. Everything else a POS does happens on the
- * device, which is the whole point.
+ * Deliberately small. A register talks to sign in, refresh, pull a catalog,
+ * push what it sold. Everything else a POS does happens on the device, which
+ * is the whole point.
+ *
+ * Customer lookup is the one deliberate exception. Customers are excluded
+ * from the catalog snapshot and the change feed on purpose -- caching the
+ * customer table on a terminal that can be stolen is a privacy problem with
+ * no operational payoff -- so attaching one to a sale means asking the server
+ * live, by phone or name, at the counter. A register that cannot reach the
+ * network simply cannot attach a customer that moment; the sale still rings
+ * up fine without one.
  */
 interface SnapPosApi {
 
@@ -64,6 +73,21 @@ interface SnapPosApi {
 
   @GET("api/v1/registers")
   suspend fun registers(): Response<DataEnvelope<RegisterDto>>
+
+  /** Exact phone match, or a name/email fallback. Exactly one of the two. */
+  @GET("api/v1/customers")
+  suspend fun searchCustomers(
+    @Query("phone") phone: String? = null,
+    @Query("q") q: String? = null,
+    @Query("limit") limit: Int = 20,
+  ): Response<DataEnvelope<CustomerDto>>
+
+  @POST("api/v1/customers")
+  suspend fun createCustomer(@Body body: CreateCustomerRequest): Response<CustomerDto>
+
+  /** Re-resolving a name for a customer id a held cart already carries. */
+  @GET("api/v1/customers/{id}")
+  suspend fun getCustomer(@Path("id") id: String): Response<CustomerDto>
 }
 
 @Serializable
@@ -111,6 +135,37 @@ data class RegisterDto(
    * and colliding with receipt numbers that already exist.
    */
   val last_sequence: String = "0",
+)
+
+// ----------------------------------------------------------------- customer
+
+/**
+ * A customer, as looked up live. Never cached — see the class doc above.
+ *
+ * `display_name` is computed here rather than assembled from the parts on
+ * the register, so a customer with no name on file (phone only) still shows
+ * something a cashier can read at a glance instead of a blank line.
+ */
+@Serializable
+data class CustomerDto(
+  val id: String,
+  val first_name: String? = null,
+  val last_name: String? = null,
+  val phone: String? = null,
+  val email: String? = null,
+) {
+  val displayName: String
+    get() = listOfNotNull(first_name, last_name).joinToString(" ").ifBlank {
+      phone ?: email ?: "Customer"
+    }
+}
+
+@Serializable
+data class CreateCustomerRequest(
+  val first_name: String? = null,
+  val last_name: String? = null,
+  val phone: String? = null,
+  val email: String? = null,
 )
 
 // ------------------------------------------------------------------- upload

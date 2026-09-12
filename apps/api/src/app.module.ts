@@ -12,6 +12,7 @@ import { OrgModule } from './modules/org/org.module.js';
 import { SalesModule } from './modules/sales/sales.module.js';
 import { RefundsModule } from './modules/refunds/refunds.module.js';
 import { CashModule } from './modules/cash/cash.module.js';
+import { CustomersModule } from './modules/customers/customers.module.js';
 import { AuditModule } from './platform/audit/audit.module.js';
 import { HealthController } from './modules/health/health.controller.js';
 
@@ -26,6 +27,7 @@ import { HealthController } from './modules/health/health.controller.js';
     SalesModule,
     RefundsModule,
     CashModule,
+    CustomersModule,
     SyncModule,
     OrgModule,
   ],

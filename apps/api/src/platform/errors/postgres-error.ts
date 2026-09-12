@@ -92,6 +92,8 @@ function describeCheck(constraint?: string): string {
       return 'a completed sale must carry the time it completed';
     case 'sales_tax_exempt_reason':
       return 'a tax exempt sale must record why';
+    case 'customers_contactable':
+      return 'a customer needs a phone or an email';
     default:
       return 'the request violates a rule the database enforces';
   }
@@ -107,6 +109,10 @@ function describeUnique(constraint?: string): string {
       return 'a refund with that receipt number already exists';
     case 'cash_sessions_open_key':
       return 'that register already has an open cash session';
+    case 'customers_org_phone_key':
+      return 'a customer with that phone number already exists';
+    case 'customers_org_email_key':
+      return 'a customer with that email already exists';
     default:
       return 'that record already exists';
   }

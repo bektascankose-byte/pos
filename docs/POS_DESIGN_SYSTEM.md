@@ -39,6 +39,7 @@ On compact landscape devices, the category and cart columns use fixed operationa
 - `DiscountDialog`: bounded amount and required reason code.
 - `OverridePriceDialog`: permission-gated on the signed-in cashier, bounded at zero or above.
 - `SplitPaymentDialog`: multiple tenders covering one sale; cash makes change, everything else is exact.
+- `CustomerDialog`: live phone/name lookup and walk-in creation; a customer is never cached on the device.
 - `AgeGate`: blocking compliance action shown before payment.
 - `UnlockScreen`: offline-capable employee selection and private PIN entry.
 
@@ -52,4 +53,4 @@ On compact landscape devices, the category and cart columns use fixed operationa
 
 ## Planned Functional Surfaces
 
-The next register milestones are customer attachment, configurable quick keys, and hardware status. Durable hold/resume, manager-authorized tax exemption, cashier-authorized price override, and split tender have shipped: see `RegisterViewModel.holdCart`/`resumeHeldCart`, `requestTaxExemption`/`approveTaxExemption`, `overridePrice`, and `paySplit` with `SplitPaymentDialog`. Each remaining item is added only with persistence, permission checks, audit data, and offline behavior implemented.
+The next register milestones are configurable quick keys and hardware status. Durable hold/resume, manager-authorized tax exemption, cashier-authorized price override, split tender, and customer attachment have shipped: see `RegisterViewModel.holdCart`/`resumeHeldCart`, `requestTaxExemption`/`approveTaxExemption`, `overridePrice`, `paySplit` with `SplitPaymentDialog`, and `searchCustomers`/`attachCustomer`/`createCustomer` with `CustomerDialog`. Each remaining item is added only with persistence, permission checks, audit data, and offline behavior implemented.

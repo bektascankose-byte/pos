@@ -2,6 +2,21 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — Customer attachment
+
+Customers have had a table, a `sale.customer_id` foreign key and `customer.view`/`customer.manage` permissions since the schema's first migration, and the register's own `Cart.customerId`/`withCustomer` since early in the domain layer — nothing on either side ever called it.
+
+Customers are deliberately **not** part of the catalog snapshot or the incremental change feed: caching the customer table on a terminal that can be stolen is a privacy problem with no operational payoff. A register looks a customer up live instead, which makes this the one place the register talks to a fifth kind of endpoint beyond sign in, refresh, pull, and push.
+
+- New `packages/contracts/src/customers.ts` and `apps/api/src/modules/customers/` (search by exact phone or a name/email fragment; get by id; create, gated on `customer.manage` — separate from the `customer.view` search needs, the same split price override draws between reading a permission and reaching for a manager). A customer needs a phone or an email to be reachable, enforced by both the schema's own `customers_contactable` check and the contract's zod refinement.
+- `SnapPosApi.searchCustomers`/`getCustomer`/`createCustomer` plus a new `CustomerRepository` in `core-sync` — every call reaches the network, with no local fallback; a register with no signal simply cannot attach a customer that moment, but the sale rings up fine without one either way.
+- `RegisterViewModel.searchCustomers`/`attachCustomer`/`detachCustomer`/`createCustomer`, and a new `CustomerDialog`: one search field classifies its own input (phone-shaped digits vs. a name/email fragment) rather than asking the cashier to pick a mode. The existing "Walk-in customer" subtitle in `CartPanel` became the entry point — made clickable in place, rather than adding a new control, since the compact register layout has no vertical room to spare for one.
+- A resumed held sale re-resolves the customer's name from its id with a best-effort lookup, since the id survives a hold (it is a plain field on the cart) but a name never does — nothing is ever cached.
+- The receipt now names the attached customer, by name only — never a phone or email, the same restraint the schema itself uses.
+- `CustomerDialog`'s own content column needed `verticalScroll`: Material3's `AlertDialog` clips overflow rather than scrolling it, and this dialog's four-field creation form did not fit the primary target device's short landscape screen. Third time this exact failure mode has shown up this phase (`CartPanel`'s header, `SplitPaymentDialog`'s keypad, now this) — worth treating as a standing risk on every new dialog aimed at this device rather than a one-off.
+
+Verified end to end on the physical target device signed in as a seeded cashier: searching by name and by phone both find a customer already known to the server; attaching one updates the header and prints on the receipt; a held sale resumed later re-shows the same name; a cashier without `customer.manage` is refused when creating a new customer, with the refusal visible on screen, not just in a log.
+
 ## Phase 2 — Manager-authorized price override
 
 Wired up `Cart.overridePrice`, which had existed in the domain layer with no

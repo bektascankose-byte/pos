@@ -1,0 +1,34 @@
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { createCustomerSchema, customerSearchSchema } from '@snappos/contracts';
+import { CustomersService } from './customers.service.js';
+import { zodBody } from '../../platform/validation/zod.pipe.js';
+import { CurrentUser } from '../../platform/auth/current-user.decorator.js';
+import { RequirePermissions } from '../../platform/auth/auth.guard.js';
+import type { AuthenticatedUser } from '../../platform/auth/auth.service.js';
+
+@Controller({ path: 'customers', version: '1' })
+export class CustomersController {
+  constructor(private readonly customers: CustomersService) {}
+
+  /** The register's normal path: a phone lookup, or a name/email fallback. */
+  @Get()
+  @RequirePermissions('customer.view')
+  search(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string>) {
+    return this.customers.search(user.orgId, customerSearchSchema.parse(query));
+  }
+
+  @Get(':id')
+  @RequirePermissions('customer.view')
+  get(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.customers.get(user.orgId, id);
+  }
+
+  @Post()
+  @RequirePermissions('customer.manage')
+  create(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body(zodBody(createCustomerSchema)) body: ReturnType<typeof createCustomerSchema.parse>,
+  ) {
+    return this.customers.create(user.orgId, user.userId, body);
+  }
+}
