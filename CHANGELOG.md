@@ -2,6 +2,55 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — Invoice ingestion, part 2: file upload, object storage, and CSV parsing
+
+The third phase of the AI-assisted invoice-ingestion system: a real upload endpoint and a real
+dashboard page, proving upload → object storage → the staging table round-trips correctly before any
+AI dependency enters the picture. No catalog matching yet -- a CSV's own header row is enough to
+separate quantity/cost/description/SKU without spending a token on it; PDF/image extraction and AI
+matching are the next slices.
+
+- **Object storage**: new `apps/api/src/platform/storage/` (`ObjectStorageService`), speaking the S3
+  API against MinIO in development (already running in the dev stack, per `docs/INTEGRATIONS.md` --
+  but with no bucket provisioned anywhere) and Cloudflare R2 in production later, same API. Creates
+  its bucket on boot if missing, the same defensive-check-at-startup shape `DatabaseService` already
+  uses for its own owner-role check.
+- **Multipart upload**: `@fastify/multipart` registered in `main.ts`. The connection-level `bodyLimit`
+  moved from 8 MiB to 20 MiB to fit an uploaded invoice (a scanned PDF or a phone photo) through the
+  same ceiling every route shares -- Fastify checks this before any body parser runs, so a per-route
+  override can't let a large upload through a smaller global one. The actual per-file cap is
+  `@fastify/multipart`'s own 15 MiB `fileSize` limit, tighter than the connection ceiling around it.
+- New `apps/api/src/modules/invoicing/` module: `POST /invoice-imports` (multipart: a file plus
+  `store_id`/`vendor_id`, refused up front for any content type that isn't PDF/PNG/JPG/CSV/plain-text)
+  stores the file and creates the staging row at `status='uploaded'`; `POST
+  /invoice-imports/:id/parse` reads a CSV's header row to separate quantity/unit cost/description/
+  vendor SKU (recognizing common header spellings -- `qty`, `unit cost`, `sku`, and their usual
+  variants -- regardless of spaces, hyphens, or case) and inserts one staging line per row. A
+  non-CSV file refuses parsing with a clear "not built yet" message rather than guessing; a malformed
+  CSV lands the whole import on `status='failed'` with `parse_error` set -- a 200 a reviewer can act
+  on, not a 500. No new permissions -- reuses `purchasing.view`/`purchasing.create`, the same gate a
+  real purchase order already sits behind.
+- Found and fixed a real parsing bug during verification: the header-matching only compared exact
+  alias strings (`unit_cost`), so a real CSV's `"Unit Cost"` header (spaces, not underscores) matched
+  nothing and silently left every line's cost blank. Fixed by normalizing both the CSV's own headers
+  and the alias list to letters-and-digits-only before comparing, so `"Unit Cost"`, `"unit-cost"`, and
+  `"unit_cost"` are recognized as the same header.
+- `apps/dashboard/lib/api.ts`'s `apiFetch` gained a `FormData` carve-out -- it was unconditionally
+  setting `Content-Type: application/json` on every request with a body, which silently breaks a
+  multipart upload (the browser's own boundary header never gets attached). Dashboard:
+  `/invoice-imports` (list), `/invoice-imports/new` (upload form, a plain `<input type="file">` --
+  Next.js Server Actions handle a `File` field with no extra encoding setup), `/invoice-imports/[id]`
+  (status, a "Parse this invoice" button, and the resulting line table once parsed).
+
+Verified against the real dev database, real MinIO, and through the dashboard's own UI: confirmed the
+bucket gets created on boot when none exists; uploaded a real CSV (including the "50 Boxes Assorted
+Flavor" line this whole system exists to eventually handle) through the browser's own file input,
+parsed it, and confirmed every line's quantity/cost/description/SKU came out right; confirmed an
+unsupported file type is refused before storage, a non-CSV parse attempt fails clearly, and a
+malformed CSV lands on `status='failed'` with a readable error instead of a 500; confirmed a
+cashier-role token is refused for missing `purchasing.view`. Cleaned up all test data (database rows;
+the handful of orphaned test objects left in the dev MinIO bucket are inert and harmless).
+
 ## Phase 2 — Invoice ingestion, part 1: staging schema and a purchasing refactor
 
 Pure schema and a mechanical refactor, no new endpoint or dashboard page yet -- the second phase of

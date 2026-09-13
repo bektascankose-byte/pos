@@ -28,7 +28,10 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
       // Only when there's actually a body -- Fastify refuses a
       // Content-Type: application/json request with no body at all, which
       // every no-body DELETE (like removing a role assignment) otherwise is.
-      ...(init.body ? { "Content-Type": "application/json" } : {}),
+      // A FormData body (a file upload) gets no explicit Content-Type either:
+      // fetch sets its own multipart boundary, and overriding it here would
+      // send the boundary-less header value instead, breaking every upload.
+      ...(init.body && !(init.body instanceof FormData) ? { "Content-Type": "application/json" } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...init.headers,
     },

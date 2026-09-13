@@ -4,6 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
+import multipart from '@fastify/multipart';
 import { randomUUID } from 'node:crypto';
 import { AppModule } from './app.module.js';
 
@@ -19,7 +20,14 @@ async function bootstrap(): Promise<void> {
       // Trust the proxy only when explicitly configured. Trusting it blindly
       // lets a client spoof X-Forwarded-For and defeat per-IP rate limiting.
       trustProxy: process.env.TRUST_PROXY === 'true',
-      bodyLimit: 8 * 1024 * 1024,
+      // Was 8 MiB, sized for the JSON bodies every other route sends. Raised
+      // to fit an uploaded invoice (a scanned PDF or a phone photo) through
+      // the same connection-level ceiling every route shares -- Fastify
+      // checks this before any body parser runs, so a per-route override
+      // can't let a large upload through a smaller global limit. The actual
+      // per-file cap for uploads is `@fastify/multipart`'s own `fileSize`
+      // limit below, set tighter than this.
+      bodyLimit: 20 * 1024 * 1024,
     }),
     { bufferLogs: true },
   );
@@ -27,6 +35,13 @@ async function bootstrap(): Promise<void> {
   await app.register(helmet, {
     // The API serves JSON, never HTML, so a restrictive CSP costs nothing.
     contentSecurityPolicy: { directives: { defaultSrc: ["'none'"], frameAncestors: ["'none'"] } },
+  });
+
+  await app.register(multipart, {
+    limits: {
+      files: 1,
+      fileSize: 15 * 1024 * 1024,
+    },
   });
 
   await app.register(rateLimit, {
