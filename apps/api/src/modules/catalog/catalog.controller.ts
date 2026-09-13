@@ -5,6 +5,7 @@ import {
   productSearchSchema,
   scanSchema,
   createCategorySchema,
+  createBrandSchema,
   updateProductSchema,
   bulkUpdateProductsSchema,
   updateVariantSchema,
@@ -68,6 +69,15 @@ export class CatalogController {
   @RequirePermissions('product.view')
   brands(@CurrentUser() user: AuthenticatedUser) {
     return this.catalog.listBrands(user.orgId);
+  }
+
+  @Post('brands')
+  @RequirePermissions('product.create')
+  createBrand(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body(zodBody(createBrandSchema)) body: ReturnType<typeof createBrandSchema.parse>,
+  ) {
+    return this.catalog.createBrand(user.orgId, body);
   }
 
   @Get('tax-categories')

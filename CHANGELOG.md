@@ -2,6 +2,69 @@
 
 Notable changes. Newest first.
 
+## Invoice review: brand auto-creation, SKU=UPC, and inline product creation
+
+The user tested the shipped invoice-ingestion system against a real vendor invoice and hit several
+friction points in the review page itself: AI brand guesses had nowhere to go, creating a product
+meant leaving the page, SKU and barcode were shown as two redundant fields, and there was no way to
+add several flavors of one new product without visiting its page repeatedly afterward.
+
+- **Brands**: `CatalogService.createBrand` and `POST /catalog/brands` (`product.create`) finish off
+  `createBrandSchema`, which existed in contracts with no backend behind it. `createProductSchema`
+  gained an optional `brand_name`; `createProductTx` resolves it through a new private
+  `findOrCreateBrandTx` (case-insensitive lookup, insert if not found) whenever `brand_id` isn't given,
+  so a free-text brand from an invoice line creates itself the first time it's seen. The AI matching
+  prompt (`MATCHING_INSTRUCTIONS` in `ai.service.ts`) now names the concrete pattern that tripped up
+  the real invoice -- the brand is very often just the first word or two of the line's own description
+  ("SHERPA THC SELTZER" -> "Sherpa") -- which took it from missing almost every brand on that invoice to
+  18 of 19 correct.
+- **SKU = UPC**: the invoice-review product-creation form now has one "SKU / UPC" field. The action
+  sends it as both the variant's `sku` and its sole barcode; `insertVariant`'s existing
+  `is_primary ?? i === 0` makes it the primary barcode automatically -- no schema or data-model change,
+  since this business treats the two as one number but the underlying tables still have their own
+  reasons to stay separate.
+- **`CatalogService.createProduct`/`addVariant`** are now thin `withOrg` wrappers around new public
+  `createProductTx`/`addVariantTx`, the same tx-extraction shape `PurchasingService` and
+  `OnboardingService` already use -- needed so invoice-line product creation can create a product and
+  resolve the line in one transaction. `CatalogModule` already exported `CatalogService`, so
+  `InvoicingModule` could import it directly.
+- **`POST /v1/invoice-imports/:id/lines/:lineId/create-product`** (`purchasing.create`): one inline
+  form serves both "brand-new product" and "new variant on an existing one." It cross-checks the typed
+  SKU against `product_variants.sku`/`variant_barcodes.barcode` first (`findVariantBySkuOrBarcodeTx`) --
+  if it already resolves to a variant, the line is simply matched to it instead of creating a
+  duplicate. Otherwise it creates against `existing_product_id` (via `addVariantTx`, price defaulting
+  to that product's current price) or creates a brand-new product (via `createProductTx`). Up to 7
+  `extra_variants` in the same submission add more flavors/sizes of whichever product was just
+  resolved, skipping silently over any row whose SKU turns out to already exist rather than failing
+  the whole submission.
+- **`POST .../add-secondary-sku`** (`purchasing.create`): for the "AI found the right product by name
+  but this invoice's code doesn't match anything on file" case -- one click adds the line's own
+  `parsed_vendor_sku` as a second, non-primary `variant_barcodes` row on `ai_suggested_variant_id`
+  (`addBarcodeToVariantTx`) and resolves the line to it.
+- Dashboard (`invoice-imports/[id]/page.tsx`): a line with an AI-suggested match gets a small "Also
+  known by this code" button; a line with none gets a full always-visible inline block (existing-product
+  picker, SKU/UPC, name, variant name, brand, category, price, 7 extra-variant row slots, one submit
+  button) pre-filled from whatever the AI already found -- matching the fixed-blank-row-slots pattern
+  already used by PO creation and line-splitting, rather than a dynamic add-row button.
+
+Verified against the real dev database and the actual invoice that prompted this
+(`INV_2026_09_0010.pdf`, 19 lines): re-uploaded, re-parsed, and worked every line through the rebuilt
+review page. Confirmed a new brand and a brand-new product were created from one line with only
+SKU/name/price filled in; added multiple flavors of one new product through the extra-variant rows in
+a single submission; attached a further line to that same product as a new variant and confirmed its
+price defaulted from the product's own price; confirmed a manually-typed already-existing SKU
+auto-matched instead of duplicating; confirmed "add as alternate SKU" added a second barcode row
+without disturbing the first. Found and fixed a real bug during this pass: both the Zod schema and the
+dashboard action originally required product name + price whenever no existing product was picked --
+which wrongly rejected the legitimate case of typing an already-known SKU expecting it to auto-match,
+since neither validation layer can know in advance (without the database lookup) whether that SKU is
+actually new. Moved that requirement out of the schema and into `InvoicingService.createProductForLine`
+itself, in the branch only reached once the SKU has already been confirmed genuinely new; re-verified
+live that a bare already-existing SKU now correctly auto-matches instead of being blocked. Full
+verification suite green: typecheck, lint, all contracts/db/pricing-spec tests (pglite and real
+Postgres, including RLS), and a clean dashboard production build. All test data (the invoice import,
+vendor, three test products with their variants, and three test brands) removed afterward.
+
 ## Employee onboarding checklists
 
 One org-wide checklist template, managed on its own screen; hiring a new employee automatically

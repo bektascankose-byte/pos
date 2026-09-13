@@ -175,6 +175,8 @@ export const createProductSchema = z
     short_name: z.string().max(64).optional(),
     description: z.string().max(4096).optional(),
     brand_id: uuid.optional(),
+    /** A brand typed as free text rather than picked from the existing list -- created automatically if it doesn't already exist. Ignored when `brand_id` is also given. */
+    brand_name: z.string().max(128).optional(),
     category_id: uuid.optional(),
     tax_category_id: uuid.optional(),
     unit_type: z.string().max(32).default('each'),
@@ -299,6 +301,7 @@ export const scanSchema = z.object({ barcode, store_id: uuid });
 
 export type Category = z.infer<typeof categorySchema>;
 export type Brand = z.infer<typeof brandSchema>;
+export type CreateBrand = z.infer<typeof createBrandSchema>;
 export type Product = z.infer<typeof productSchema>;
 export type Variant = z.infer<typeof variantSchema>;
 export type CreateProduct = z.infer<typeof createProductSchema>;

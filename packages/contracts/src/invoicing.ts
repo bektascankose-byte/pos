@@ -11,7 +11,7 @@
  */
 
 import { z } from 'zod';
-import { uuid, timestamp, quantity, costDecimal } from './primitives.js';
+import { uuid, sku, timestamp, quantity, costDecimal, moneyNonNegative } from './primitives.js';
 
 export const invoiceImportStatus = z.enum(['uploaded', 'parsed', 'reviewed', 'committed', 'failed']);
 export const invoiceImportLineStatus = z.enum(['pending', 'matched', 'split', 'new_product', 'ignored']);
@@ -100,6 +100,58 @@ export const splitInvoiceLineSchema = z.object({
   items: z.array(splitInvoiceLineItemSchema).min(2).max(20),
 });
 
+/**
+ * Creates a brand-new product, or a new variant on an existing one, from an
+ * unmatched line -- and resolves the line to it. `sku` is checked against
+ * the catalog before anything is created: if it already resolves to a real
+ * variant (this business treats SKU and UPC as the same number), the line is
+ * simply matched to that variant instead of creating a duplicate.
+ *
+ * Deliberately does NOT require `product_name`/`price_minor` here even
+ * though a genuinely new product needs both -- whether this SKU is actually
+ * new is a database lookup (`findVariantBySkuOrBarcodeTx`), not something a
+ * schema can know in advance, so that check happens in
+ * `InvoicingService.createProductForLine` itself, only in the branch where
+ * the SKU has already been confirmed not to exist yet. A schema-level
+ * requirement here would wrongly block the common case of typing an
+ * already-known SKU with nothing else filled in, expecting it to match.
+ */
+export const createProductForLineSchema = z
+  .object({
+    /** Attach as a new variant of this product instead of creating one. */
+    existing_product_id: uuid.optional(),
+    sku,
+    /** Ignored when `existing_product_id` is given -- the product already has a name. */
+    product_name: z.string().max(256).optional(),
+    /** The flavor/size this specific line is -- leave blank for a single-variant product. */
+    variant_name: z.string().max(128).optional(),
+    /** Free text; created automatically if it doesn't already exist. Ignored when attaching to an existing product. */
+    brand_name: z.string().max(128).optional(),
+    category_id: uuid.optional(),
+    /** Required for a new product. Optional when attaching to an existing one -- defaults to that product's current price. */
+    price_minor: moneyNonNegative.optional(),
+    /** More flavors/sizes of the same (new or existing) product, added in the same submission. */
+    extra_variants: z
+      .array(
+        z.object({
+          sku,
+          variant_name: z.string().max(128),
+          price_minor: moneyNonNegative.optional(),
+        }),
+      )
+      .max(7)
+      .optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.existing_product_id && !v.variant_name) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['variant_name'],
+        message: 'a new variant on an existing product needs a name (e.g. the flavor)',
+      });
+    }
+  });
+
 export type InvoiceImportStatus = z.infer<typeof invoiceImportStatus>;
 export type InvoiceImportLineStatus = z.infer<typeof invoiceImportLineStatus>;
 export type InvoiceSourceFormat = z.infer<typeof invoiceSourceFormat>;
@@ -109,6 +161,7 @@ export type CreateInvoiceImport = z.infer<typeof createInvoiceImportSchema>;
 export type ResolveInvoiceLine = z.infer<typeof resolveInvoiceLineSchema>;
 export type SplitInvoiceLineItem = z.infer<typeof splitInvoiceLineItemSchema>;
 export type SplitInvoiceLine = z.infer<typeof splitInvoiceLineSchema>;
+export type CreateProductForLine = z.infer<typeof createProductForLineSchema>;
 
 /**
  * AI Structured Outputs schemas -- a different shape than the rest of this

@@ -5,16 +5,19 @@ import { parse } from 'csv-parse/sync';
 import { PDFParse } from 'pdf-parse';
 import {
   costToMinor,
+  money,
   type CreateInvoiceImport,
   type InvoiceSourceFormat,
   type AiMatchLineInput,
   type ResolveInvoiceLine,
   type SplitInvoiceLine,
+  type CreateProductForLine,
 } from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
 import { ObjectStorageService } from '../../platform/storage/object-storage.service.js';
 import { AiService } from '../../platform/ai/ai.service.js';
 import { PurchasingService } from '../purchasing/purchasing.service.js';
+import { CatalogService } from '../catalog/catalog.service.js';
 import { ApiException } from '../../platform/errors/api-exception.js';
 
 const IMPORT_COLUMNS = `ii.id, ii.store_id, ii.vendor_id, v.name AS vendor_name, ii.purchase_order_id,
@@ -134,6 +137,7 @@ export class InvoicingService {
     private readonly storage: ObjectStorageService,
     private readonly ai: AiService,
     private readonly purchasing: PurchasingService,
+    private readonly catalog: CatalogService,
   ) {}
 
   async list(orgId: string, storeId?: string) {
@@ -656,6 +660,208 @@ export class InvoicingService {
   }
 
   /**
+   * Creates a brand-new product, or a new variant on an existing one,
+   * straight from an unmatched line, and resolves the line to it -- all in
+   * the review page, never a separate screen. `sku` is cross-checked
+   * against the catalog first (this business treats SKU and UPC as the same
+   * number): if it already resolves to something real, this just matches
+   * the line to that variant instead of creating a duplicate.
+   */
+  async createProductForLine(
+    orgId: string,
+    actorUserId: string,
+    importId: string,
+    lineId: string,
+    input: CreateProductForLine,
+  ) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows: importRows } = await tx.query<{ store_id: string }>(
+        `SELECT store_id FROM invoice_imports WHERE id = $1`,
+        [importId],
+      );
+      if (!importRows[0]) throw ApiException.notFound('invoice import');
+      const storeId = importRows[0].store_id;
+
+      await this.assertImportEditable(tx, importId);
+      const line = await this.loadLineForUpdate(tx, importId, lineId);
+      if (line.status === 'split') {
+        throw new ApiException('validation_failed', 'this line was already split into variants', {
+          retryable: false,
+        });
+      }
+
+      const existing = await this.catalog.findVariantBySkuOrBarcodeTx(tx, input.sku);
+
+      let variantId: string;
+      let productId: string;
+      let isNew: boolean;
+      // What extra_variants[] falls back to when a row doesn't give its own
+      // price -- the main variant's own resolved price, whichever branch
+      // below produced it (explicit, defaulted-from-the-existing-product, or
+      // required-for-a-new-product).
+      let resolvedPrice = input.price_minor;
+
+      if (existing) {
+        variantId = existing.id;
+        productId = await this.productIdForVariant(tx, existing.id);
+        isNew = false;
+      } else if (input.existing_product_id) {
+        productId = input.existing_product_id;
+        if (resolvedPrice === undefined) {
+          const current = await this.currentPriceForProduct(tx, productId, storeId);
+          if (current !== null) resolvedPrice = money(current);
+        }
+        const variant = await this.catalog.addVariantTx(tx, actorUserId, productId, {
+          sku: input.sku,
+          variant_name: input.variant_name,
+          attributes: input.variant_name ? { flavor: input.variant_name } : {},
+          cost: '0',
+          case_quantity: 1,
+          pack_quantity: 1,
+          barcodes: [{ barcode: input.sku }],
+          ...(resolvedPrice !== undefined ? { price_minor: resolvedPrice } : {}),
+        });
+        variantId = variant.id;
+        isNew = true;
+      } else {
+        // Only checked here, never in the schema: whether this SKU is
+        // genuinely new is exactly what the lookup above just answered, and
+        // a schema can't perform that lookup itself -- see this schema's own
+        // comment for why requiring these two fields up front would wrongly
+        // block "type an already-known SKU, expect it to match."
+        if (!input.product_name || input.price_minor === undefined) {
+          throw new ApiException('validation_failed', 'a new product needs a name and a retail price', {
+            retryable: false,
+          });
+        }
+
+        const product = await this.catalog.createProductTx(
+          tx,
+          actorUserId,
+          {
+            name: input.product_name!,
+            brand_name: input.brand_name,
+            category_id: input.category_id,
+            unit_type: 'each',
+            variant_axes: input.variant_name ? ['flavor'] : [],
+            tags: [],
+            variants: [
+              {
+                sku: input.sku,
+                variant_name: input.variant_name,
+                attributes: input.variant_name ? { flavor: input.variant_name } : {},
+                cost: '0',
+                case_quantity: 1,
+                pack_quantity: 1,
+                barcodes: [{ barcode: input.sku }],
+                price_minor: input.price_minor!,
+              },
+            ],
+          },
+          storeId,
+        );
+        variantId = product.variants[0]!.id;
+        productId = product.id;
+        isNew = true;
+      }
+
+      // More flavors/sizes of the same product, in the same submission.
+      // A row whose own SKU already exists somewhere is left alone rather
+      // than erroring the whole submission over one collided row.
+      for (const extra of input.extra_variants ?? []) {
+        const extraExisting = await this.catalog.findVariantBySkuOrBarcodeTx(tx, extra.sku);
+        if (extraExisting) continue;
+
+        await this.catalog.addVariantTx(tx, actorUserId, productId, {
+          sku: extra.sku,
+          variant_name: extra.variant_name,
+          attributes: { flavor: extra.variant_name },
+          cost: '0',
+          case_quantity: 1,
+          pack_quantity: 1,
+          barcodes: [{ barcode: extra.sku }],
+          price_minor: extra.price_minor ?? resolvedPrice,
+        });
+      }
+
+      await tx.query(
+        `UPDATE invoice_import_lines
+           SET resolved_variant_id = $2, status = $3, resolved_by = $4, resolved_at = now()
+         WHERE id = $1`,
+        [lineId, variantId, isNew ? 'new_product' : 'matched', actorUserId],
+      );
+
+      await this.markReviewedIfDone(tx, importId);
+      return this.loadImport(tx, importId);
+    });
+  }
+
+  /**
+   * "This is the same item under a different code" -- for a line the AI
+   * matched by name but whose own vendor SKU didn't hit anything on file.
+   * Records that code as an additional, non-primary barcode on the
+   * suggested variant and resolves the line to it. Needs no request body:
+   * everything it acts on (`parsed_vendor_sku`, `ai_suggested_variant_id`)
+   * is already sitting on the line.
+   */
+  async addSecondaryBarcode(orgId: string, actorUserId: string, importId: string, lineId: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      await this.assertImportEditable(tx, importId);
+      const line = await this.loadLineForUpdate(tx, importId, lineId);
+
+      if (!line.ai_suggested_variant_id) {
+        throw new ApiException(
+          'validation_failed',
+          'this line has no suggested match to attach a secondary SKU to',
+          { retryable: false },
+        );
+      }
+      if (!line.parsed_vendor_sku) {
+        throw new ApiException('validation_failed', 'this line has no vendor SKU to add', { retryable: false });
+      }
+
+      await this.catalog.addBarcodeToVariantTx(tx, actorUserId, line.ai_suggested_variant_id, line.parsed_vendor_sku);
+
+      await tx.query(
+        `UPDATE invoice_import_lines
+           SET resolved_variant_id = $2, status = 'matched', resolved_by = $3, resolved_at = now()
+         WHERE id = $1`,
+        [lineId, line.ai_suggested_variant_id, actorUserId],
+      );
+
+      await this.markReviewedIfDone(tx, importId);
+      return this.loadImport(tx, importId);
+    });
+  }
+
+  private async productIdForVariant(tx: PoolClient, variantId: string): Promise<string> {
+    const { rows } = await tx.query<{ product_id: string }>(
+      `SELECT product_id FROM product_variants WHERE id = $1`,
+      [variantId],
+    );
+    return rows[0]!.product_id;
+  }
+
+  /** The product's default variant's current effective price at this store, or null if it isn't priced yet. */
+  private async currentPriceForProduct(tx: PoolClient, productId: string, storeId: string): Promise<string | null> {
+    const { rows } = await tx.query<{ price_minor: string | null }>(
+      `SELECT pr.price_minor::text
+       FROM product_variants v
+       LEFT JOIN LATERAL (
+         SELECT price_minor FROM variant_prices
+         WHERE variant_id = v.id AND (store_id = $2 OR store_id IS NULL)
+           AND kind = 'regular' AND effective_from <= now()
+           AND (effective_to IS NULL OR effective_to > now())
+         ORDER BY store_id NULLS LAST, effective_from DESC LIMIT 1
+       ) pr ON true
+       WHERE v.product_id = $1 AND v.is_default = true
+       LIMIT 1`,
+      [productId, storeId],
+    );
+    return rows[0]?.price_minor ?? null;
+  }
+
+  /**
    * Turns a fully reviewed import into a real purchase order and receipt --
    * the only place this whole system finally touches real stock and money,
    * and only because every line got there through a human's own resolve/
@@ -838,8 +1044,10 @@ export class InvoicingService {
       parsed_unit_cost: string | null;
       parsed_description: string | null;
       parsed_vendor_sku: string | null;
+      ai_suggested_variant_id: string | null;
     }>(
-      `SELECT id, status, raw_text, parsed_quantity::text, parsed_unit_cost::text, parsed_description, parsed_vendor_sku
+      `SELECT id, status, raw_text, parsed_quantity::text, parsed_unit_cost::text, parsed_description,
+              parsed_vendor_sku, ai_suggested_variant_id
        FROM invoice_import_lines WHERE id = $1 AND invoice_import_id = $2 FOR UPDATE`,
       [lineId, importId],
     );

@@ -3,6 +3,7 @@ import type { PoolClient } from 'pg';
 import type {
   CreateProduct,
   CreateVariant,
+  CreateBrand,
   ProductSearch,
   UpdateProduct,
   BulkUpdateProducts,
@@ -152,58 +153,79 @@ export class CatalogService {
     input: CreateProduct,
     storeId: string | null,
   ) {
-    return this.db.withOrg(orgId, async (tx) => {
-      const { rows } = await tx.query<{ id: string }>(
-        `INSERT INTO products
-           (org_id, name, short_name, description, brand_id, category_id,
-            tax_category_id, unit_type, has_variants, variant_axes, tags, created_by)
-         VALUES (current_setting('app.org_id')::uuid,
-                 $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-         RETURNING id`,
+    return this.db.withOrg(orgId, (tx) => this.createProductTx(tx, actorUserId, input, storeId));
+  }
+
+  /**
+   * The transactional body of `createProduct`, pulled out so invoice-line
+   * product creation can create a product and resolve the line to it in one
+   * transaction -- the same `xxxTx` split already used for purchase orders
+   * and onboarding checklists. `createProduct` above is just this run inside
+   * its own `withOrg`, identical behavior, callable in isolation exactly as
+   * before this split.
+   */
+  async createProductTx(
+    tx: PoolClient,
+    actorUserId: string,
+    input: CreateProduct,
+    storeId: string | null,
+  ) {
+    // A brand typed as free text (not yet in the `brands` table) is created
+    // here rather than left for the caller to fail on -- `brand_id` still
+    // wins when both are given, since a client that already resolved a real
+    // id has already done the lookup this exists to avoid repeating.
+    const brandId = input.brand_id ?? (input.brand_name ? await this.findOrCreateBrandTx(tx, input.brand_name) : null);
+
+    const { rows } = await tx.query<{ id: string }>(
+      `INSERT INTO products
+         (org_id, name, short_name, description, brand_id, category_id,
+          tax_category_id, unit_type, has_variants, variant_axes, tags, created_by)
+       VALUES (current_setting('app.org_id')::uuid,
+               $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       RETURNING id`,
+      [
+        input.name,
+        input.short_name ?? null,
+        input.description ?? null,
+        brandId,
+        input.category_id ?? null,
+        input.tax_category_id ?? null,
+        input.unit_type,
+        input.variants.length > 1,
+        input.variant_axes,
+        input.tags,
+        actorUserId,
+      ],
+    );
+
+    const productId = rows[0]!.id;
+
+    if (input.compliance) {
+      const c = input.compliance;
+      await tx.query(
+        `INSERT INTO product_compliance
+           (org_id, product_id, minimum_age, id_scan_required, regulated_class,
+            contains_nicotine, contains_cannabinoid, is_smokable, updated_by)
+         VALUES (current_setting('app.org_id')::uuid,$1,$2,$3,$4,$5,$6,$7,$8)`,
         [
-          input.name,
-          input.short_name ?? null,
-          input.description ?? null,
-          input.brand_id ?? null,
-          input.category_id ?? null,
-          input.tax_category_id ?? null,
-          input.unit_type,
-          input.variants.length > 1,
-          input.variant_axes,
-          input.tags,
+          productId,
+          c.minimum_age ?? null,
+          c.id_scan_required ?? false,
+          c.regulated_class ?? null,
+          c.contains_nicotine ?? false,
+          c.contains_cannabinoid ?? false,
+          c.is_smokable ?? false,
           actorUserId,
         ],
       );
+    }
 
-      const productId = rows[0]!.id;
+    const variants = [];
+    for (const [index, v] of input.variants.entries()) {
+      variants.push(await this.insertVariant(tx, productId, index, v, storeId, actorUserId));
+    }
 
-      if (input.compliance) {
-        const c = input.compliance;
-        await tx.query(
-          `INSERT INTO product_compliance
-             (org_id, product_id, minimum_age, id_scan_required, regulated_class,
-              contains_nicotine, contains_cannabinoid, is_smokable, updated_by)
-           VALUES (current_setting('app.org_id')::uuid,$1,$2,$3,$4,$5,$6,$7,$8)`,
-          [
-            productId,
-            c.minimum_age ?? null,
-            c.id_scan_required ?? false,
-            c.regulated_class ?? null,
-            c.contains_nicotine ?? false,
-            c.contains_cannabinoid ?? false,
-            c.is_smokable ?? false,
-            actorUserId,
-          ],
-        );
-      }
-
-      const variants = [];
-      for (const [index, v] of input.variants.entries()) {
-        variants.push(await this.insertVariant(tx, productId, index, v, storeId, actorUserId));
-      }
-
-      return { id: productId, variants };
-    });
+    return { id: productId, variants };
   }
 
   private async insertVariant(
@@ -273,45 +295,100 @@ export class CatalogService {
    * otherwise go stale.
    */
   async addVariant(orgId: string, actorUserId: string, productId: string, input: CreateVariant) {
-    return this.db.withOrg(orgId, async (tx) => {
-      const { rows: productRows } = await tx.query(`SELECT id FROM products WHERE id = $1`, [
-        productId,
-      ]);
-      if (!productRows[0]) throw ApiException.notFound('product');
+    return this.db.withOrg(orgId, (tx) => this.addVariantTx(tx, actorUserId, productId, input));
+  }
 
-      const { rows: sortRows } = await tx.query<{ next: number }>(
-        `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM product_variants WHERE product_id = $1`,
-        [productId],
-      );
-      const nextSort = sortRows[0]!.next;
+  /** The transactional body of `addVariant` -- see `createProductTx`'s own comment for why this split exists. */
+  async addVariantTx(tx: PoolClient, actorUserId: string, productId: string, input: CreateVariant) {
+    const { rows: productRows } = await tx.query(`SELECT id FROM products WHERE id = $1`, [
+      productId,
+    ]);
+    if (!productRows[0]) throw ApiException.notFound('product');
 
-      // `nextSort` is always >= 1 here (the product already has a variant),
-      // so this also correctly keeps `is_default` false -- `insertVariant`
-      // only sets it true for index 0.
-      const variant = await this.insertVariant(tx, productId, nextSort, input, null, actorUserId);
+    const { rows: sortRows } = await tx.query<{ next: number }>(
+      `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM product_variants WHERE product_id = $1`,
+      [productId],
+    );
+    const nextSort = sortRows[0]!.next;
 
-      const { rows: axisRows } = await tx.query<{ axes: string[] }>(
-        `SELECT COALESCE(array_agg(DISTINCT key), '{}') AS axes
-         FROM product_variants v, jsonb_object_keys(v.attributes) AS key
-         WHERE v.product_id = $1`,
-        [productId],
-      );
+    // `nextSort` is always >= 1 here (the product already has a variant),
+    // so this also correctly keeps `is_default` false -- `insertVariant`
+    // only sets it true for index 0.
+    const variant = await this.insertVariant(tx, productId, nextSort, input, null, actorUserId);
 
-      await tx.query(
-        `UPDATE products SET has_variants = true, variant_axes = $2 WHERE id = $1`,
-        [productId, axisRows[0]!.axes],
-      );
+    const { rows: axisRows } = await tx.query<{ axes: string[] }>(
+      `SELECT COALESCE(array_agg(DISTINCT key), '{}') AS axes
+       FROM product_variants v, jsonb_object_keys(v.attributes) AS key
+       WHERE v.product_id = $1`,
+      [productId],
+    );
 
-      await this.audit.record(tx, {
-        action: 'product.variant_add',
-        entityType: 'product_variant',
-        entityId: variant.id,
-        actorUserId,
-        newValue: { product_id: productId, sku: input.sku },
-      });
+    await tx.query(
+      `UPDATE products SET has_variants = true, variant_axes = $2 WHERE id = $1`,
+      [productId, axisRows[0]!.axes],
+    );
 
-      return variant;
+    await this.audit.record(tx, {
+      action: 'product.variant_add',
+      entityType: 'product_variant',
+      entityId: variant.id,
+      actorUserId,
+      newValue: { product_id: productId, sku: input.sku },
     });
+
+    return variant;
+  }
+
+  /**
+   * An additional, non-primary code for a variant that already has one --
+   * the same physical item turning up under a second vendor's own SKU, or a
+   * relabeled UPC. Never touches the existing primary barcode.
+   */
+  async addBarcodeToVariant(orgId: string, actorUserId: string, variantId: string, barcode: string) {
+    return this.db.withOrg(orgId, (tx) => this.addBarcodeToVariantTx(tx, actorUserId, variantId, barcode));
+  }
+
+  async addBarcodeToVariantTx(tx: PoolClient, actorUserId: string, variantId: string, barcode: string) {
+    const { rows: variantRows } = await tx.query(`SELECT id FROM product_variants WHERE id = $1`, [
+      variantId,
+    ]);
+    if (!variantRows[0]) throw ApiException.notFound('variant');
+
+    const { rows } = await tx.query<{ id: string }>(
+      `INSERT INTO variant_barcodes (org_id, variant_id, barcode, kind, units, is_primary)
+       VALUES (current_setting('app.org_id')::uuid, $1, $2, 'upc', '1', false)
+       RETURNING id`,
+      [variantId, barcode],
+    );
+
+    await this.audit.record(tx, {
+      action: 'product.barcode_add',
+      entityType: 'product_variant',
+      entityId: variantId,
+      actorUserId,
+      newValue: { barcode },
+    });
+
+    return rows[0];
+  }
+
+  /**
+   * Does a SKU or barcode already resolve to something? For this business
+   * the two are the same number (see `docs/ARCHITECTURE.md`'s barcode
+   * section) and a manually typed code is checked against both rather than
+   * making the user pick which one it is.
+   */
+  async findVariantBySkuOrBarcodeTx(tx: PoolClient, skuOrBarcode: string): Promise<{ id: string } | null> {
+    const { rows } = await tx.query<{ id: string }>(
+      `SELECT v.id FROM product_variants v WHERE v.sku = $1 AND v.status = 'active'
+       UNION
+       SELECT v.id FROM product_variants v
+       JOIN variant_barcodes b ON b.variant_id = v.id
+       WHERE b.barcode = $1 AND v.status = 'active'
+       LIMIT 1`,
+      [skuOrBarcode],
+    );
+    return rows[0] ?? null;
   }
 
   /**
@@ -384,6 +461,37 @@ export class CatalogService {
       );
       return rows;
     });
+  }
+
+  async createBrand(orgId: string, input: CreateBrand) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query(
+        `INSERT INTO brands (org_id, name, brand_family, logo_url)
+         VALUES (current_setting('app.org_id')::uuid, $1, $2, $3)
+         RETURNING id, name, brand_family, logo_url, status`,
+        [input.name, input.brand_family ?? null, input.logo_url ?? null],
+      );
+      return rows[0];
+    });
+  }
+
+  /**
+   * Used only from within `createProductTx`, for a brand typed as free text
+   * rather than picked from the existing list. Case-insensitive: "Sherpa"
+   * and "sherpa" are the same brand, not two rows that both mean it.
+   */
+  private async findOrCreateBrandTx(tx: PoolClient, name: string): Promise<string> {
+    const { rows: existing } = await tx.query<{ id: string }>(
+      `SELECT id FROM brands WHERE lower(name) = lower($1) LIMIT 1`,
+      [name],
+    );
+    if (existing[0]) return existing[0].id;
+
+    const { rows } = await tx.query<{ id: string }>(
+      `INSERT INTO brands (org_id, name) VALUES (current_setting('app.org_id')::uuid, $1) RETURNING id`,
+      [name],
+    );
+    return rows[0]!.id;
   }
 
   async listTaxCategories(orgId: string) {

@@ -1,5 +1,10 @@
 import { Body, Controller, Get, Headers, Param, Post, Query, Req } from '@nestjs/common';
-import { createInvoiceImportSchema, resolveInvoiceLineSchema, splitInvoiceLineSchema } from '@snappos/contracts';
+import {
+  createInvoiceImportSchema,
+  resolveInvoiceLineSchema,
+  splitInvoiceLineSchema,
+  createProductForLineSchema,
+} from '@snappos/contracts';
 import { InvoicingService } from './invoicing.service.js';
 import { CurrentUser } from '../../platform/auth/current-user.decorator.js';
 import { RequirePermissions } from '../../platform/auth/auth.guard.js';
@@ -136,6 +141,27 @@ export class InvoicingController {
     @Body(zodBody(splitInvoiceLineSchema)) body: ReturnType<typeof splitInvoiceLineSchema.parse>,
   ) {
     return this.invoicing.splitLine(user.orgId, user.userId, id, lineId, body);
+  }
+
+  @Post(':id/lines/:lineId/create-product')
+  @RequirePermissions('purchasing.create')
+  createProductForLine(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+    @Body(zodBody(createProductForLineSchema)) body: ReturnType<typeof createProductForLineSchema.parse>,
+  ) {
+    return this.invoicing.createProductForLine(user.orgId, user.userId, id, lineId, body);
+  }
+
+  @Post(':id/lines/:lineId/add-secondary-sku')
+  @RequirePermissions('purchasing.create')
+  addSecondaryBarcode(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+  ) {
+    return this.invoicing.addSecondaryBarcode(user.orgId, user.userId, id, lineId);
   }
 
   /**

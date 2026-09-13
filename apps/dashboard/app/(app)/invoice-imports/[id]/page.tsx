@@ -7,11 +7,16 @@ import {
   resolveLineAction,
   ignoreLineAction,
   commitInvoiceAction,
+  createProductForLineAction,
+  addSecondaryBarcodeAction,
 } from "../actions";
-import type { InvoiceImport, InvoiceImportLine } from "@snappos/contracts";
+import type { InvoiceImport, InvoiceImportLine, Brand, Category } from "@snappos/contracts";
+
+const EXTRA_VARIANT_ROWS = 7;
 
 interface VariantOption {
   variant_id: string;
+  product_id: string;
   sku: string;
   variant_name: string | null;
   product_name: string;
@@ -39,14 +44,23 @@ export default async function InvoiceImportDetailPage({
   const editable = invoiceImport.status !== "committed";
 
   let variants: VariantOption[] = [];
+  let brands: Brand[] = [];
+  let categories: Category[] = [];
   if (editable && lines.length > 0) {
     try {
-      const result = await apiFetch<{ data: VariantOption[] }>(`/api/v1/catalog/products?limit=200`);
-      variants = result.data;
+      const [variantResult, brandResult, categoryResult] = await Promise.all([
+        apiFetch<{ data: VariantOption[] }>(`/api/v1/catalog/products?limit=200`),
+        apiFetch<Brand[]>(`/api/v1/catalog/brands`),
+        apiFetch<Category[]>(`/api/v1/catalog/categories`),
+      ]);
+      variants = variantResult.data;
+      brands = brandResult;
+      categories = categoryResult;
     } catch {
-      // A variant picker with no options still lets the rest of the page work.
+      // A page with no options to pick from still lets the rest of it work.
     }
   }
+  const products = [...new Map(variants.map((v) => [v.product_id, v])).values()];
 
   const parseInvoice = parseInvoiceAction.bind(null, id);
   const matchInvoice = matchInvoiceAction.bind(null, id);
@@ -152,6 +166,9 @@ export default async function InvoiceImportDetailPage({
                   importId={id}
                   line={line}
                   variants={variants}
+                  products={products}
+                  brands={brands}
+                  categories={categories}
                   editable={editable}
                   splitChildCount={lines.filter((l) => l.split_from_line_id === line.id).length}
                 />
@@ -168,18 +185,27 @@ function LineRow({
   importId,
   line,
   variants,
+  products,
+  brands,
+  categories,
   editable,
   splitChildCount,
 }: {
   importId: string;
   line: InvoiceImportLine;
   variants: VariantOption[];
+  products: VariantOption[];
+  brands: Brand[];
+  categories: Category[];
   editable: boolean;
   splitChildCount: number;
 }) {
   const resolveLine = resolveLineAction.bind(null, importId, line.id);
   const ignoreLine = ignoreLineAction.bind(null, importId, line.id);
+  const addSecondaryBarcode = addSecondaryBarcodeAction.bind(null, importId, line.id);
+  const createProductForLine = createProductForLineAction.bind(null, importId, line.id);
   const defaultVariantId = line.resolved_variant_id ?? line.ai_suggested_variant_id ?? "";
+  const suggestedName = line.ai_suggested_product_description ?? line.parsed_description ?? "";
 
   return (
     <tr className="border-t border-[var(--color-border)] align-top">
@@ -231,7 +257,7 @@ function LineRow({
         </p>
 
         {editable && line.status !== "split" ? (
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-3">
             <form action={resolveLine} className="flex flex-col gap-1">
               <select
                 name="variant_id"
@@ -263,30 +289,126 @@ function LineRow({
                   Ignore
                 </button>
               </form>
-              {line.is_ambiguous_multi_item ? (
-                <Link
-                  href={`/invoice-imports/${importId}/lines/${line.id}/split`}
-                  className="rounded-md border border-[var(--color-border)] px-3 py-1 text-xs"
-                >
-                  Split into variants
-                </Link>
-              ) : null}
-              {!line.ai_suggested_variant_id ? (
-                <Link
-                  href={`/catalog/new?${new URLSearchParams({
-                    description: line.ai_suggested_product_description ?? line.parsed_description ?? "",
-                    brand: line.ai_suggested_brand ?? "",
-                    category: line.ai_suggested_category ?? "",
-                  })}`}
-                  className="rounded-md border border-[var(--color-border)] px-3 py-1 text-xs"
-                >
-                  Create new product
-                </Link>
+              {line.ai_suggested_variant_id && line.parsed_vendor_sku ? (
+                <form action={addSecondaryBarcode}>
+                  <button
+                    type="submit"
+                    className="rounded-md border border-[var(--color-border)] px-3 py-1 text-xs"
+                    title={`Record ${line.parsed_vendor_sku} as another valid code for ${line.ai_suggested_product_name ?? "this variant"}`}
+                  >
+                    Also known by this code
+                  </button>
+                </form>
               ) : null}
             </div>
+
+            {!line.ai_suggested_variant_id ? (
+              <div className="rounded-md border border-[var(--color-border)] p-3">
+                <p className="mb-2 text-xs font-medium text-[var(--color-text-muted)]">
+                  Create or attach a product
+                </p>
+                <form action={createProductForLine} className="flex flex-col gap-2">
+                  <label className="flex flex-col gap-1 text-xs">
+                    Attach to an existing product instead (optional)
+                    <select
+                      name="existing_product_id"
+                      defaultValue=""
+                      className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs outline-none focus:border-[var(--color-accent)]"
+                    >
+                      <option value="">— new product —</option>
+                      {products.map((p) => (
+                        <option key={p.product_id} value={p.product_id}>
+                          {p.product_name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <MiniField label="SKU / UPC" name="sku" required />
+                    <MiniField label="Retail price" name="price" placeholder="24.99" />
+                  </div>
+                  <MiniField
+                    label="Product name (ignored if attaching to an existing product above)"
+                    name="product_name"
+                    defaultValue={suggestedName}
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <MiniField
+                      label="Variant name (e.g. flavor — blank if none)"
+                      name="variant_name"
+                    />
+                    <MiniField
+                      label="Brand (ignored if attaching above)"
+                      name="brand_name"
+                      defaultValue={line.ai_suggested_brand ?? ""}
+                    />
+                  </div>
+                  <label className="flex flex-col gap-1 text-xs">
+                    Category (ignored if attaching above)
+                    <select
+                      name="category_id"
+                      defaultValue=""
+                      className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs outline-none focus:border-[var(--color-accent)]"
+                    >
+                      <option value="">None</option>
+                      {categories.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+                    More flavors/sizes of the same product (optional):
+                  </p>
+                  {Array.from({ length: EXTRA_VARIANT_ROWS }, (_, i) => (
+                    <div key={i} className="grid grid-cols-3 gap-2">
+                      <MiniField label="SKU / UPC" name={`extra_sku_${i}`} />
+                      <MiniField label="Variant name" name={`extra_variant_name_${i}`} />
+                      <MiniField label="Price (blank = same as above)" name={`extra_price_${i}`} />
+                    </div>
+                  ))}
+
+                  <button
+                    type="submit"
+                    className="mt-1 self-start rounded-md bg-[var(--color-accent)] px-3 py-1 text-xs font-medium text-[var(--color-accent-contrast)]"
+                  >
+                    Create / attach product
+                  </button>
+                </form>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </td>
     </tr>
+  );
+}
+
+function MiniField({
+  label,
+  name,
+  defaultValue,
+  placeholder,
+  required,
+}: {
+  label: string;
+  name: string;
+  defaultValue?: string;
+  placeholder?: string;
+  required?: boolean;
+}) {
+  return (
+    <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+      {label}
+      <input
+        name={name}
+        defaultValue={defaultValue}
+        placeholder={placeholder}
+        required={required}
+        className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
+      />
+    </label>
   );
 }
