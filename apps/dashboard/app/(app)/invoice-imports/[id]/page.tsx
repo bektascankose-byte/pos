@@ -67,8 +67,8 @@ export default async function InvoiceImportDetailPage({
       {lines.length > 0 ? (
         <p className="text-xs text-[var(--color-text-muted)]">
           Matching checks an exact barcode, then this vendor&apos;s own SKU mapping, then a fuzzy
-          match on the description against your catalog -- no AI involved yet. A suggestion is
-          never applied automatically; review and commit come later.
+          match against your catalog, then AI for whatever is still unmatched (if configured on
+          this server). A suggestion is never applied automatically; review and commit come later.
         </p>
       ) : null}
 
@@ -106,9 +106,22 @@ export default async function InvoiceImportDetailPage({
                           {line.ai_confidence !== null ? `${Math.round(line.ai_confidence * 100)}% confidence` : ""}
                         </span>
                       </>
+                    ) : (line.ai_suggested_brand ?? line.ai_suggested_category ?? line.ai_suggested_product_description) ? (
+                      <span className="text-xs text-[var(--color-text-muted)]">
+                        no catalog match — AI suggests:{" "}
+                        {[line.ai_suggested_brand, line.ai_suggested_category, line.ai_suggested_product_description]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
                     ) : (
                       <span className="text-[var(--color-text-muted)]">no match yet</span>
                     )}
+                    {line.is_ambiguous_multi_item ? (
+                      <span className="mt-1 block text-xs font-medium text-[var(--color-error)]">
+                        ⚠ looks like more than one item — use &quot;Add Variants&quot; on the
+                        product instead of matching this line as-is
+                      </span>
+                    ) : null}
                   </td>
                   <td className="px-4 py-2 capitalize">{line.status}</td>
                 </tr>

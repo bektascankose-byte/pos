@@ -2,6 +2,57 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — Invoice ingestion, part 4: AI extraction and the matching cascade's AI tier
+
+The fifth phase of the AI-assisted invoice-ingestion system: OpenAI reads the vendor invoice formats
+that have no structure of their own to parse deterministically, and predicts the catalog metadata a
+vendor's own invoice frequently leaves out or bundles together.
+
+- **New `apps/api/src/platform/ai/` (`AiService`)**, the only place this API talks to OpenAI. Uses the
+  installed `openai` SDK's Responses API (`client.responses.parse()`) with `zodTextFormat()` against
+  Zod schemas in `packages/contracts/src/invoicing.ts`, so a Structured Outputs schema is defined once,
+  the same "Zod is the one source of truth" rule every other boundary in this codebase already follows.
+  A missing `OPENAI_API_KEY`/`OPENAI_MODEL` throws `provider_unavailable` (503) -- never a faked or
+  empty result. The model name is read from `OPENAI_MODEL` only and never hardcoded.
+- **`POST /v1/invoice-imports/:id/parse` now handles PDF and EDI**, not just CSV. A PDF's text is
+  pulled with `pdf-parse`; an EDI/plain-text file is read as-is -- both are then "extract text, hand it
+  to the model," not parallel pipelines. The model returns the same raw-line shape a parsed CSV already
+  produces (quantity/unit cost/description/vendor SKU), plus, when present, the invoice's own vendor
+  invoice number and grand total, now finally populating `invoice_imports.vendor_invoice_no`/
+  `invoice_total_minor` (existing columns, unused until now). Image formats (PNG/JPG, or a scanned PDF)
+  still aren't built -- that's vision, deliberately last. A missing AI configuration throws immediately,
+  before anything is attempted; a bad file or a flaky model call instead lands the import on
+  `status='failed'` with `parse_error` set, same as a malformed CSV always has.
+- **`POST /v1/invoice-imports/:id/match` gained a 4th tier**, tried only for lines the barcode/vendor-
+  SKU/trigram tiers already failed to place, and skipped entirely when no key is configured -- the first
+  three tiers must keep working with zero OpenAI dependency. Fed each unmatched line's own top-5 trigram
+  candidates (never the whole catalog) plus the org's real brand/category names, the model either picks
+  the one candidate that's clearly correct (by index into that shortlist -- it can never invent a variant
+  id) or predicts `ai_suggested_brand`/`ai_suggested_category`/`ai_suggested_product_description` when it
+  can't. It also sets `is_ambiguous_multi_item` when a line's own text implies it bundles more than one
+  distinct variant -- the "50 boxes of Torch THC Seltzer, Assorted Flavors" problem this whole system was
+  built to solve -- as a signal for a human to split it with "Add Variants" rather than commit it as one
+  wrong item.
+- Dashboard: the invoice detail page now shows the AI's brand/category/description suggestion when
+  there's no catalog match, and a visible warning on any line flagged as bundling multiple items.
+
+Verified against the real dev database, a real OpenAI call, and through the dashboard's own UI: built a
+synthetic PDF invoice (a hand-built minimal PDF, verified independently against the installed
+`pdf-parse` first) covering all four tiers -- a real barcode, a vendor SKU seeded into `vendor_variants`
+for a test vendor, a fuzzy-matchable description, and a deliberately ambiguous "assorted flavors" line --
+and confirmed the extraction pulled every field correctly (including the invoice number and total,
+correctly converted to minor units) and each line landed on the right tier, with the assorted-flavors
+line correctly left unmatched, flagged ambiguous, and given a real brand/category/description guess. Ran
+a second, lighter smoke test through the EDI/plain-text code path to confirm it also reaches the model
+correctly. Confirmed the dashboard renders both the suggestion and the ambiguous-item warning. Full
+verification suite green: typecheck, lint, all contracts/db/pricing-spec tests (pglite and real Postgres,
+including RLS), and a clean dashboard production build (confirmed a first failed build attempt was
+`.next` corruption from a concurrently running dev server, not a code defect, by stopping the dev server
+and rebuilding clean). Cleaned up all test data (vendor, vendor_variants row, both invoice imports and
+their lines) afterward. The "AI not configured" error path was verified by code inspection rather than a
+live run, to avoid repeated dev-server restarts on top of this session's already-documented Windows
+`--watch`/`EADDRINUSE` flakiness.
+
 ## Phase 2 — Invoice ingestion, part 3: the matching cascade
 
 The fourth phase of the AI-assisted invoice-ingestion system: for each parsed line, try to identify

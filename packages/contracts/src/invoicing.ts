@@ -75,3 +75,69 @@ export type InvoiceSourceFormat = z.infer<typeof invoiceSourceFormat>;
 export type InvoiceImport = z.infer<typeof invoiceImportSchema>;
 export type InvoiceImportLine = z.infer<typeof invoiceImportLineSchema>;
 export type CreateInvoiceImport = z.infer<typeof createInvoiceImportSchema>;
+
+/**
+ * AI Structured Outputs schemas -- a different shape than the rest of this
+ * file on purpose. OpenAI's strict mode requires every field present (a bare
+ * `.optional()` is rejected; use `.nullable()` instead) and plain JSON-native
+ * types, so the model returns `null` for anything it can't find rather than
+ * omitting the field. These describe a suggestion only -- the caller is what
+ * decides whether and how any of it reaches a real column.
+ */
+export const aiExtractedLineSchema = z.object({
+  raw_text: z.string(),
+  vendor_sku: z.string().nullable(),
+  description: z.string().nullable(),
+  quantity: z.number().nullable(),
+  unit_cost: z.number().nullable(),
+});
+
+export const aiExtractedInvoiceSchema = z.object({
+  vendor_invoice_no: z.string().nullable(),
+  invoice_total: z.number().nullable(),
+  lines: z.array(aiExtractedLineSchema),
+});
+
+/** One catalog row offered to the AI matching tier as a candidate for a single line -- never the whole catalog, just a bounded, already-validated shortlist. */
+export const aiMatchCandidateSchema = z.object({
+  index: z.number().int(),
+  product_name: z.string(),
+  variant_name: z.string().nullable(),
+  brand: z.string().nullable(),
+  category: z.string().nullable(),
+});
+
+export const aiMatchLineInputSchema = z.object({
+  line_index: z.number().int(),
+  raw_text: z.string(),
+  description: z.string().nullable(),
+  vendor_sku: z.string().nullable(),
+  candidates: z.array(aiMatchCandidateSchema),
+});
+
+/**
+ * `matched_candidate_index` is an index into that same line's own
+ * `candidates` array, never a bare id -- the model can only ever point back
+ * at a variant this org's own catalog search already found and the caller
+ * already validated, it can never conjure one.
+ */
+export const aiLineMatchPredictionSchema = z.object({
+  line_index: z.number().int(),
+  matched_candidate_index: z.number().int().nullable(),
+  confidence: z.number(),
+  suggested_brand: z.string().nullable(),
+  suggested_category: z.string().nullable(),
+  suggested_product_description: z.string().nullable(),
+  is_ambiguous_multi_item: z.boolean(),
+});
+
+export const aiMatchPredictionsSchema = z.object({
+  predictions: z.array(aiLineMatchPredictionSchema),
+});
+
+export type AiExtractedLine = z.infer<typeof aiExtractedLineSchema>;
+export type AiExtractedInvoice = z.infer<typeof aiExtractedInvoiceSchema>;
+export type AiMatchCandidate = z.infer<typeof aiMatchCandidateSchema>;
+export type AiMatchLineInput = z.infer<typeof aiMatchLineInputSchema>;
+export type AiLineMatchPrediction = z.infer<typeof aiLineMatchPredictionSchema>;
+export type AiMatchPredictions = z.infer<typeof aiMatchPredictionsSchema>;
