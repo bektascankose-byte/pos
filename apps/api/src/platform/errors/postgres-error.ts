@@ -141,6 +141,8 @@ function describeUnique(constraint?: string): string {
       return 'a vendor with that code already exists';
     case 'po_ref_key':
       return 'a purchase order with that reference already exists';
+    case 'variants_org_sku_key':
+      return 'a variant with that SKU already exists';
     case 'purchase_order_lines_purchase_order_id_variant_id_key':
       return 'that variant is already on this purchase order';
     default:

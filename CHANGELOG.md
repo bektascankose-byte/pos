@@ -2,6 +2,54 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — Back office, eighth slice: add variants, bulk edit, and price groups
+
+The first two phases of a much larger planned system: AI-assisted invoice ingestion (read a vendor's
+PDF/PNG/JPG/CSV/EDI invoice, match its lines against the catalog, predict brand/category when the
+invoice doesn't spell them out). That system's full design -- staging tables, a purchasing-service
+refactor its commit step depends on, object storage, an OpenAI integration, a matching cascade -- is
+written out in full for later rounds; this slice ships only the two pieces that stand on their own
+with no new dependency: adding a variant to a product that already exists, bulk-editing several
+products at once, and pricing a set of variants as one group. All three were explicit, standalone
+asks on their own merits (an ambiguous invoice line -- "50 boxes assorted flavor" -- gets split into
+real variants by hand, grouped so their price moves together later), not stubs for the larger system.
+
+- **Add variant**: `POST /v1/catalog/products/:id/variants` fills a real gap -- until now the only
+  way to add a variant was whole-product creation; an existing product had no way to gain a new
+  flavor/size. Reuses `createVariantSchema`, the exact per-item shape whole-product creation already
+  validated with. Recomputes the product's own `has_variants`/`variant_axes` from its variants
+  afterward rather than trusting the caller -- the same invariant enforced at creation time, kept
+  true independently since a 1-to-2-variant transition is exactly when it would otherwise go stale.
+- **Bulk edit**: `PATCH /v1/catalog/products/bulk` finally gives `product.bulk_update` -- a permission
+  that has existed, completely unused, since the very first migration -- a real implementation.
+  Category, brand, tax category, and status, applied to a list of products in one transaction.
+- **Price groups**: new `price_groups` table (`0013_price_groups.sql`) and a nullable
+  `product_variants.price_group_id`. `POST /v1/catalog/variants/bulk-price` either forms a group from
+  a list of variant ids and prices them together, or reprices an existing group by id with no need to
+  re-select its members -- exactly "change their price later, all together." Reuses the same
+  close-open `variant_prices` history logic a single variant's price change already used (extracted
+  into one shared private method rather than duplicated). Repeating the same variant-id selection
+  reuses its existing group instead of minting a new one and orphaning the last -- found and fixed
+  during verification, when doing exactly that left stray `price_groups` rows behind.
+- Found and fixed a real bug during verification, not code review: the bulk-price endpoint had no
+  `store_id`, so it always priced the org-wide default scope -- but every price in this shop's seed
+  data is store-specific, so the new price was silently shadowed by the old one and never actually
+  showed up. Added `store_id` to `bulkPriceVariantsSchema` (mirroring `setVariantPriceSchema` exactly)
+  and had the dashboard action pass the current store, the same as the single-variant price form
+  already does.
+- Dashboard: an "Add variant" form on the product detail page; a bulk-select column on the catalog
+  list (one checkbox per row, plain HTML, no client JS -- `formData.getAll` reads the selection
+  server-side) feeding two bulk-action forms, one for field edits and one for group pricing, using
+  `<button formAction={...}>` so one shared selection can submit to either server action.
+
+Verified against the real dev database and through the dashboard's own UI: added a variant to a
+4-flavor product and confirmed `variant_axes`/`sort_order`/`is_default` all came out right; bulk-
+edited two products' tax category and confirmed only those two changed; formed a price group from
+three variants, repriced the *group* (not the individual variants) and confirmed all three moved
+together while untouched variants on the same product didn't; confirmed repeating the same selection
+reused the group instead of creating a new one. Re-ran the full Postgres and PGlite schema suites
+after the migration to confirm the updated counts.
+
 ## Phase 2 — Back office, seventh slice: loyalty program settings
 
 Configuration only, no engine. `docs/ARCHITECTURE.md`'s own entity diagram

@@ -208,6 +208,19 @@ export const updateProductSchema = createProductSchema
   .omit({ variants: true })
   .partial();
 
+/** Applied to every product_id in the list, in one transaction. At least one field besides the id list is required -- a bulk update that changes nothing is a mistake, not a no-op worth allowing. */
+export const bulkUpdateProductsSchema = z
+  .object({
+    product_ids: z.array(uuid).min(1).max(500),
+    category_id: uuid.optional(),
+    brand_id: uuid.optional(),
+    tax_category_id: uuid.optional(),
+    status: entityStatus.optional(),
+  })
+  .refine((v) => v.category_id || v.brand_id || v.tax_category_id || v.status, {
+    message: 'at least one field to change is required',
+  });
+
 /**
  * Editing an existing variant. Deliberately excludes price and barcodes:
  * price is its own event (see `setVariantPriceSchema` -- a variant's price
@@ -241,6 +254,27 @@ export const setVariantPriceSchema = z.object({
   store_id: uuid.nullable().optional(),
 });
 
+/**
+ * Price several variants together, in one transaction.
+ *
+ * `variant_ids` mints a fresh price group and stamps it on every variant
+ * given -- a group is formed by pricing, not declared ahead of time.
+ * `price_group_id` reprices a group that already exists, without having to
+ * re-select its members. Exactly one of the two is how the request says
+ * which case it is.
+ */
+export const bulkPriceVariantsSchema = z
+  .object({
+    price_minor: moneyNonNegative,
+    /** Omitted (or explicitly null) means the org-wide default price, same as `setVariantPriceSchema`. */
+    store_id: uuid.nullable().optional(),
+    variant_ids: z.array(uuid).min(1).max(500).optional(),
+    price_group_id: uuid.optional(),
+  })
+  .refine((v) => (v.variant_ids ? 1 : 0) + (v.price_group_id ? 1 : 0) === 1, {
+    message: 'give either variant_ids (to form or reprice a specific set) or price_group_id, not both',
+  });
+
 export const taxCategorySchema = z.object({
   id: uuid,
   code: z.string(),
@@ -269,7 +303,10 @@ export type Product = z.infer<typeof productSchema>;
 export type Variant = z.infer<typeof variantSchema>;
 export type CreateProduct = z.infer<typeof createProductSchema>;
 export type UpdateProduct = z.infer<typeof updateProductSchema>;
+export type BulkUpdateProducts = z.infer<typeof bulkUpdateProductsSchema>;
 export type UpdateVariant = z.infer<typeof updateVariantSchema>;
 export type SetVariantPrice = z.infer<typeof setVariantPriceSchema>;
+export type BulkPriceVariants = z.infer<typeof bulkPriceVariantsSchema>;
+export type CreateVariant = z.infer<typeof createVariantSchema>;
 export type TaxCategory = z.infer<typeof taxCategorySchema>;
 export type ProductSearch = z.infer<typeof productSearchSchema>;

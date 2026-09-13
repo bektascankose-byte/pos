@@ -3,7 +3,12 @@ import { apiFetch, ApiError } from "@/lib/api";
 import { primaryStoreId } from "@/lib/store";
 import { formatMinor } from "@/lib/money";
 import type { Product, Brand, Category, TaxCategory } from "@snappos/contracts";
-import { updateProductAction, updateVariantAction, setPriceAction } from "../actions";
+import {
+  updateProductAction,
+  updateVariantAction,
+  setPriceAction,
+  addVariantAction,
+} from "../actions";
 
 export default async function ProductDetailPage({
   params,
@@ -34,6 +39,8 @@ export default async function ProductDetailPage({
   }
 
   const updateProduct = updateProductAction.bind(null, id);
+  const addVariant = addVariantAction.bind(null, id);
+  const defaultAxis = product.variant_axes[0] ?? "flavor";
 
   return (
     <div className="flex max-w-3xl flex-col gap-6">
@@ -149,6 +156,35 @@ export default async function ProductDetailPage({
           );
         })}
       </section>
+
+      <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+        <h2 className="mb-1 text-sm font-medium text-[var(--color-text-muted)]">Add variant</h2>
+        <p className="mb-3 text-xs text-[var(--color-text-muted)]">
+          Another flavor or size of this same product -- e.g. when an invoice turns out to cover
+          several variants a vendor listed as one line.
+        </p>
+        <form action={addVariant} className="flex flex-col gap-3">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Variant name" name="variant_name" placeholder="e.g. Cherry" required />
+            <Field label="SKU" name="sku" required />
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <Field label={`Attribute (${defaultAxis})`} name="attribute_value" defaultValue="" placeholder="e.g. Cherry" />
+            <Field label="Cost" name="cost" defaultValue="0" />
+            <Field label="Barcode" name="barcode" placeholder="optional" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Case quantity" name="case_quantity" defaultValue="1" />
+            <Field label="Pack quantity" name="pack_quantity" defaultValue="1" />
+          </div>
+          <button
+            type="submit"
+            className="self-start rounded-md bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-[var(--color-accent-contrast)]"
+          >
+            Add variant
+          </button>
+        </form>
+      </section>
     </div>
   );
 }
@@ -159,12 +195,14 @@ function Field({
   defaultValue,
   placeholder,
   textarea,
+  required,
 }: {
   label: string;
   name: string;
   defaultValue?: string;
   placeholder?: string;
   textarea?: boolean;
+  required?: boolean;
 }) {
   const className =
     "rounded-md border border-[var(--color-border)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]";
@@ -174,7 +212,13 @@ function Field({
       {textarea ? (
         <textarea name={name} defaultValue={defaultValue} placeholder={placeholder} rows={3} className={className} />
       ) : (
-        <input name={name} defaultValue={defaultValue} placeholder={placeholder} className={className} />
+        <input
+          name={name}
+          defaultValue={defaultValue}
+          placeholder={placeholder}
+          required={required}
+          className={className}
+        />
       )}
     </label>
   );

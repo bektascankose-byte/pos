@@ -1,12 +1,15 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import {
   createProductSchema,
+  createVariantSchema,
   productSearchSchema,
   scanSchema,
   createCategorySchema,
   updateProductSchema,
+  bulkUpdateProductsSchema,
   updateVariantSchema,
   setVariantPriceSchema,
+  bulkPriceVariantsSchema,
 } from '@snappos/contracts';
 import { CatalogService } from './catalog.service.js';
 import { zodBody } from '../../platform/validation/zod.pipe.js';
@@ -83,6 +86,26 @@ export class CatalogController {
     return this.catalog.getProduct(user.orgId, id, storeId ?? null);
   }
 
+  @Post('products/:id/variants')
+  @RequirePermissions('product.create')
+  addVariant(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(zodBody(createVariantSchema)) body: ReturnType<typeof createVariantSchema.parse>,
+  ) {
+    return this.catalog.addVariant(user.orgId, user.userId, id, body);
+  }
+
+  /** Declared ahead of `products/:id` so Nest doesn't match "bulk" as an id. */
+  @Patch('products/bulk')
+  @RequirePermissions('product.bulk_update')
+  bulkUpdateProducts(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body(zodBody(bulkUpdateProductsSchema)) body: ReturnType<typeof bulkUpdateProductsSchema.parse>,
+  ) {
+    return this.catalog.bulkUpdateProducts(user.orgId, user.userId, body);
+  }
+
   @Patch('products/:id')
   @RequirePermissions('product.update')
   updateProduct(
@@ -111,5 +134,14 @@ export class CatalogController {
     @Body(zodBody(setVariantPriceSchema)) body: ReturnType<typeof setVariantPriceSchema.parse>,
   ) {
     return this.catalog.setVariantPrice(user.orgId, user.userId, id, body);
+  }
+
+  @Post('variants/bulk-price')
+  @RequirePermissions('product.update')
+  bulkSetPrice(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body(zodBody(bulkPriceVariantsSchema)) body: ReturnType<typeof bulkPriceVariantsSchema.parse>,
+  ) {
+    return this.catalog.bulkSetPrice(user.orgId, user.userId, body);
   }
 }

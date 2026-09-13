@@ -2,10 +2,13 @@ import { Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import type {
   CreateProduct,
+  CreateVariant,
   ProductSearch,
   UpdateProduct,
+  BulkUpdateProducts,
   UpdateVariant,
   SetVariantPrice,
+  BulkPriceVariants,
 } from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
 import { AuditService } from '../../platform/audit/audit.service.js';
@@ -255,6 +258,63 @@ export class CatalogService {
   }
 
   /**
+   * Add one variant to a product that already exists -- another flavor of
+   * something already on the shelf, discovered after the product itself was
+   * created. Never the product's default variant (`is_default` is decided
+   * once, at the product's own creation) and always sorted after every
+   * existing variant.
+   *
+   * `has_variants` and `variant_axes` are recomputed from the product's own
+   * variants afterward rather than trusted from the caller -- the same
+   * invariant `createProductSchema`'s `superRefine` enforces at creation
+   * time (several variants need at least one declared axis, or the register
+   * has no idea how to group them under one tile), kept true independently
+   * here since a 1-to-2-variant transition is exactly when it would
+   * otherwise go stale.
+   */
+  async addVariant(orgId: string, actorUserId: string, productId: string, input: CreateVariant) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows: productRows } = await tx.query(`SELECT id FROM products WHERE id = $1`, [
+        productId,
+      ]);
+      if (!productRows[0]) throw ApiException.notFound('product');
+
+      const { rows: sortRows } = await tx.query<{ next: number }>(
+        `SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM product_variants WHERE product_id = $1`,
+        [productId],
+      );
+      const nextSort = sortRows[0]!.next;
+
+      // `nextSort` is always >= 1 here (the product already has a variant),
+      // so this also correctly keeps `is_default` false -- `insertVariant`
+      // only sets it true for index 0.
+      const variant = await this.insertVariant(tx, productId, nextSort, input, null, actorUserId);
+
+      const { rows: axisRows } = await tx.query<{ axes: string[] }>(
+        `SELECT COALESCE(array_agg(DISTINCT key), '{}') AS axes
+         FROM product_variants v, jsonb_object_keys(v.attributes) AS key
+         WHERE v.product_id = $1`,
+        [productId],
+      );
+
+      await tx.query(
+        `UPDATE products SET has_variants = true, variant_axes = $2 WHERE id = $1`,
+        [productId, axisRows[0]!.axes],
+      );
+
+      await this.audit.record(tx, {
+        action: 'product.variant_add',
+        entityType: 'product_variant',
+        entityId: variant.id,
+        actorUserId,
+        newValue: { product_id: productId, sku: input.sku },
+      });
+
+      return variant;
+    });
+  }
+
+  /**
    * Create a category, deriving its materialized path from its parent.
    *
    * Path and depth are derived here and never accepted from a client. The
@@ -459,6 +519,37 @@ export class CatalogService {
     });
   }
 
+  /** The same field set as `updateProduct`, applied to every product_id at once, in one transaction. */
+  async bulkUpdateProducts(orgId: string, actorUserId: string, input: BulkUpdateProducts) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        `UPDATE products SET
+           category_id     = COALESCE($2, category_id),
+           brand_id        = COALESCE($3, brand_id),
+           tax_category_id = COALESCE($4, tax_category_id),
+           status          = COALESCE($5, status)
+         WHERE id = ANY($1::uuid[])
+         RETURNING id`,
+        [
+          input.product_ids,
+          input.category_id ?? null,
+          input.brand_id ?? null,
+          input.tax_category_id ?? null,
+          input.status ?? null,
+        ],
+      );
+
+      await this.audit.record(tx, {
+        action: 'product.bulk_update',
+        entityType: 'product',
+        actorUserId,
+        newValue: input,
+      });
+
+      return { updated: rows.map((r) => r.id) };
+    });
+  }
+
   /** Edit a variant's own fields -- never its price; see `setVariantPrice`. */
   async updateVariant(orgId: string, actorUserId: string, id: string, input: UpdateVariant) {
     return this.db.withOrg(orgId, async (tx) => {
@@ -519,38 +610,137 @@ export class CatalogService {
     input: SetVariantPrice,
   ) {
     return this.db.withOrg(orgId, async (tx) => {
-      const storeId = input.store_id ?? null;
-
       const { rows: variantRows } = await tx.query(
         `SELECT id FROM product_variants WHERE id = $1`,
         [variantId],
       );
       if (!variantRows[0]) throw ApiException.notFound('variant');
 
-      await tx.query(
-        `UPDATE variant_prices SET effective_to = now()
-         WHERE variant_id = $1 AND kind = 'regular' AND effective_to IS NULL
-           AND COALESCE(store_id, $3::uuid) = COALESCE($2::uuid, $3::uuid)`,
-        [variantId, storeId, NO_STORE],
-      );
-
-      const { rows } = await tx.query(
-        `INSERT INTO variant_prices (org_id, variant_id, store_id, kind, price_minor, created_by)
-         VALUES (current_setting('app.org_id')::uuid, $1, $2, 'regular', $3, $4)
-         RETURNING id, variant_id, store_id, kind, price_minor::text, effective_from, effective_to`,
-        [variantId, storeId, input.price_minor.toString(), actorUserId],
-      );
-      const price = rows[0]!;
-
-      await this.audit.record(tx, {
-        action: 'product.price_change',
-        entityType: 'variant_price',
-        entityId: price.id,
-        actorUserId,
-        newValue: { variant_id: variantId, store_id: storeId, price_minor: price.price_minor },
-      });
-
-      return price;
+      return this.closeAndOpenPrice(tx, actorUserId, variantId, input.store_id ?? null, input.price_minor.toString());
     });
+  }
+
+  /**
+   * Price several variants together, in one transaction.
+   *
+   * `variant_ids` forms (or reuses) a group and stamps it on every variant
+   * given -- a group is formed by pricing, not declared ahead of time.
+   * `price_group_id` reprices whichever variants currently carry that group,
+   * with no need to re-select them. Repeating the same `variant_ids`
+   * selection reuses its existing shared group rather than minting a new
+   * one each time and orphaning the last one -- the common case of
+   * "reprice this same set again" should not leave debris behind.
+   */
+  async bulkSetPrice(orgId: string, actorUserId: string, input: BulkPriceVariants) {
+    return this.db.withOrg(orgId, async (tx) => {
+      let variantIds: string[];
+      let priceGroupId: string;
+
+      if (input.price_group_id) {
+        priceGroupId = input.price_group_id;
+        const { rows } = await tx.query<{ id: string }>(
+          `SELECT id FROM product_variants WHERE price_group_id = $1`,
+          [priceGroupId],
+        );
+        variantIds = rows.map((r) => r.id);
+        if (variantIds.length === 0) throw ApiException.notFound('price group');
+      } else {
+        variantIds = input.variant_ids!;
+
+        const { rows: currentRows } = await tx.query<{ id: string; price_group_id: string | null }>(
+          `SELECT id, price_group_id FROM product_variants WHERE id = ANY($1::uuid[])`,
+          [variantIds],
+        );
+        if (currentRows.length !== variantIds.length) throw ApiException.notFound('variant');
+
+        // Reuse an existing group only when every given variant already
+        // shares the *same* one AND that group's membership is exactly this
+        // set -- anything else (fresh variants, a subset, mixed groups)
+        // mints a new one and re-stamps, which is the unsurprising reading
+        // of "form a group from exactly these variants."
+        const distinctGroups = new Set(
+          currentRows.map((r) => r.price_group_id).filter((g): g is string => g !== null),
+        );
+        let reusableGroupId: string | null = null;
+        if (distinctGroups.size === 1) {
+          const candidate = [...distinctGroups][0]!;
+          const { rows: memberRows } = await tx.query<{ id: string }>(
+            `SELECT id FROM product_variants WHERE price_group_id = $1`,
+            [candidate],
+          );
+          const sameSet =
+            memberRows.length === variantIds.length && memberRows.every((r) => variantIds.includes(r.id));
+          if (sameSet) reusableGroupId = candidate;
+        }
+
+        if (reusableGroupId) {
+          priceGroupId = reusableGroupId;
+        } else {
+          const { rows: groupRows } = await tx.query<{ id: string }>(
+            `INSERT INTO price_groups (org_id, created_by)
+             VALUES (current_setting('app.org_id')::uuid, $1)
+             RETURNING id`,
+            [actorUserId],
+          );
+          priceGroupId = groupRows[0]!.id;
+
+          await tx.query(
+            `UPDATE product_variants SET price_group_id = $2 WHERE id = ANY($1::uuid[])`,
+            [variantIds, priceGroupId],
+          );
+        }
+      }
+
+      const storeId = input.store_id ?? null;
+      const prices = [];
+      for (const variantId of variantIds) {
+        prices.push(await this.closeAndOpenPrice(tx, actorUserId, variantId, storeId, input.price_minor.toString()));
+      }
+
+      return { price_group_id: priceGroupId, prices };
+    });
+  }
+
+  /**
+   * Close whatever regular price was open for a variant at a store scope and
+   * open a new one -- the one place this happens, shared by a single price
+   * change and a bulk one. Never a plain UPDATE:
+   * `variant_prices_open_regular_key` allows at most one open-ended regular
+   * price per (variant, store scope), which models price as a history, the
+   * same way a sale is never edited in place elsewhere in this schema.
+   * Closing before inserting, in that order, is what keeps the unique index
+   * from ever seeing two open rows at once.
+   */
+  private async closeAndOpenPrice(
+    tx: PoolClient,
+    actorUserId: string,
+    variantId: string,
+    storeId: string | null,
+    priceMinor: string,
+  ) {
+    await tx.query(
+      `UPDATE variant_prices SET effective_to = now()
+       WHERE variant_id = $1 AND kind = 'regular' AND effective_to IS NULL
+         AND COALESCE(store_id, $3::uuid) = COALESCE($2::uuid, $3::uuid)`,
+      [variantId, storeId, NO_STORE],
+    );
+
+    const { rows } = await tx.query(
+      `INSERT INTO variant_prices (org_id, variant_id, store_id, kind, price_minor, created_by)
+       VALUES (current_setting('app.org_id')::uuid, $1, $2, 'regular', $3, $4)
+       RETURNING id, variant_id, store_id, kind, price_minor::text, effective_from, effective_to`,
+      [variantId, storeId, priceMinor, actorUserId],
+    );
+    const price = rows[0]!;
+
+    await this.audit.record(tx, {
+      action: 'product.price_change',
+      entityType: 'variant_price',
+      entityId: price.id,
+      actorUserId,
+      newValue: { variant_id: variantId, store_id: storeId, price_minor: price.price_minor },
+    });
+
+    return price;
   }
 }
