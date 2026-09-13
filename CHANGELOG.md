@@ -2,6 +2,47 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — Invoice ingestion, part 1: staging schema and a purchasing refactor
+
+Pure schema and a mechanical refactor, no new endpoint or dashboard page yet -- the second phase of
+the AI-assisted invoice-ingestion system planned this session, laying the ground the rest of it
+builds on.
+
+- New migration `0014_invoice_imports.sql`: `invoice_imports` (one row per uploaded vendor invoice --
+  file reference, vendor/store, parsed total, status through `uploaded → parsed → reviewed →
+  committed`/`failed`) and `invoice_import_lines` (raw text, parsed quantity/cost/description/vendor
+  SKU, and a full set of `ai_suggested_*`/`ai_confidence` columns). No new permissions -- an invoice
+  import graduates into a real purchase order and reuses `purchasing.*` exactly as one already does.
+  `split_from_line_id` gives "Add Variants" its lineage: a line a vendor described ambiguously (several
+  flavors folded into one line item) flips to `status='split'` once a human resolves it, and each
+  variant they create becomes a new sibling row pointing back at it.
+  **The one rule carried through every column here**: AI only ever writes a `ai_suggested_*` or
+  `ai_confidence` value. Nothing in this schema, and nothing planned on top of it, lets an extraction
+  step create a product, change a price, or move stock by itself -- every real mutation happens
+  because a human clicked a button that calls a real, permission-gated endpoint, with the suggestion
+  as a starting point rather than an instruction.
+- **Why a refactor had to come with it**: `po_receipt_lines.po_line_id` is a hard, `NOT NULL` foreign
+  key to `purchase_order_lines(id)` -- there is no way to receive stock without a pre-existing PO
+  line, which means committing an invoice that never had a formal PO (the common case for this
+  vertical) has to *synthesize* one first, then receive against it, atomically. `PurchasingService`'s
+  `createPurchaseOrder`/`receivePurchaseOrder` are now thin `withOrg` wrappers around new
+  `createPurchaseOrderTx`/`receivePurchaseOrderTx` methods that take a transaction directly -- the
+  same shape the file already used for its private `loadPurchaseOrder` helper -- so a future
+  invoicing service can compose both inside one shared transaction instead of two separate ones that
+  could partially fail. `receivePurchaseOrderTx` also gained optional `document_url`/
+  `invoice_total_minor` parameters, finally giving `po_receipts`' two matching columns (present in
+  the schema since the very first purchasing migration, written by nothing) a way to get populated.
+  Zero behavior change to the two existing routes.
+
+Verified against the real dev database: ran the exact same create-PO → partial-receive →
+idempotent-replay sequence through the live API both immediately before and immediately after the
+refactor (same vendor, same variant, same quantities) and confirmed structurally identical results at
+every step -- same status transitions, same computed totals, same stock delta, same idempotency-replay
+behavior -- before trusting anything to be built on top of it. Sanity-checked the new tables directly
+against the live database (default status, the ambiguous-line flag, the confidence-range check
+constraint rejecting an out-of-bounds value) since nothing calls them yet. Re-ran the full Postgres
+and PGlite schema suites for the migration's updated counts.
+
 ## Phase 2 — Back office, eighth slice: add variants, bulk edit, and price groups
 
 The first two phases of a much larger planned system: AI-assisted invoice ingestion (read a vendor's

@@ -112,44 +112,7 @@ export class PurchasingService {
    * in this pass.
    */
   async createPurchaseOrder(orgId: string, actorUserId: string, input: CreatePurchaseOrder) {
-    return this.db.withOrg(orgId, async (tx) => {
-      const { rows: poRows } = await tx.query<{ id: string }>(
-        `INSERT INTO purchase_orders
-           (org_id, store_id, vendor_id, reference, status, expected_at, created_by, note)
-         VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, 'submitted', $4::date, $5, $6)
-         RETURNING id`,
-        [input.store_id, input.vendor_id, input.reference, input.expected_at ?? null, actorUserId, input.note ?? null],
-      );
-      const poId = poRows[0]!.id;
-
-      for (const line of input.lines) {
-        await tx.query(
-          `INSERT INTO purchase_order_lines
-             (org_id, purchase_order_id, variant_id, vendor_sku, quantity_ordered, unit_cost, line_total_minor)
-           VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, $4, $5,
-                   round($4::numeric * $5::numeric * 100))`,
-          [poId, line.variant_id, line.vendor_sku ?? null, line.quantity_ordered, line.unit_cost],
-        );
-      }
-
-      await tx.query(
-        `UPDATE purchase_orders po SET
-           subtotal_minor = (SELECT COALESCE(sum(line_total_minor), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id),
-           total_minor    = (SELECT COALESCE(sum(line_total_minor), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id)
-         WHERE po.id = $1`,
-        [poId],
-      );
-
-      await this.audit.record(tx, {
-        action: 'purchasing.create',
-        entityType: 'purchase_order',
-        entityId: poId,
-        actorUserId,
-        newValue: { reference: input.reference, vendor_id: input.vendor_id, line_count: input.lines.length },
-      });
-
-      return this.loadPurchaseOrder(tx, poId);
-    });
+    return this.db.withOrg(orgId, (tx) => this.createPurchaseOrderTx(tx, actorUserId, input));
   }
 
   /**
@@ -161,93 +124,163 @@ export class PurchasingService {
    * receipt line, not silently folded into the PO's original total.
    */
   async receivePurchaseOrder(orgId: string, actorUserId: string, poId: string, input: ReceivePurchaseOrder) {
-    return this.db.withOrg(orgId, async (tx) => {
-      const { rows: poRows } = await tx.query<{ id: string; store_id: string; status: string }>(
-        `SELECT id, store_id, status FROM purchase_orders WHERE id = $1 FOR UPDATE`,
-        [poId],
+    return this.db.withOrg(orgId, (tx) => this.receivePurchaseOrderTx(tx, actorUserId, poId, input));
+  }
+
+  /**
+   * The transactional bodies of `createPurchaseOrder`/`receivePurchaseOrder`,
+   * pulled out so invoice-import commit can compose both inside one shared
+   * transaction: synthesize a PO from an invoice that never had one, then
+   * receive against it immediately, atomically. Each public method above is
+   * just this run inside its own `withOrg` -- identical behavior, callable in
+   * isolation exactly as before this split.
+   */
+  async createPurchaseOrderTx(tx: PoolClient, actorUserId: string, input: CreatePurchaseOrder) {
+    const { rows: poRows } = await tx.query<{ id: string }>(
+      `INSERT INTO purchase_orders
+         (org_id, store_id, vendor_id, reference, status, expected_at, created_by, note)
+       VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, 'submitted', $4::date, $5, $6)
+       RETURNING id`,
+      [input.store_id, input.vendor_id, input.reference, input.expected_at ?? null, actorUserId, input.note ?? null],
+    );
+    const poId = poRows[0]!.id;
+
+    for (const line of input.lines) {
+      await tx.query(
+        `INSERT INTO purchase_order_lines
+           (org_id, purchase_order_id, variant_id, vendor_sku, quantity_ordered, unit_cost, line_total_minor)
+         VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, $4, $5,
+                 round($4::numeric * $5::numeric * 100))`,
+        [poId, line.variant_id, line.vendor_sku ?? null, line.quantity_ordered, line.unit_cost],
       );
-      const po = poRows[0];
-      if (!po) throw ApiException.notFound('purchase order');
-      if (po.status === 'closed' || po.status === 'cancelled') {
-        throw new ApiException('conflict', `a ${po.status} purchase order cannot receive stock`, {
-          retryable: false,
-        });
-      }
+    }
 
-      const hasNote = !!input.note?.trim();
-      const { rows: receiptRows } = await tx.query<{ id: string }>(
-        `INSERT INTO po_receipts
-           (org_id, purchase_order_id, received_by, vendor_invoice_no, variance_flagged, variance_note)
-         VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, $4, $5)
-         RETURNING id`,
-        [poId, actorUserId, input.vendor_invoice_no ?? null, hasNote, input.note ?? null],
-      );
-      const receiptId = receiptRows[0]!.id;
+    await tx.query(
+      `UPDATE purchase_orders po SET
+         subtotal_minor = (SELECT COALESCE(sum(line_total_minor), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id),
+         total_minor    = (SELECT COALESCE(sum(line_total_minor), 0) FROM purchase_order_lines WHERE purchase_order_id = po.id)
+       WHERE po.id = $1`,
+      [poId],
+    );
 
-      const movements: Movement[] = [];
-
-      for (const line of input.lines) {
-        const { rows: lineRows } = await tx.query<{
-          variant_id: string;
-          unit_cost: string;
-        }>(
-          `SELECT variant_id, unit_cost::text FROM purchase_order_lines
-           WHERE id = $1 AND purchase_order_id = $2 FOR UPDATE`,
-          [line.po_line_id, poId],
-        );
-        const poLine = lineRows[0];
-        if (!poLine) throw ApiException.notFound('purchase order line');
-
-        const effectiveUnitCost = line.unit_cost ?? poLine.unit_cost;
-        const costChanged =
-          line.unit_cost !== undefined && Number(line.unit_cost) !== Number(poLine.unit_cost);
-
-        await tx.query(
-          `INSERT INTO po_receipt_lines
-             (org_id, receipt_id, po_line_id, variant_id, quantity_received, unit_cost, cost_changed)
-           VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, $4, $5, $6)`,
-          [receiptId, line.po_line_id, poLine.variant_id, line.quantity_received, effectiveUnitCost, costChanged],
-        );
-
-        await tx.query(
-          `UPDATE purchase_order_lines SET quantity_received = quantity_received + $2 WHERE id = $1`,
-          [line.po_line_id, line.quantity_received],
-        );
-
-        movements.push({
-          storeId: po.store_id,
-          variantId: poLine.variant_id,
-          delta: line.quantity_received,
-          reason: 'receiving',
-          unitCost: effectiveUnitCost,
-          referenceType: 'purchase_order',
-          referenceId: poId,
-          actorUserId,
-        });
-      }
-
-      await this.inventoryRepository.post(tx, movements);
-
-      const { rows: statusRows } = await tx.query<{ fully_received: boolean; any_received: boolean }>(
-        `SELECT bool_and(quantity_received >= quantity_ordered) AS fully_received,
-                bool_or(quantity_received > 0) AS any_received
-         FROM purchase_order_lines WHERE purchase_order_id = $1`,
-        [poId],
-      );
-      const { fully_received, any_received } = statusRows[0]!;
-      const newStatus = fully_received ? 'received' : any_received ? 'partial' : po.status;
-      await tx.query(`UPDATE purchase_orders SET status = $2 WHERE id = $1`, [poId, newStatus]);
-
-      await this.audit.record(tx, {
-        action: 'purchasing.receive',
-        entityType: 'purchase_order',
-        entityId: poId,
-        actorUserId,
-        newValue: { receipt_id: receiptId, line_count: input.lines.length },
-      });
-
-      return this.loadPurchaseOrder(tx, poId);
+    await this.audit.record(tx, {
+      action: 'purchasing.create',
+      entityType: 'purchase_order',
+      entityId: poId,
+      actorUserId,
+      newValue: { reference: input.reference, vendor_id: input.vendor_id, line_count: input.lines.length },
     });
+
+    return this.loadPurchaseOrder(tx, poId);
+  }
+
+  /**
+   * `extra` is populated only by invoice-import commit -- the file's own
+   * object-storage reference and its stated total, neither of which the
+   * ordinary receive endpoint has ever had a way to supply. Omitted, this
+   * behaves exactly as it always has.
+   */
+  async receivePurchaseOrderTx(
+    tx: PoolClient,
+    actorUserId: string,
+    poId: string,
+    input: ReceivePurchaseOrder,
+    extra?: { documentUrl?: string | undefined; invoiceTotalMinor?: string | undefined },
+  ) {
+    const { rows: poRows } = await tx.query<{ id: string; store_id: string; status: string }>(
+      `SELECT id, store_id, status FROM purchase_orders WHERE id = $1 FOR UPDATE`,
+      [poId],
+    );
+    const po = poRows[0];
+    if (!po) throw ApiException.notFound('purchase order');
+    if (po.status === 'closed' || po.status === 'cancelled') {
+      throw new ApiException('conflict', `a ${po.status} purchase order cannot receive stock`, {
+        retryable: false,
+      });
+    }
+
+    const hasNote = !!input.note?.trim();
+    const { rows: receiptRows } = await tx.query<{ id: string }>(
+      `INSERT INTO po_receipts
+         (org_id, purchase_order_id, received_by, vendor_invoice_no, variance_flagged, variance_note,
+          document_url, invoice_total_minor)
+       VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, $4, $5, $6, $7)
+       RETURNING id`,
+      [
+        poId,
+        actorUserId,
+        input.vendor_invoice_no ?? null,
+        hasNote,
+        input.note ?? null,
+        extra?.documentUrl ?? null,
+        extra?.invoiceTotalMinor ?? null,
+      ],
+    );
+    const receiptId = receiptRows[0]!.id;
+
+    const movements: Movement[] = [];
+
+    for (const line of input.lines) {
+      const { rows: lineRows } = await tx.query<{
+        variant_id: string;
+        unit_cost: string;
+      }>(
+        `SELECT variant_id, unit_cost::text FROM purchase_order_lines
+         WHERE id = $1 AND purchase_order_id = $2 FOR UPDATE`,
+        [line.po_line_id, poId],
+      );
+      const poLine = lineRows[0];
+      if (!poLine) throw ApiException.notFound('purchase order line');
+
+      const effectiveUnitCost = line.unit_cost ?? poLine.unit_cost;
+      const costChanged =
+        line.unit_cost !== undefined && Number(line.unit_cost) !== Number(poLine.unit_cost);
+
+      await tx.query(
+        `INSERT INTO po_receipt_lines
+           (org_id, receipt_id, po_line_id, variant_id, quantity_received, unit_cost, cost_changed)
+         VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, $4, $5, $6)`,
+        [receiptId, line.po_line_id, poLine.variant_id, line.quantity_received, effectiveUnitCost, costChanged],
+      );
+
+      await tx.query(
+        `UPDATE purchase_order_lines SET quantity_received = quantity_received + $2 WHERE id = $1`,
+        [line.po_line_id, line.quantity_received],
+      );
+
+      movements.push({
+        storeId: po.store_id,
+        variantId: poLine.variant_id,
+        delta: line.quantity_received,
+        reason: 'receiving',
+        unitCost: effectiveUnitCost,
+        referenceType: 'purchase_order',
+        referenceId: poId,
+        actorUserId,
+      });
+    }
+
+    await this.inventoryRepository.post(tx, movements);
+
+    const { rows: statusRows } = await tx.query<{ fully_received: boolean; any_received: boolean }>(
+      `SELECT bool_and(quantity_received >= quantity_ordered) AS fully_received,
+              bool_or(quantity_received > 0) AS any_received
+       FROM purchase_order_lines WHERE purchase_order_id = $1`,
+      [poId],
+    );
+    const { fully_received, any_received } = statusRows[0]!;
+    const newStatus = fully_received ? 'received' : any_received ? 'partial' : po.status;
+    await tx.query(`UPDATE purchase_orders SET status = $2 WHERE id = $1`, [poId, newStatus]);
+
+    await this.audit.record(tx, {
+      action: 'purchasing.receive',
+      entityType: 'purchase_order',
+      entityId: poId,
+      actorUserId,
+      newValue: { receipt_id: receiptId, line_count: input.lines.length },
+    });
+
+    return this.loadPurchaseOrder(tx, poId);
   }
 
   private async loadPurchaseOrder(tx: PoolClient, id: string) {
