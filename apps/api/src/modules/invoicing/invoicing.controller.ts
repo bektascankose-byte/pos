@@ -1,9 +1,11 @@
-import { Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
-import { createInvoiceImportSchema } from '@snappos/contracts';
+import { Body, Controller, Get, Headers, Param, Post, Query, Req } from '@nestjs/common';
+import { createInvoiceImportSchema, resolveInvoiceLineSchema, splitInvoiceLineSchema } from '@snappos/contracts';
 import { InvoicingService } from './invoicing.service.js';
 import { CurrentUser } from '../../platform/auth/current-user.decorator.js';
 import { RequirePermissions } from '../../platform/auth/auth.guard.js';
+import { IdempotencyService } from '../../platform/idempotency/idempotency.service.js';
 import { ApiException } from '../../platform/errors/api-exception.js';
+import { zodBody } from '../../platform/validation/zod.pipe.js';
 import type { AuthenticatedUser } from '../../platform/auth/auth.service.js';
 
 /**
@@ -41,7 +43,10 @@ const ALLOWED_CONTENT_TYPES = new Set([
 
 @Controller({ path: 'invoice-imports', version: '1' })
 export class InvoicingController {
-  constructor(private readonly invoicing: InvoicingService) {}
+  constructor(
+    private readonly invoicing: InvoicingService,
+    private readonly idempotency: IdempotencyService,
+  ) {}
 
   @Get()
   @RequirePermissions('purchasing.view')
@@ -103,5 +108,63 @@ export class InvoicingController {
   @RequirePermissions('purchasing.create')
   match(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.invoicing.match(user.orgId, id);
+  }
+
+  @Post(':id/lines/:lineId/resolve')
+  @RequirePermissions('purchasing.create')
+  resolveLine(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+    @Body(zodBody(resolveInvoiceLineSchema)) body: ReturnType<typeof resolveInvoiceLineSchema.parse>,
+  ) {
+    return this.invoicing.resolveLine(user.orgId, user.userId, id, lineId, body);
+  }
+
+  @Post(':id/lines/:lineId/ignore')
+  @RequirePermissions('purchasing.create')
+  ignoreLine(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Param('lineId') lineId: string) {
+    return this.invoicing.ignoreLine(user.orgId, user.userId, id, lineId);
+  }
+
+  @Post(':id/lines/:lineId/split')
+  @RequirePermissions('purchasing.create')
+  splitLine(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+    @Body(zodBody(splitInvoiceLineSchema)) body: ReturnType<typeof splitInvoiceLineSchema.parse>,
+  ) {
+    return this.invoicing.splitLine(user.orgId, user.userId, id, lineId, body);
+  }
+
+  /**
+   * The only place this whole system moves real stock or money. Requires an
+   * Idempotency-Key for the same reason `purchase-orders/:id/receive`
+   * does -- this posts inventory movements, and a retried request without
+   * one would receive the same shipment twice.
+   */
+  @Post(':id/commit')
+  @RequirePermissions('purchasing.create', 'purchasing.receive')
+  async commit(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Headers('idempotency-key') key?: string,
+  ) {
+    if (!key) {
+      throw new ApiException('validation_failed', 'POST /v1/invoice-imports/:id/commit requires an Idempotency-Key header', {
+        retryable: false,
+      });
+    }
+
+    const outcome = await this.idempotency.execute(
+      user.orgId,
+      key,
+      'POST /v1/invoice-imports/:id/commit',
+      { id },
+      async () => ({ status: 200, body: await this.invoicing.commit(user.orgId, user.userId, id) }),
+    );
+
+    return outcome.body;
   }
 }

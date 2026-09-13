@@ -3,10 +3,18 @@ import type { PoolClient } from 'pg';
 import { randomUUID } from 'node:crypto';
 import { parse } from 'csv-parse/sync';
 import { PDFParse } from 'pdf-parse';
-import { costToMinor, type CreateInvoiceImport, type InvoiceSourceFormat, type AiMatchLineInput } from '@snappos/contracts';
+import {
+  costToMinor,
+  type CreateInvoiceImport,
+  type InvoiceSourceFormat,
+  type AiMatchLineInput,
+  type ResolveInvoiceLine,
+  type SplitInvoiceLine,
+} from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
 import { ObjectStorageService } from '../../platform/storage/object-storage.service.js';
 import { AiService } from '../../platform/ai/ai.service.js';
+import { PurchasingService } from '../purchasing/purchasing.service.js';
 import { ApiException } from '../../platform/errors/api-exception.js';
 
 const IMPORT_COLUMNS = `ii.id, ii.store_id, ii.vendor_id, v.name AS vendor_name, ii.purchase_order_id,
@@ -19,11 +27,14 @@ const LINE_COLUMNS = `l.id, l.invoice_import_id, l.line_no, l.split_from_line_id
        l.ai_suggested_variant_id, sp.name AS ai_suggested_product_name, sv.variant_name AS ai_suggested_variant_name,
        l.ai_confidence::float8 AS ai_confidence, l.ai_suggested_brand,
        l.ai_suggested_category, l.ai_suggested_product_description, l.is_ambiguous_multi_item,
-       l.status, l.resolved_variant_id, l.created_at`;
+       l.status, l.resolved_variant_id, rp.name AS resolved_product_name, rv.variant_name AS resolved_variant_name,
+       l.resolved_by, l.resolved_at, l.created_at`;
 
 const LINE_FROM = `invoice_import_lines l
        LEFT JOIN product_variants sv ON sv.id = l.ai_suggested_variant_id
-       LEFT JOIN products sp ON sp.id = sv.product_id`;
+       LEFT JOIN products sp ON sp.id = sv.product_id
+       LEFT JOIN product_variants rv ON rv.id = l.resolved_variant_id
+       LEFT JOIN products rp ON rp.id = rv.product_id`;
 
 interface ParsedCsvLine {
   rawText: string;
@@ -122,6 +133,7 @@ export class InvoicingService {
     private readonly db: DatabaseService,
     private readonly storage: ObjectStorageService,
     private readonly ai: AiService,
+    private readonly purchasing: PurchasingService,
   ) {}
 
   async list(orgId: string, storeId?: string) {
@@ -490,6 +502,362 @@ export class InvoicingService {
     }
 
     return null;
+  }
+
+  /**
+   * Accept the AI's own suggestion, or point a line at a different variant
+   * entirely -- the same endpoint either way, since both are just "a human
+   * chose this variant," only with a different starting point.
+   */
+  async resolveLine(
+    orgId: string,
+    actorUserId: string,
+    importId: string,
+    lineId: string,
+    input: ResolveInvoiceLine,
+  ) {
+    return this.db.withOrg(orgId, async (tx) => {
+      await this.assertImportEditable(tx, importId);
+      const line = await this.loadLineForUpdate(tx, importId, lineId);
+      if (line.status === 'split') {
+        throw new ApiException(
+          'validation_failed',
+          'this line was already split into variants -- resolve or ignore the split lines instead',
+          { retryable: false },
+        );
+      }
+
+      const { rows: variantRows } = await tx.query(
+        `SELECT id FROM product_variants WHERE id = $1 AND status = 'active'`,
+        [input.variant_id],
+      );
+      if (!variantRows[0]) throw ApiException.notFound('variant');
+
+      await tx.query(
+        `UPDATE invoice_import_lines
+           SET resolved_variant_id = $2, status = $3, resolved_by = $4, resolved_at = now()
+         WHERE id = $1`,
+        [lineId, input.variant_id, input.is_new_product ? 'new_product' : 'matched', actorUserId],
+      );
+
+      await this.markReviewedIfDone(tx, importId);
+      return this.loadImport(tx, importId);
+    });
+  }
+
+  async ignoreLine(orgId: string, actorUserId: string, importId: string, lineId: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      await this.assertImportEditable(tx, importId);
+      const line = await this.loadLineForUpdate(tx, importId, lineId);
+      if (line.status === 'split') {
+        throw new ApiException(
+          'validation_failed',
+          'this line was already split into variants -- ignore the split lines instead',
+          { retryable: false },
+        );
+      }
+
+      await tx.query(
+        `UPDATE invoice_import_lines
+           SET status = 'ignored', resolved_variant_id = NULL, resolved_by = $2, resolved_at = now()
+         WHERE id = $1`,
+        [lineId, actorUserId],
+      );
+
+      await this.markReviewedIfDone(tx, importId);
+      return this.loadImport(tx, importId);
+    });
+  }
+
+  /**
+   * "Add Variants": one ambiguous line's quantity is allocated across
+   * several already-existing variants, each becoming its own new sibling
+   * line. Creating those variants happens on the product's own page
+   * (`CatalogService.addVariant`, already built) -- this only splits an
+   * already-parsed line's quantity once each variant it actually covers
+   * exists to receive a share of it.
+   */
+  async splitLine(
+    orgId: string,
+    actorUserId: string,
+    importId: string,
+    lineId: string,
+    input: SplitInvoiceLine,
+  ) {
+    return this.db.withOrg(orgId, async (tx) => {
+      await this.assertImportEditable(tx, importId);
+      const line = await this.loadLineForUpdate(tx, importId, lineId);
+      if (line.status === 'split') {
+        throw new ApiException('validation_failed', 'this line was already split', { retryable: false });
+      }
+
+      if (line.parsed_quantity !== null) {
+        const target = Number(line.parsed_quantity);
+        const sum = input.items.reduce((acc, item) => acc + Number(item.quantity), 0);
+        if (Math.abs(sum - target) > 0.001) {
+          throw new ApiException(
+            'validation_failed',
+            `the split quantities add up to ${sum}, but this line was originally ${target} -- they must match exactly`,
+            { retryable: false },
+          );
+        }
+      }
+
+      const { rows: maxRows } = await tx.query<{ next: number }>(
+        `SELECT COALESCE(MAX(line_no), 0) + 1 AS next FROM invoice_import_lines WHERE invoice_import_id = $1`,
+        [importId],
+      );
+      let nextLineNo = maxRows[0]!.next;
+
+      for (const item of input.items) {
+        const { rows: variantRows } = await tx.query(
+          `SELECT id FROM product_variants WHERE id = $1 AND status = 'active'`,
+          [item.variant_id],
+        );
+        if (!variantRows[0]) throw ApiException.notFound('variant');
+
+        // `parsed_vendor_sku` is deliberately NOT copied from the parent: a
+        // vendor's own code on an "assorted" line describes the bundle, not
+        // any one resulting variant. Copying it to every child would give
+        // them all the same vendor_sku, which commit's vendor_variants
+        // upsert would then overwrite down to whichever child commits
+        // last -- exactly the ambiguity this split exists to resolve, not
+        // reintroduce.
+        await tx.query(
+          `INSERT INTO invoice_import_lines
+             (org_id, invoice_import_id, line_no, split_from_line_id, raw_text, parsed_quantity,
+              parsed_unit_cost, parsed_description, resolved_variant_id, status,
+              resolved_by, resolved_at)
+           VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, $4, $5, $6, $7, $8, 'matched', $9, now())`,
+          [
+            importId,
+            nextLineNo++,
+            lineId,
+            line.raw_text,
+            item.quantity,
+            item.unit_cost ?? line.parsed_unit_cost,
+            line.parsed_description,
+            item.variant_id,
+            actorUserId,
+          ],
+        );
+      }
+
+      await tx.query(
+        `UPDATE invoice_import_lines
+           SET status = 'split', resolved_variant_id = NULL, resolved_by = $2, resolved_at = now()
+         WHERE id = $1`,
+        [lineId, actorUserId],
+      );
+
+      await this.markReviewedIfDone(tx, importId);
+      return this.loadImport(tx, importId);
+    });
+  }
+
+  /**
+   * Turns a fully reviewed import into a real purchase order and receipt --
+   * the only place this whole system finally touches real stock and money,
+   * and only because every line got there through a human's own resolve/
+   * ignore/split action, never an AI suggestion by itself.
+   *
+   * No existing PO to reconcile against is the common case in this vertical
+   * (per `docs/INTEGRATIONS.md`), so this synthesizes one from the resolved
+   * lines and receives against it immediately, in the same transaction --
+   * exactly the two calls `PurchasingService`'s own transactional refactor
+   * was built to compose.
+   */
+  async commit(orgId: string, actorUserId: string, importId: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows: importRows } = await tx.query<{
+        id: string;
+        store_id: string;
+        vendor_id: string | null;
+        purchase_order_id: string | null;
+        status: string;
+        source_object_key: string;
+        vendor_invoice_no: string | null;
+        invoice_total_minor: string | null;
+      }>(
+        `SELECT id, store_id, vendor_id, purchase_order_id, status, source_object_key,
+                vendor_invoice_no, invoice_total_minor::text
+         FROM invoice_imports WHERE id = $1 FOR UPDATE`,
+        [importId],
+      );
+      const invoiceImport = importRows[0];
+      if (!invoiceImport) throw ApiException.notFound('invoice import');
+
+      if (invoiceImport.status === 'committed') {
+        throw new ApiException('conflict', 'this invoice was already committed', { retryable: false });
+      }
+      if (!invoiceImport.vendor_id) {
+        throw new ApiException(
+          'validation_failed',
+          'this invoice has no vendor -- re-upload it with a vendor selected before committing',
+          { retryable: false },
+        );
+      }
+
+      const { rows: lines } = await tx.query<{
+        id: string;
+        status: string;
+        resolved_variant_id: string | null;
+        parsed_quantity: string | null;
+        parsed_unit_cost: string | null;
+        parsed_vendor_sku: string | null;
+      }>(
+        `SELECT id, status, resolved_variant_id, parsed_quantity::text, parsed_unit_cost::text, parsed_vendor_sku
+         FROM invoice_import_lines WHERE invoice_import_id = $1 ORDER BY line_no`,
+        [importId],
+      );
+
+      const pendingCount = lines.filter((l) => l.status === 'pending').length;
+      if (pendingCount > 0) {
+        throw new ApiException(
+          'validation_failed',
+          `${pendingCount} line(s) still need review -- resolve, ignore, or split each one before committing`,
+          { retryable: false },
+        );
+      }
+
+      const committable = lines.filter((l) => l.status === 'matched' || l.status === 'new_product');
+      if (committable.length === 0) {
+        throw new ApiException(
+          'validation_failed',
+          'nothing to commit -- every line was ignored or split with no lines left to receive',
+          { retryable: false },
+        );
+      }
+      for (const l of committable) {
+        if (!l.resolved_variant_id || l.parsed_quantity == null || l.parsed_unit_cost == null) {
+          throw new ApiException(
+            'validation_failed',
+            'a resolved line is missing a variant, quantity, or unit cost',
+            { retryable: false },
+          );
+        }
+      }
+
+      if (invoiceImport.purchase_order_id) {
+        throw new ApiException(
+          'validation_failed',
+          'committing against a pre-existing purchase order is not supported yet',
+          { retryable: false },
+        );
+      }
+
+      // Used as-is when the vendor's own invoice already has a number --
+      // vendors format these however they like, often with their own
+      // prefix already, and re-prefixing would just as often double one up
+      // (an invoice numbered "INV-77042" becoming reference "INV-INV-77042").
+      // The synthetic fallback only exists for an invoice with no number at
+      // all, where nothing but this import's own id identifies it.
+      const reference = invoiceImport.vendor_invoice_no ?? `INV-${importId.slice(0, 8)}`;
+
+      const po = await this.purchasing.createPurchaseOrderTx(tx, actorUserId, {
+        store_id: invoiceImport.store_id,
+        vendor_id: invoiceImport.vendor_id,
+        reference,
+        lines: committable.map((l) => ({
+          variant_id: l.resolved_variant_id!,
+          vendor_sku: l.parsed_vendor_sku ?? undefined,
+          quantity_ordered: l.parsed_quantity!,
+          unit_cost: l.parsed_unit_cost!,
+        })),
+      });
+
+      // `loadPurchaseOrder` sorts its lines by product/variant name for
+      // display, not insertion order -- re-read directly, ordered by id
+      // (UUIDv7, monotonic within this transaction), which matches the
+      // order the loop above just inserted them in.
+      const { rows: poLineRows } = await tx.query<{ id: string }>(
+        `SELECT id FROM purchase_order_lines WHERE purchase_order_id = $1 ORDER BY id`,
+        [po.id],
+      );
+
+      await this.purchasing.receivePurchaseOrderTx(
+        tx,
+        actorUserId,
+        po.id,
+        {
+          vendor_invoice_no: invoiceImport.vendor_invoice_no ?? undefined,
+          lines: committable.map((l, i) => ({
+            po_line_id: poLineRows[i]!.id,
+            quantity_received: l.parsed_quantity!,
+          })),
+        },
+        {
+          // No presigned-URL generation exists in `ObjectStorageService` yet,
+          // so this isn't a fetchable link -- but the object key is still
+          // the correct, stable pointer back to the stored file.
+          documentUrl: invoiceImport.source_object_key,
+          invoiceTotalMinor: invoiceImport.invoice_total_minor ?? undefined,
+        },
+      );
+
+      for (const l of committable) {
+        if (l.parsed_vendor_sku) {
+          await tx.query(
+            `INSERT INTO vendor_variants (org_id, vendor_id, variant_id, vendor_sku, case_quantity, case_cost, last_ordered_at)
+             VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, 1, $4, now())
+             ON CONFLICT (vendor_id, vendor_sku) DO UPDATE
+               SET variant_id = EXCLUDED.variant_id,
+                   case_cost = $4::numeric * vendor_variants.case_quantity,
+                   last_ordered_at = now()`,
+            [invoiceImport.vendor_id, l.resolved_variant_id, l.parsed_vendor_sku, l.parsed_unit_cost],
+          );
+        }
+      }
+
+      await tx.query(
+        `UPDATE invoice_imports SET status = 'committed', committed_at = now(), purchase_order_id = $2 WHERE id = $1`,
+        [importId, po.id],
+      );
+
+      return this.loadImport(tx, importId);
+    });
+  }
+
+  private async markReviewedIfDone(tx: PoolClient, importId: string): Promise<void> {
+    await tx.query(
+      `UPDATE invoice_imports SET status = 'reviewed'
+       WHERE id = $1 AND status = 'parsed'
+         AND NOT EXISTS (
+           SELECT 1 FROM invoice_import_lines WHERE invoice_import_id = $1 AND status = 'pending'
+         )`,
+      [importId],
+    );
+  }
+
+  private async loadLineForUpdate(tx: PoolClient, importId: string, lineId: string) {
+    const { rows } = await tx.query<{
+      id: string;
+      status: string;
+      raw_text: string;
+      parsed_quantity: string | null;
+      parsed_unit_cost: string | null;
+      parsed_description: string | null;
+      parsed_vendor_sku: string | null;
+    }>(
+      `SELECT id, status, raw_text, parsed_quantity::text, parsed_unit_cost::text, parsed_description, parsed_vendor_sku
+       FROM invoice_import_lines WHERE id = $1 AND invoice_import_id = $2 FOR UPDATE`,
+      [lineId, importId],
+    );
+    const line = rows[0];
+    if (!line) throw ApiException.notFound('invoice import line');
+    return line;
+  }
+
+  private async assertImportEditable(tx: PoolClient, importId: string): Promise<void> {
+    const { rows } = await tx.query<{ status: string }>(`SELECT status FROM invoice_imports WHERE id = $1`, [
+      importId,
+    ]);
+    if (!rows[0]) throw ApiException.notFound('invoice import');
+    if (rows[0].status === 'committed') {
+      throw new ApiException('conflict', 'this invoice was already committed and can no longer be edited', {
+        retryable: false,
+      });
+    }
   }
 
   private async loadImport(tx: PoolClient, id: string) {

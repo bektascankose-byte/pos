@@ -38,6 +38,11 @@ export const invoiceImportLineSchema = z.object({
   is_ambiguous_multi_item: z.boolean(),
   status: invoiceImportLineStatus,
   resolved_variant_id: uuid.nullable(),
+  /** Denormalized for display only -- the resolved variant/product's own name, set whenever `resolved_variant_id` is. */
+  resolved_product_name: z.string().nullable(),
+  resolved_variant_name: z.string().nullable(),
+  resolved_by: uuid.nullable(),
+  resolved_at: timestamp.nullable(),
   created_at: timestamp,
 });
 
@@ -69,12 +74,41 @@ export const createInvoiceImportSchema = z.object({
   vendor_id: uuid.optional(),
 });
 
+/** Accept the AI's own suggestion, or point a line at a different existing variant entirely. */
+export const resolveInvoiceLineSchema = z.object({
+  variant_id: uuid,
+  /** The reviewer is telling us this variant didn't exist until just now -- bookkeeping only, never gates anything at commit. */
+  is_new_product: z.boolean().optional(),
+});
+
+/**
+ * "Add Variants": one ambiguous line (a vendor's "50 boxes, assorted
+ * flavors") becomes several new sibling lines, each resolved to its own
+ * variant and carrying its own slice of the original quantity. The variant
+ * itself is created separately, on the product's own page -- this only
+ * allocates an already-parsed line's quantity across variants that already
+ * exist by the time this is submitted.
+ */
+export const splitInvoiceLineItemSchema = z.object({
+  variant_id: uuid,
+  quantity,
+  /** Defaults to the original line's own unit cost when omitted. */
+  unit_cost: costDecimal.optional(),
+});
+
+export const splitInvoiceLineSchema = z.object({
+  items: z.array(splitInvoiceLineItemSchema).min(2).max(20),
+});
+
 export type InvoiceImportStatus = z.infer<typeof invoiceImportStatus>;
 export type InvoiceImportLineStatus = z.infer<typeof invoiceImportLineStatus>;
 export type InvoiceSourceFormat = z.infer<typeof invoiceSourceFormat>;
 export type InvoiceImport = z.infer<typeof invoiceImportSchema>;
 export type InvoiceImportLine = z.infer<typeof invoiceImportLineSchema>;
 export type CreateInvoiceImport = z.infer<typeof createInvoiceImportSchema>;
+export type ResolveInvoiceLine = z.infer<typeof resolveInvoiceLineSchema>;
+export type SplitInvoiceLineItem = z.infer<typeof splitInvoiceLineItemSchema>;
+export type SplitInvoiceLine = z.infer<typeof splitInvoiceLineSchema>;
 
 /**
  * AI Structured Outputs schemas -- a different shape than the rest of this

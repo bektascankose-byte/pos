@@ -7,5 +7,6 @@ import { InventoryModule } from '../inventory/inventory.module.js';
   imports: [InventoryModule],
   controllers: [PurchasingController],
   providers: [PurchasingService],
+  exports: [PurchasingService],
 })
 export class PurchasingModule {}

@@ -2,6 +2,77 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — Invoice ingestion, part 5: review, "Add Variants", and commit
+
+The sixth and final phase of the AI-assisted invoice-ingestion system: a human reviews every line,
+resolves or splits it, and committing turns the result into a real purchase order and a real receipt --
+the only place this whole system finally touches stock or money, and only because a person clicked
+through it line by line.
+
+- **`POST /v1/invoice-imports/:id/lines/:lineId/resolve`**: accept the AI's own suggestion or point a
+  line at any other existing variant -- the same endpoint either way, since both are just "a human
+  chose this variant." An optional `is_new_product` flag records that the variant didn't exist until
+  the reviewer just created it (bookkeeping only; never gates anything). Re-resolving an already-matched
+  or ignored line is allowed, so a reviewer can freely change their mind before committing.
+- **`POST .../ignore`**: excludes a line from commit entirely (a duplicate, a subtotal that leaked
+  through as a line, a discount row).
+- **`POST .../split`** -- "Add Variants": the feature this whole project exists for. One line that
+  bundles several flavors under a single vendor SKU ("50 boxes, Assorted Flavors") becomes several new
+  sibling lines, each resolved to its own already-existing variant with its own slice of the original
+  quantity. The quantities are required to add back up to the original line's exactly, or the request
+  is rejected with the numbers spelled out. Creating the variant itself still happens on the product's
+  own page (`CatalogService.addVariant`, from the first phase of this project) -- this only allocates a
+  quantity across variants that already exist by the time it's submitted. Deliberately does **not**
+  copy the parent line's own `vendor_sku` onto each child: a vendor's code on an assorted line names the
+  bundle, not any one resulting variant, and copying it to every child would have made the
+  `vendor_variants` upsert at commit overwrite itself down to whichever child happened to commit last --
+  exactly the ambiguity this feature exists to resolve, not reintroduce.
+- **`POST /v1/invoice-imports/:id/commit`**: requires an `Idempotency-Key`, same reason
+  `purchase-orders/:id/receive` does. Refuses to run while any line is still `pending`, spelling out how
+  many remain. No existing PO to reconcile against is the normal case in this vertical (per
+  `docs/INTEGRATIONS.md`), so this synthesizes one from the resolved lines and receives against it in
+  the same transaction, composing `PurchasingService`'s own `createPurchaseOrderTx`/
+  `receivePurchaseOrderTx` -- exactly what that refactor, back in this project's second phase, was built
+  for. Also **upserts `vendor_variants`** for every committed line that carries a vendor SKU, so the same
+  vendor's next invoice needs less AI and less human correction -- a compounding return, not a one-shot
+  tool. Attaching to a pre-existing purchase order (`invoice_imports.purchase_order_id` set ahead of
+  time) is deliberately out of scope this pass -- nothing yet sets that column, and this vertical's
+  vendors rarely place formal POs in the first place -- so `commit` throws a clear "not supported yet"
+  rather than guessing at a line-to-line reconciliation.
+- `invoice_imports.status` now advances itself to `reviewed` the moment the last `pending` line is
+  resolved, ignored, or split, rather than requiring a separate "mark reviewed" click -- one less step,
+  and the dashboard's Commit button reflects it immediately.
+- `resolved_by`/`resolved_at` (existing, unused columns from the original staging migration) are now
+  populated on every resolve/ignore/split, and `resolved_product_name`/`resolved_variant_name` join in
+  for display, the same denormalization the AI suggestion columns already had.
+- Dashboard: the invoice detail page gained per-line Resolve/Ignore controls (a variant picker
+  defaulting to the AI's own suggestion, an "already created" checkbox, an Ignore button), a "Split into
+  variants" link on ambiguous lines, a "Create new product" hand-off to `/catalog/new` (now accepting
+  `description`/`brand`/`category` query params to prefill from `ai_suggested_*`) for anything with no
+  catalog match, and a Commit button disabled until every line has been resolved, ignored, or split. A
+  new split page lets a reviewer allocate one line's quantity across several already-existing variants.
+  Once committed, the page becomes read-only and links to the resulting purchase order.
+
+Verified against the real dev database and through the dashboard's own UI, twice -- once driving the
+API directly and once clicking through the actual browser: parsed a synthetic invoice covering all four
+matching tiers, then for the fully-resolved review: accepted an AI suggestion, overrode another to a
+different variant and then reverted it back, ignored a line, and split the ambiguous "assorted flavors"
+line into two real existing variants (rejecting an incorrect split first, to confirm the quantity-sum
+check). Confirmed the import auto-advanced to `reviewed` the moment the last line was resolved.
+Committed and confirmed: a new purchase order with exactly the right lines/quantities/costs, a receipt,
+stock correctly incremented for every received variant (and correctly *not* incremented for the ignored
+line), the PO's own total matching a hand-computed sum to the cent, `vendor_variants` upserted only for
+the three lines that actually carried a vendor SKU (confirming the split children's own SKU was
+correctly left blank), a second commit attempt cleanly refused as already-committed, and every
+line-mutation endpoint refused once the import was committed. Along the way, found and fixed two real bugs
+before they shipped: split children silently inheriting the parent's vendor SKU (see above), and a PO
+reference doubling up its own prefix when a vendor's invoice number already had one (`INV-77042` becoming
+`INV-INV-77042`). Full verification suite green: typecheck, lint, all contracts/db/pricing-spec tests
+(pglite and real Postgres, including RLS), and a clean dashboard production build. All test data --
+vendor, its `vendor_variants` rows, both invoice imports, both purchase orders and receipts, and the
+inventory ledger entries they posted -- removed afterward, with stock levels confirmed restored to
+their exact pre-test values.
+
 ## Phase 2 — Invoice ingestion, part 4: AI extraction and the matching cascade's AI tier
 
 The fifth phase of the AI-assisted invoice-ingestion system: OpenAI reads the vendor invoice formats
