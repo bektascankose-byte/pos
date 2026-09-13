@@ -2,6 +2,44 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — Invoice ingestion, part 3: the matching cascade
+
+The fourth phase of the AI-assisted invoice-ingestion system: for each parsed line, try to identify
+which catalog variant it's actually describing -- deterministically, for free, before any AI spend
+enters the picture. Most well-formed invoices resolve entirely here.
+
+- New `POST /v1/invoice-imports/:id/match`, tried in order for every line still without a suggestion:
+  **(1)** an exact barcode match against `variant_barcodes` (in case the invoice's own "code" column
+  is actually a UPC, not a vendor-specific SKU) -- confidence 1.0; **(2)** an exact match against
+  this import's vendor's own `vendor_sku` in `vendor_variants` -- confidence 1.0, and the first time
+  this table has ever been read or written anywhere in this codebase, exactly as dormant as
+  `purchase_orders` was before this session started building real APIs behind these tables;
+  **(3)** a fuzzy match on the description using `pg_trgm`'s `similarity()` against the catalog's own
+  product/variant names (already enabled and indexed, unused for this purpose until now), only
+  suggested above the same 0.3 threshold Postgres's own `similarity_threshold` GUC defaults to. A line
+  nothing matches gets no suggestion at all -- not a low-confidence guess, which would be worse than
+  no suggestion.
+- **Only ever writes `ai_suggested_variant_id`/`ai_confidence`** -- never `resolved_variant_id`, never
+  a status change. A line the cascade is completely certain about (an exact barcode) is still a
+  suggestion, not a human's confirmation of it; review and commit are their own later step. Re-running
+  match on an import only re-tries lines still missing a suggestion, so it's safe to call again after,
+  say, adding a new `vendor_variants` mapping, without disturbing lines already resolved.
+- Dashboard: a "Find matches" button on the invoice detail page, and a new "Suggested match" column
+  on the line table showing the matched product/variant name and confidence percentage, or "no match
+  yet."
+
+Verified against the real dev database and through the dashboard's own UI: built a four-line test
+invoice covering all three tiers plus a deliberately unmatched line (a real UPC for an exact barcode
+hit, a `vendor_variants` row created for the test to prove that table's first real use, a
+loosely-worded description for the fuzzy tier, and nonsense text expected to match nothing) and
+confirmed each landed exactly where it should, with barcode/vendor-SKU hits at 100% confidence and
+the fuzzy hit at a real, non-trivial similarity score; confirmed re-running match only reprocessed
+the one still-unmatched line; confirmed a cashier-role token is refused for missing
+`purchasing.create`; ran the same "50 Boxes Assorted Flavor"-style scenario through the actual browser
+UI end to end (upload → parse → match) and confirmed the suggested match and confidence rendered
+correctly. Cleaned up all test data (vendor, vendor_variants row, invoice import and its lines)
+afterward.
+
 ## Phase 2 — Invoice ingestion, part 2: file upload, object storage, and CSV parsing
 
 The third phase of the AI-assisted invoice-ingestion system: a real upload endpoint and a real

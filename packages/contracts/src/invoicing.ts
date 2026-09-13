@@ -28,6 +28,9 @@ export const invoiceImportLineSchema = z.object({
   parsed_description: z.string().nullable(),
   parsed_vendor_sku: z.string().nullable(),
   ai_suggested_variant_id: uuid.nullable(),
+  /** Denormalized for display only -- set whenever `ai_suggested_variant_id` is, never sent by a client. */
+  ai_suggested_product_name: z.string().nullable(),
+  ai_suggested_variant_name: z.string().nullable(),
   ai_confidence: z.number().nullable(),
   ai_suggested_brand: z.string().nullable(),
   ai_suggested_category: z.string().nullable(),

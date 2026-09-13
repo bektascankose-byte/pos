@@ -98,4 +98,10 @@ export class InvoicingController {
   parse(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.invoicing.parse(user.orgId, id);
   }
+
+  @Post(':id/match')
+  @RequirePermissions('purchasing.create')
+  match(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.invoicing.match(user.orgId, id);
+  }
 }

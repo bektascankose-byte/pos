@@ -12,11 +12,16 @@ const IMPORT_COLUMNS = `ii.id, ii.store_id, ii.vendor_id, v.name AS vendor_name,
        ii.invoice_total_minor::text, ii.vendor_invoice_no, ii.status, ii.parse_error,
        ii.created_at, ii.committed_at`;
 
-const LINE_COLUMNS = `id, invoice_import_id, line_no, split_from_line_id, raw_text,
-       parsed_quantity::text, parsed_unit_cost::text, parsed_description, parsed_vendor_sku,
-       ai_suggested_variant_id, ai_confidence::float8 AS ai_confidence, ai_suggested_brand,
-       ai_suggested_category, ai_suggested_product_description, is_ambiguous_multi_item,
-       status, resolved_variant_id, created_at`;
+const LINE_COLUMNS = `l.id, l.invoice_import_id, l.line_no, l.split_from_line_id, l.raw_text,
+       l.parsed_quantity::text, l.parsed_unit_cost::text, l.parsed_description, l.parsed_vendor_sku,
+       l.ai_suggested_variant_id, sp.name AS ai_suggested_product_name, sv.variant_name AS ai_suggested_variant_name,
+       l.ai_confidence::float8 AS ai_confidence, l.ai_suggested_brand,
+       l.ai_suggested_category, l.ai_suggested_product_description, l.is_ambiguous_multi_item,
+       l.status, l.resolved_variant_id, l.created_at`;
+
+const LINE_FROM = `invoice_import_lines l
+       LEFT JOIN product_variants sv ON sv.id = l.ai_suggested_variant_id
+       LEFT JOIN products sp ON sp.id = sv.product_id`;
 
 interface ParsedCsvLine {
   rawText: string;
@@ -210,6 +215,103 @@ export class InvoicingService {
     });
   }
 
+  /**
+   * The matching cascade -- deterministic, free, no AI. Every `pending` line
+   * with nothing suggested yet is tried, in order, against: an exact barcode
+   * (in case the invoice's own "code" column is actually a UPC), then this
+   * vendor's own SKU mapping (`vendor_variants`, populated by an earlier
+   * receipt against this same vendor -- unused until now), then a fuzzy
+   * trigram match on the description against the catalog's own product/
+   * variant names. Only when none of those find anything does a line stay
+   * fully unmatched, for AI (not built yet) or a human to resolve by hand.
+   *
+   * This only ever writes `ai_suggested_variant_id`/`ai_confidence` -- never
+   * `resolved_variant_id` or a status change. A suggestion, however certain,
+   * is not the same thing as a human confirming it.
+   */
+  async match(orgId: string, id: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows: importRows } = await tx.query<{ id: string; vendor_id: string | null }>(
+        `SELECT id, vendor_id FROM invoice_imports WHERE id = $1`,
+        [id],
+      );
+      if (!importRows[0]) throw ApiException.notFound('invoice import');
+      const vendorId = importRows[0].vendor_id;
+
+      const { rows: lines } = await tx.query<{
+        id: string;
+        parsed_vendor_sku: string | null;
+        parsed_description: string | null;
+      }>(
+        `SELECT id, parsed_vendor_sku, parsed_description FROM invoice_import_lines
+         WHERE invoice_import_id = $1 AND status = 'pending' AND ai_suggested_variant_id IS NULL`,
+        [id],
+      );
+
+      let matched = 0;
+      for (const line of lines) {
+        const found = await this.findMatch(tx, vendorId, line.parsed_vendor_sku, line.parsed_description);
+        if (found) {
+          await tx.query(
+            `UPDATE invoice_import_lines SET ai_suggested_variant_id = $2, ai_confidence = $3 WHERE id = $1`,
+            [line.id, found.variantId, found.confidence],
+          );
+          matched++;
+        }
+      }
+
+      return { ...(await this.loadImport(tx, id)), matched_count: matched, candidate_count: lines.length };
+    });
+  }
+
+  private async findMatch(
+    tx: PoolClient,
+    vendorId: string | null,
+    vendorSku: string | null,
+    description: string | null,
+  ): Promise<{ variantId: string; confidence: number } | null> {
+    if (vendorSku) {
+      const { rows: barcodeRows } = await tx.query<{ id: string }>(
+        `SELECT v.id FROM variant_barcodes b
+         JOIN product_variants v ON v.id = b.variant_id
+         WHERE b.barcode = $1 AND v.status = 'active'
+         LIMIT 1`,
+        [vendorSku],
+      );
+      if (barcodeRows[0]) return { variantId: barcodeRows[0].id, confidence: 1 };
+
+      if (vendorId) {
+        const { rows: vendorSkuRows } = await tx.query<{ variant_id: string }>(
+          `SELECT vv.variant_id FROM vendor_variants vv
+           JOIN product_variants v ON v.id = vv.variant_id
+           WHERE vv.vendor_id = $1 AND vv.vendor_sku = $2 AND v.status = 'active'
+           LIMIT 1`,
+          [vendorId, vendorSku],
+        );
+        if (vendorSkuRows[0]) return { variantId: vendorSkuRows[0].variant_id, confidence: 1 };
+      }
+    }
+
+    if (description) {
+      const { rows: fuzzyRows } = await tx.query<{ id: string; score: number }>(
+        `SELECT v.id,
+                similarity(p.name || ' ' || COALESCE(v.variant_name, ''), $1) AS score
+         FROM product_variants v
+         JOIN products p ON p.id = v.product_id
+         WHERE v.status = 'active' AND p.status = 'active'
+         ORDER BY score DESC
+         LIMIT 1`,
+        [description],
+      );
+      const best = fuzzyRows[0];
+      // pg_trgm's own default similarity_threshold GUC is 0.3 -- below that,
+      // a "best available" match is noise, not a suggestion worth showing.
+      if (best && best.score > 0.3) return { variantId: best.id, confidence: best.score };
+    }
+
+    return null;
+  }
+
   private async loadImport(tx: PoolClient, id: string) {
     const { rows } = await tx.query(
       `SELECT ${IMPORT_COLUMNS} FROM invoice_imports ii LEFT JOIN vendors v ON v.id = ii.vendor_id WHERE ii.id = $1`,
@@ -219,7 +321,7 @@ export class InvoicingService {
     if (!invoiceImport) throw ApiException.notFound('invoice import');
 
     const { rows: lines } = await tx.query(
-      `SELECT ${LINE_COLUMNS} FROM invoice_import_lines WHERE invoice_import_id = $1 ORDER BY line_no`,
+      `SELECT ${LINE_COLUMNS} FROM ${LINE_FROM} WHERE l.invoice_import_id = $1 ORDER BY l.line_no`,
       [id],
     );
 

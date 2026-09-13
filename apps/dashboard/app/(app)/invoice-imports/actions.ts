@@ -42,3 +42,13 @@ export async function parseInvoiceAction(id: string): Promise<void> {
   }
   redirect(`/invoice-imports/${id}?saved=1`);
 }
+
+export async function matchInvoiceAction(id: string): Promise<void> {
+  try {
+    await apiFetch(`/api/v1/invoice-imports/${id}/match`, { method: "POST" });
+  } catch (e) {
+    const message = e instanceof ApiError ? e.message : "Could not match those lines.";
+    redirect(`/invoice-imports/${id}?error=${encodeURIComponent(message)}`);
+  }
+  redirect(`/invoice-imports/${id}?saved=1`);
+}
