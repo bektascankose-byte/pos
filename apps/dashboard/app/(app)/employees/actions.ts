@@ -103,3 +103,81 @@ export async function createEmployeeAction(formData: FormData): Promise<void> {
   }
   redirect(`/employees/${created.id}?saved=1`);
 }
+
+export async function createTemplateItemAction(formData: FormData): Promise<void> {
+  const title = String(formData.get("title") ?? "").trim();
+  const description = String(formData.get("description") ?? "").trim();
+  if (!title) {
+    redirect(`/employees/onboarding?error=${encodeURIComponent("Give the task a title.")}`);
+  }
+
+  try {
+    await apiFetch(`/api/v1/onboarding/templates`, {
+      method: "POST",
+      body: JSON.stringify({ title, ...(description ? { description } : {}) }),
+    });
+  } catch (e) {
+    const message = e instanceof ApiError ? e.message : "Could not add that task.";
+    redirect(`/employees/onboarding?error=${encodeURIComponent(message)}`);
+  }
+  redirect(`/employees/onboarding?saved=1`);
+}
+
+export async function updateTemplateItemAction(id: string, formData: FormData): Promise<void> {
+  const title = String(formData.get("title") ?? "").trim();
+  const description = String(formData.get("description") ?? "").trim();
+  const isActive = formData.get("is_active") === "on";
+
+  try {
+    await apiFetch(`/api/v1/onboarding/templates/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        ...(title ? { title } : {}),
+        description,
+        is_active: isActive,
+      }),
+    });
+  } catch (e) {
+    const message = e instanceof ApiError ? e.message : "Could not save that task.";
+    redirect(`/employees/onboarding?error=${encodeURIComponent(message)}`);
+  }
+  redirect(`/employees/onboarding?saved=1`);
+}
+
+export async function completeChecklistItemAction(employeeId: string, itemId: string): Promise<void> {
+  try {
+    await apiFetch(`/api/v1/onboarding/checklists/${employeeId}/items/${itemId}/complete`, { method: "POST" });
+  } catch (e) {
+    const message = e instanceof ApiError ? e.message : "Could not check off that task.";
+    redirect(`/employees/${employeeId}?error=${encodeURIComponent(message)}`);
+  }
+  redirect(`/employees/${employeeId}?saved=1`);
+}
+
+export async function reopenChecklistItemAction(employeeId: string, itemId: string): Promise<void> {
+  try {
+    await apiFetch(`/api/v1/onboarding/checklists/${employeeId}/items/${itemId}/reopen`, { method: "POST" });
+  } catch (e) {
+    const message = e instanceof ApiError ? e.message : "Could not reopen that task.";
+    redirect(`/employees/${employeeId}?error=${encodeURIComponent(message)}`);
+  }
+  redirect(`/employees/${employeeId}?saved=1`);
+}
+
+export async function addChecklistItemAction(employeeId: string, formData: FormData): Promise<void> {
+  const title = String(formData.get("title") ?? "").trim();
+  if (!title) {
+    redirect(`/employees/${employeeId}?error=${encodeURIComponent("Give the task a title.")}`);
+  }
+
+  try {
+    await apiFetch(`/api/v1/onboarding/checklists/${employeeId}/items`, {
+      method: "POST",
+      body: JSON.stringify({ title }),
+    });
+  } catch (e) {
+    const message = e instanceof ApiError ? e.message : "Could not add that task.";
+    redirect(`/employees/${employeeId}?error=${encodeURIComponent(message)}`);
+  }
+  redirect(`/employees/${employeeId}?saved=1`);
+}

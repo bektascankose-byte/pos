@@ -16,6 +16,7 @@ import { CustomersModule } from './modules/customers/customers.module.js';
 import { EmployeesModule } from './modules/employees/employees.module.js';
 import { InvoicingModule } from './modules/invoicing/invoicing.module.js';
 import { LoyaltyModule } from './modules/loyalty/loyalty.module.js';
+import { OnboardingModule } from './modules/onboarding/onboarding.module.js';
 import { PurchasingModule } from './modules/purchasing/purchasing.module.js';
 import { ReportsModule } from './modules/reports/reports.module.js';
 import { SchedulingModule } from './modules/scheduling/scheduling.module.js';
@@ -37,6 +38,7 @@ import { HealthController } from './modules/health/health.controller.js';
     EmployeesModule,
     InvoicingModule,
     LoyaltyModule,
+    OnboardingModule,
     PurchasingModule,
     ReportsModule,
     SchedulingModule,

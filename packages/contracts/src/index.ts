@@ -16,6 +16,7 @@ export * from './employees.js';
 export * from './inventory.js';
 export * from './invoicing.js';
 export * from './loyalty.js';
+export * from './onboarding.js';
 export * from './purchasing.js';
 export * from './reports.js';
 export * from './sales.js';

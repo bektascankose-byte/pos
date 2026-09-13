@@ -2,6 +2,45 @@
 
 Notable changes. Newest first.
 
+## Employee onboarding checklists
+
+One org-wide checklist template, managed on its own screen; hiring a new employee automatically
+snapshots whatever tasks are active at that moment into a fresh per-employee checklist -- no separate
+"start onboarding" step. Reuses `employee.view`/`employee.manage`; no new permissions.
+
+- New `onboarding_task_templates` (the shared, editable list), `onboarding_checklists` (one per
+  employee, started automatically), and `onboarding_checklist_items` (a **snapshot** of the template's
+  title at the moment of hire, not a live reference) tables. Retiring or editing a template item only
+  changes what *future* hires see -- it never rewrites a checklist someone already has, the same
+  reasoning `purchase_order_lines.unit_cost` already captures a price at order time rather than reading
+  it live.
+- `EmployeesService.create` now calls `OnboardingService.startChecklistTx` inside its own existing
+  transaction, so a new hire and their checklist either both exist or neither does. There is
+  deliberately no endpoint to start one by hand -- onboarding only ever begins at hire time.
+- A manager can check off or reopen any item (both are recorded with who and when), and add a one-off
+  item to one specific employee's checklist without it becoming part of the shared template. The
+  checklist's own `completed_at` is maintained automatically -- set the moment the last item is
+  checked off, cleared again the moment anything is reopened or a new item is added -- rather than a
+  separate status a person has to remember to update.
+- Dashboard: `/employees/onboarding` manages the template (edit title/description, toggle active,
+  add new tasks); the employee detail page gained an "Onboarding" section with per-item check-off/
+  reopen controls, a progress count, and an add-one-off-task form. An employee hired before this
+  feature existed simply shows "no onboarding checklist" -- a permanent, expected state for them, not
+  an error.
+
+Verified against the real dev database and through the dashboard's own UI: added three template tasks,
+hired a test employee and confirmed their checklist snapshotted exactly those three; checked off two,
+confirmed the checklist wasn't yet marked complete, checked off the third and confirmed it auto-completed,
+then reopened one and confirmed it un-completed again; added a one-off task and confirmed it appeared
+with no template link and reset the completed state; retired one template task and confirmed the
+already-hired employee's checklist kept it unchanged while hiring a second employee produced a checklist
+with only the two still-active tasks -- the core snapshot-vs-live-reference behavior this design exists
+for. Confirmed a cashier-role token is refused for every write (template edits, complete, reopen, add).
+Repeated the full check-off/reopen/add/"All done" sequence through the actual browser. Full verification
+suite green: typecheck, lint, all contracts/db/pricing-spec tests (pglite and real Postgres, including
+RLS), and a clean dashboard production build. All test data (two employees, three template tasks, their
+checklists) removed afterward.
+
 ## Phase 2 — Invoice ingestion, part 5: review, "Add Variants", and commit
 
 The sixth and final phase of the AI-assisted invoice-ingestion system: a human reviews every line,

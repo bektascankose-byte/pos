@@ -3,6 +3,7 @@ import type { CreateEmployee, UpdateEmployee, AssignRole } from '@snappos/contra
 import { DatabaseService } from '../../platform/database/database.service.js';
 import { AuthService } from '../../platform/auth/auth.service.js';
 import { AuditService } from '../../platform/audit/audit.service.js';
+import { OnboardingService } from '../onboarding/onboarding.service.js';
 import { ApiException } from '../../platform/errors/api-exception.js';
 
 const EMPLOYEE_COLUMNS = `id, email, phone, full_name, display_name, employee_code,
@@ -14,6 +15,7 @@ export class EmployeesService {
     private readonly db: DatabaseService,
     private readonly auth: AuthService,
     private readonly audit: AuditService,
+    private readonly onboarding: OnboardingService,
   ) {}
 
   async list(orgId: string) {
@@ -124,6 +126,10 @@ export class EmployeesService {
           [employee.id, pinHash],
         );
       }
+
+      // Same transaction as the employee row itself: a new hire and their
+      // onboarding checklist either both exist or neither does.
+      await this.onboarding.startChecklistTx(tx, actorUserId, employee.id);
 
       await this.audit.record(tx, {
         action: 'employee.create',

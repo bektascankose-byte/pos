@@ -1,11 +1,14 @@
 import { notFound } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/api";
-import type { Employee, Role } from "@snappos/contracts";
+import type { Employee, Role, OnboardingChecklist } from "@snappos/contracts";
 import {
   updateEmployeeAction,
   setPinAction,
   assignRoleAction,
   removeRoleAction,
+  completeChecklistItemAction,
+  reopenChecklistItemAction,
+  addChecklistItemAction,
 } from "../actions";
 
 export default async function EmployeeDetailPage({
@@ -30,9 +33,20 @@ export default async function EmployeeDetailPage({
     throw e;
   }
 
+  let checklist: OnboardingChecklist | null = null;
+  try {
+    checklist = await apiFetch<OnboardingChecklist>(`/api/v1/onboarding/checklists/${id}`);
+  } catch (e) {
+    // Pre-existing employees hired before this feature shipped have none --
+    // that's an expected, permanent state for them, not an error.
+    if (!(e instanceof ApiError && e.status === 404)) throw e;
+  }
+
   const updateEmployee = updateEmployeeAction.bind(null, id);
   const setPin = setPinAction.bind(null, id);
   const assignRole = assignRoleAction.bind(null, id);
+  const addChecklistItem = addChecklistItemAction.bind(null, id);
+  const completedCount = checklist?.items.filter((i) => i.is_completed).length ?? 0;
 
   const heldRoleKeys = new Set((employee.roles ?? []).map((r) => r.role_key));
   const availableRoles = roles.filter((r) => !heldRoleKeys.has(r.key));
@@ -141,6 +155,71 @@ export default async function EmployeeDetailPage({
             Reset
           </button>
         </form>
+      </section>
+
+      <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-medium text-[var(--color-text-muted)]">Onboarding</h2>
+          {checklist ? (
+            <span className="text-xs text-[var(--color-text-muted)]">
+              {checklist.completed_at ? (
+                <span className="text-[var(--color-success)]">All done</span>
+              ) : (
+                `${completedCount} of ${checklist.items.length} complete`
+              )}
+            </span>
+          ) : null}
+        </div>
+
+        {checklist ? (
+          <>
+            <ul className="mb-4 flex flex-col gap-2">
+              {checklist.items.map((item) => {
+                const complete = completeChecklistItemAction.bind(null, id, item.id);
+                const reopen = reopenChecklistItemAction.bind(null, id, item.id);
+                return (
+                  <li key={item.id} className="flex items-start justify-between gap-2 text-sm">
+                    <div>
+                      <span className={item.is_completed ? "line-through text-[var(--color-text-muted)]" : ""}>
+                        {item.title}
+                      </span>
+                      {item.is_completed ? (
+                        <span className="block text-xs text-[var(--color-text-muted)]">
+                          {item.completed_by_name ? `${item.completed_by_name} · ` : ""}
+                          {item.completed_at ? new Date(item.completed_at).toLocaleDateString() : ""}
+                        </span>
+                      ) : null}
+                    </div>
+                    <form action={item.is_completed ? reopen : complete}>
+                      <button
+                        type="submit"
+                        className="rounded-md border border-[var(--color-border)] px-3 py-1 text-xs"
+                      >
+                        {item.is_completed ? "Reopen" : "Check off"}
+                      </button>
+                    </form>
+                  </li>
+                );
+              })}
+              {checklist.items.length === 0 ? (
+                <li className="text-sm text-[var(--color-text-muted)]">No tasks on this checklist.</li>
+              ) : null}
+            </ul>
+            <form action={addChecklistItem} className="flex items-end gap-2">
+              <Field label="Add a one-off task" name="title" />
+              <button
+                type="submit"
+                className="rounded-md border border-[var(--color-border)] px-3 py-2 text-sm"
+              >
+                Add
+              </button>
+            </form>
+          </>
+        ) : (
+          <p className="text-sm text-[var(--color-text-muted)]">
+            No onboarding checklist -- this employee was hired before onboarding checklists existed.
+          </p>
+        )}
       </section>
     </div>
   );
