@@ -14,6 +14,7 @@ export * from './catalog.js';
 export * from './customers.js';
 export * from './employees.js';
 export * from './inventory.js';
+export * from './loyalty.js';
 export * from './purchasing.js';
 export * from './reports.js';
 export * from './sales.js';

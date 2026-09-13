@@ -104,6 +104,16 @@ function describeCheck(constraint?: string): string {
       return 'quantity received must be greater than zero';
     case 'shifts_time_order':
       return 'a shift must end after it starts';
+    case 'loyalty_name_not_blank':
+      return 'the loyalty program needs a name';
+    case 'loyalty_earn_rate_positive':
+      return 'the earn rate must be greater than zero';
+    case 'loyalty_redemption_rate_positive':
+      return 'the redemption rate must be greater than zero';
+    case 'loyalty_min_redemption_nonneg':
+      return 'the minimum redemption points cannot be negative';
+    case 'loyalty_expiry_positive':
+      return 'points expiration must be a positive number of days';
     default:
       return 'the request violates a rule the database enforces';
   }

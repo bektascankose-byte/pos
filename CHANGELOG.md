@@ -2,6 +2,53 @@
 
 Notable changes. Newest first.
 
+## Phase 2 — Back office, seventh slice: loyalty program settings
+
+Configuration only, no engine. `docs/ARCHITECTURE.md`'s own entity diagram
+names `loyalty_accounts`/`loyalty_transactions` as a full points-accrual system
+(Phase 3: earning on completed sales, redemption at checkout, both of which
+would touch the register app) -- but neither those tables nor anything else
+loyalty-related existed anywhere in the schema, contracts, API, or Android
+app before this slice. This is genuinely greenfield, unlike scheduling or
+purchase orders which at least had a table or a clear shape already. Scoped
+by the user to a points-based mechanic, settings only: this stores a
+program's name, on/off switch, and rates. Nothing reads these numbers yet --
+turning the program on does not change how a sale rings up today.
+
+- New migration `0012_loyalty_settings.sql`: a `loyalty_settings` table, one
+  row per org with `org_id` itself as the primary key (a business has one
+  loyalty program's settings, not a list of them), plus `loyalty.view` and
+  `loyalty.manage` permissions granted to owner/administrator/manager. Kept
+  out of `organizations.settings` (the existing generic jsonb bucket) so the
+  rates get real column types and `CHECK` constraints instead of living as
+  unvalidated JSON. Updated the schema test suite's
+  table/FK/enum/check/trigger counts for the new table.
+- New `apps/api/src/modules/loyalty/` module: `GET /v1/loyalty/settings`
+  (a no-op upsert creates the default row on first read, so there's nothing
+  to provision ahead of time) and `PATCH /v1/loyalty/settings`
+  (COALESCE-per-column, the same partial-update shape used everywhere else in
+  this API). Found and fixed a real Postgres gotcha while testing the update
+  endpoint live: `COALESCE($3, 1)` and `COALESCE($4, 100)` -- meant as
+  defaults for the `numeric(10,2)` rate columns on a brand-new row -- made
+  Postgres infer both parameters as plain `integer`, because a bare literal
+  like `1` defaults to that type and a parameter's type has to agree across
+  every use of it in one statement. Sending `"2.00"` for an inferred-integer
+  parameter fails outright. Fixed by casting the literal defaults
+  (`1::numeric`, `100::numeric`) rather than leaving Postgres to guess.
+- Dashboard: `/loyalty`, a single settings form (active toggle, name, earn
+  rate, redemption rate, optional minimum-redemption floor, optional
+  expiration) with an explicit note that no accrual or redemption happens
+  yet. Plain server-rendered form, this app's first checkbox input.
+
+Verified against the real dev database and through the dashboard's own UI:
+confirmed a fresh org gets sensible defaults on first load with no explicit
+setup, saved full settings, made a partial update (toggling just the active
+switch) and confirmed every other field stayed exactly as it was, confirmed
+invalid input (a blank name, a malformed rate) was rejected before reaching
+the database, and confirmed a cashier-role token is refused with
+`loyalty.view` missing. Re-ran the full Postgres and PGlite schema suites
+after the migration to confirm the updated counts are exactly right.
+
 ## Phase 2 — Back office, sixth slice: employee scheduling
 
 A shift roster -- assign employees to upcoming shifts so everyone knows when
