@@ -1,7 +1,7 @@
 "use server";
 
-import { redirect } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/api";
+import type { ActionResult } from "@/lib/action-result";
 import type { Customer } from "@snappos/contracts";
 
 /**
@@ -11,7 +11,7 @@ import type { Customer } from "@snappos/contracts";
  * The form says so, so a blanked-out box that reappears filled after saving
  * doesn't read as a bug.
  */
-export async function updateCustomerAction(id: string, formData: FormData): Promise<void> {
+export async function updateCustomerAction(id: string, formData: FormData): Promise<ActionResult<Customer>> {
   const body: Record<string, string> = {};
   for (const field of ["first_name", "last_name", "phone", "email", "notes"] as const) {
     const value = String(formData.get(field) ?? "").trim();
@@ -19,14 +19,12 @@ export async function updateCustomerAction(id: string, formData: FormData): Prom
   }
 
   try {
-    await apiFetch<Customer>(`/api/v1/customers/${id}`, {
+    const data = await apiFetch<Customer>(`/api/v1/customers/${id}`, {
       method: "PATCH",
       body: JSON.stringify(body),
     });
+    return { ok: true, data };
   } catch (e) {
-    const message = e instanceof ApiError ? e.message : "Could not save changes.";
-    redirect(`/customers/${id}?error=${encodeURIComponent(message)}`);
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not save changes." };
   }
-
-  redirect(`/customers/${id}?saved=1`);
 }

@@ -2,6 +2,54 @@
 
 Notable changes. Newest first.
 
+## Client-side interactivity for the rest of the back office
+
+Continues the previous entry's pattern (Server Actions called from Client Components instead of
+`redirect()`-ending `<form action>`s) across every remaining page that mutates anything: price
+categories, purchase orders and inventory adjustments (including the PO-creation and invoice-line-split
+fixed row counts, `LINE_ROWS`/`SPLIT_ROWS`, both converted to "click Add for one more row"), customers,
+employees (details, roles, PIN reset, the onboarding checklist, and the onboarding task template editor),
+loyalty settings, and scheduling. Read-only list/search pages (catalog's own list aside, which already
+needed conversion for its bulk actions) were deliberately left as plain GET navigation -- an idempotent
+search is a different, much lower-stakes kind of "page changes" than a mutation ending in a redirect, and
+converting every list's search box wasn't worth the added surface for this pass.
+
+The price-category detail page's speed-scan box, previously the one page in this app with page-local
+vanilla JavaScript (a deliberate, contained exception from last time, since the rest of the app was still
+zero-JS), is now plain React state like everywhere else -- the whole page is a client component now, so
+the reason for that exception no longer applies. Its Route Handler proxy is retired along with it;
+`scanAddToPriceCategoryAction` is called directly as a Server Action instead, the same as every other
+mutation in this pass.
+
+Found and fixed two real bugs live during verification, both worth remembering as a pattern:
+- **`employees/[id]`**: assigning a role appended a fabricated entry to the roles list client-side, because
+  the assign-role endpoint only ever returned `{ ok: true }` -- never the new assignment's row id or the
+  role's display name. The added row rendered with no name and a "Remove" button pointing at nothing.
+  Fixed by calling `router.refresh()` instead of guessing at the response shape, but that surfaced a second
+  issue: the component's `employee` state was seeded once from props via `useState`, so `router.refresh()`
+  alone doesn't update it -- a `useEffect` syncing state from props on every change was needed too. Any
+  page mixing local optimistic state with an occasional full refresh needs this same sync; the pages that
+  only ever refresh (never hold local state) don't, and the pages that only ever hold local state (never
+  refresh) don't either -- it's specifically the mix that bites.
+- Confirmed while fixing the above: `e.currentTarget` inside an async `startTransition` callback (i.e.
+  after an `await`) can no longer be relied on -- React nulls it out once the synchronous part of the
+  handler returns. Audited every converted file for this exact shape; found and fixed one instance
+  (`inventory/[variantId]`'s adjustment form calling `.reset()` on it after the action resolved) by
+  capturing the form reference in a local variable before entering the transition, which is what every
+  other converted form was already doing for its `FormData` read.
+
+Verified live: price-category speed-scan (add and remove, header stats updating correctly, no reload);
+purchase-order creation's vendor-quick-add transitioning into the full order form entirely via client
+state; a scheduling shift added and cancelled with the calendar grid updating in place; and the employee
+role bug above, reproduced, fixed, and re-verified showing the correct name and a working "Remove" on the
+newly assigned role. Full verification suite green: typecheck, lint, all contracts/db/pricing-spec tests
+(pglite and real Postgres, including RLS), and a clean dashboard production build -- every mutating page
+now ships a small client bundle where it previously shipped none. All test data (a test vendor, and a
+price-group split that resulted from bulk-pricing a subset of an already-ambiguous pre-existing group
+during verification -- noted, not reverted, since no data was lost, only its grouping changed) accounted
+for; two additional `invoice_imports` rows turned up during cleanup that this pass didn't create -- left
+alone and flagged rather than assumed safe to delete.
+
 ## Client-side interactivity for catalog and invoice review, sharper invoice matching
 
 "Add JS in whole back office, I don't want the page to refresh every time I click something," plus

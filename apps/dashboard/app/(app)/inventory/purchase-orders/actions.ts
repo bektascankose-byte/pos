@@ -1,23 +1,21 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
-import { redirect } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/api";
+import type { ActionResult } from "@/lib/action-result";
 
-const MAX_LINES = 8;
-
-export async function createVendorAction(formData: FormData): Promise<void> {
+export async function createVendorAction(formData: FormData): Promise<ActionResult<{ id: string }>> {
   const code = String(formData.get("code") ?? "").trim();
   const name = String(formData.get("name") ?? "").trim();
   const phone = String(formData.get("phone") ?? "").trim();
   const email = String(formData.get("email") ?? "").trim();
 
   if (!code || !name) {
-    redirect(`/inventory/purchase-orders/new?error=${encodeURIComponent("A vendor code and name are required.")}`);
+    return { ok: false, error: "A vendor code and name are required." };
   }
 
   try {
-    await apiFetch(`/api/v1/purchasing/vendors`, {
+    const data = await apiFetch<{ id: string }>(`/api/v1/purchasing/vendors`, {
       method: "POST",
       body: JSON.stringify({
         code,
@@ -26,14 +24,18 @@ export async function createVendorAction(formData: FormData): Promise<void> {
         ...(email ? { email } : {}),
       }),
     });
+    return { ok: true, data };
   } catch (e) {
-    const message = e instanceof ApiError ? e.message : "Could not create that vendor.";
-    redirect(`/inventory/purchase-orders/new?error=${encodeURIComponent(message)}`);
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not create that vendor." };
   }
-  redirect(`/inventory/purchase-orders/new?vendorSaved=1`);
 }
 
-export async function createPurchaseOrderAction(formData: FormData): Promise<void> {
+/**
+ * `lineCount` is however many line rows the client actually rendered (its
+ * own "Add another line" click count) -- a blank row (no variant, qty, or
+ * cost) is simply skipped, same as the old fixed count of 8 always was.
+ */
+export async function createPurchaseOrderAction(formData: FormData, lineCount: number): Promise<ActionResult<{ id: string }>> {
   const storeId = String(formData.get("store_id") ?? "").trim();
   const vendorId = String(formData.get("vendor_id") ?? "").trim();
   const reference = String(formData.get("reference") ?? "").trim();
@@ -41,11 +43,11 @@ export async function createPurchaseOrderAction(formData: FormData): Promise<voi
   const note = String(formData.get("note") ?? "").trim();
 
   if (!storeId || !vendorId || !reference) {
-    redirect(`/inventory/purchase-orders/new?error=${encodeURIComponent("A vendor and a reference are required.")}`);
+    return { ok: false, error: "A vendor and a reference are required." };
   }
 
   const lines: { variant_id: string; quantity_ordered: string; unit_cost: string }[] = [];
-  for (let i = 0; i < MAX_LINES; i++) {
+  for (let i = 0; i < lineCount; i++) {
     const variantId = String(formData.get(`variant_id_${i}`) ?? "").trim();
     const quantity = String(formData.get(`quantity_${i}`) ?? "").trim();
     const unitCost = String(formData.get(`unit_cost_${i}`) ?? "").trim();
@@ -54,12 +56,11 @@ export async function createPurchaseOrderAction(formData: FormData): Promise<voi
   }
 
   if (lines.length === 0) {
-    redirect(`/inventory/purchase-orders/new?error=${encodeURIComponent("Add at least one line item.")}`);
+    return { ok: false, error: "Add at least one line item." };
   }
 
-  let created: { id: string };
   try {
-    created = await apiFetch<{ id: string }>(`/api/v1/purchasing/purchase-orders`, {
+    const data = await apiFetch<{ id: string }>(`/api/v1/purchasing/purchase-orders`, {
       method: "POST",
       body: JSON.stringify({
         store_id: storeId,
@@ -70,15 +71,13 @@ export async function createPurchaseOrderAction(formData: FormData): Promise<voi
         lines,
       }),
     });
+    return { ok: true, data };
   } catch (e) {
-    const message = e instanceof ApiError ? e.message : "Could not create the purchase order.";
-    redirect(`/inventory/purchase-orders/new?error=${encodeURIComponent(message)}`);
-    return;
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not create the purchase order." };
   }
-  redirect(`/inventory/purchase-orders/${created.id}?saved=1`);
 }
 
-export async function receivePurchaseOrderAction(poId: string, lineIds: string[], formData: FormData): Promise<void> {
+export async function receivePurchaseOrderAction(poId: string, lineIds: string[], formData: FormData): Promise<ActionResult> {
   const vendorInvoiceNo = String(formData.get("vendor_invoice_no") ?? "").trim();
   const note = String(formData.get("note") ?? "").trim();
 
@@ -91,7 +90,7 @@ export async function receivePurchaseOrderAction(poId: string, lineIds: string[]
   }
 
   if (lines.length === 0) {
-    redirect(`/inventory/purchase-orders/${poId}?error=${encodeURIComponent("Enter a quantity for at least one line.")}`);
+    return { ok: false, error: "Enter a quantity for at least one line." };
   }
 
   try {
@@ -104,9 +103,8 @@ export async function receivePurchaseOrderAction(poId: string, lineIds: string[]
         lines,
       }),
     });
+    return { ok: true, data: undefined };
   } catch (e) {
-    const message = e instanceof ApiError ? e.message : "Could not receive that shipment.";
-    redirect(`/inventory/purchase-orders/${poId}?error=${encodeURIComponent(message)}`);
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not receive that shipment." };
   }
-  redirect(`/inventory/purchase-orders/${poId}?saved=1`);
 }

@@ -6,8 +6,6 @@ import { apiFetch, ApiError } from "@/lib/api";
 import { parseMajorToMinor } from "@/lib/money";
 import type { ActionResult } from "@/lib/action-result";
 
-const SPLIT_ROWS = 6;
-
 interface CreatedInvoiceImport {
   id: string;
 }
@@ -85,9 +83,15 @@ export async function ignoreLineAction(id: string, lineId: string): Promise<Acti
   }
 }
 
-export async function splitLineAction(id: string, lineId: string, formData: FormData): Promise<void> {
+/** `rowCount` is however many rows the client rendered -- its own "Add another row" click count. */
+export async function splitLineAction(
+  id: string,
+  lineId: string,
+  formData: FormData,
+  rowCount: number,
+): Promise<ActionResult> {
   const items: { variant_id: string; quantity: string; unit_cost?: string }[] = [];
-  for (let i = 0; i < SPLIT_ROWS; i++) {
+  for (let i = 0; i < rowCount; i++) {
     const variantId = String(formData.get(`variant_id_${i}`) ?? "").trim();
     const quantity = String(formData.get(`quantity_${i}`) ?? "").trim();
     const unitCost = String(formData.get(`unit_cost_${i}`) ?? "").trim();
@@ -96,9 +100,7 @@ export async function splitLineAction(id: string, lineId: string, formData: Form
   }
 
   if (items.length < 2) {
-    redirect(
-      `/invoice-imports/${id}/lines/${lineId}/split?error=${encodeURIComponent("Pick a variant and quantity for at least two rows.")}`,
-    );
+    return { ok: false, error: "Pick a variant and quantity for at least two rows." };
   }
 
   try {
@@ -106,11 +108,10 @@ export async function splitLineAction(id: string, lineId: string, formData: Form
       method: "POST",
       body: JSON.stringify({ items }),
     });
+    return { ok: true, data: undefined };
   } catch (e) {
-    const message = e instanceof ApiError ? e.message : "Could not split that line.";
-    redirect(`/invoice-imports/${id}/lines/${lineId}/split?error=${encodeURIComponent(message)}`);
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not split that line." };
   }
-  redirect(`/invoice-imports/${id}?saved=1`);
 }
 
 export async function commitInvoiceAction(id: string): Promise<ActionResult> {

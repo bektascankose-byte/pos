@@ -1,6 +1,5 @@
 "use server";
 
-import { redirect } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/api";
 import { parseMajorToMinor } from "@/lib/money";
 import { primaryStoreId } from "@/lib/store";
@@ -303,37 +302,28 @@ export async function addToPriceCategoryAction(formData: FormData): Promise<Acti
   }
 }
 
-// -------------------------------------------------------------------------
-// Price categories: unchanged, plain redirecting Server Actions. Those pages
-// aren't converted to the client-interactivity pattern this pass -- see the
-// plan's "deferred" list.
-// -------------------------------------------------------------------------
-
-export async function createPriceCategoryAction(formData: FormData): Promise<void> {
+export async function createPriceCategoryAction(formData: FormData): Promise<ActionResult<{ id: string }>> {
   const name = String(formData.get("name") ?? "").trim();
   if (!name) {
-    redirect(`/catalog/price-categories/new?error=${encodeURIComponent("Give this category a name.")}`);
+    return { ok: false, error: "Give this category a name." };
   }
 
-  let created: { id: string };
   try {
-    created = await apiFetch<{ id: string }>(`/api/v1/catalog/price-categories`, {
+    const data = await apiFetch<{ id: string }>(`/api/v1/catalog/price-categories`, {
       method: "POST",
       body: JSON.stringify({ name }),
     });
+    return { ok: true, data };
   } catch (e) {
-    const message = e instanceof ApiError ? e.message : "Could not create that category.";
-    redirect(`/catalog/price-categories/new?error=${encodeURIComponent(message)}`);
-    return;
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not create that category." };
   }
-  redirect(`/catalog/price-categories/${created.id}?saved=1`);
 }
 
-export async function setPriceCategoryPriceAction(id: string, formData: FormData): Promise<void> {
+export async function setPriceCategoryPriceAction(id: string, formData: FormData): Promise<ActionResult> {
   const priceMajor = String(formData.get("price") ?? "").trim();
   const priceMinor = parseMajorToMinor(priceMajor);
   if (priceMinor === null) {
-    redirect(`/catalog/price-categories/${id}?error=${encodeURIComponent("Enter a valid price, like 24.99")}`);
+    return { ok: false, error: "Enter a valid price, like 24.99" };
   }
 
   const storeId = await primaryStoreId();
@@ -343,40 +333,39 @@ export async function setPriceCategoryPriceAction(id: string, formData: FormData
       method: "POST",
       body: JSON.stringify({ price_minor: priceMinor, price_group_id: id, store_id: storeId }),
     });
+    return { ok: true, data: undefined };
   } catch (e) {
-    const message = e instanceof ApiError ? e.message : "Could not price this category.";
-    redirect(`/catalog/price-categories/${id}?error=${encodeURIComponent(message)}`);
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not price this category." };
   }
-  redirect(`/catalog/price-categories/${id}?saved=1`);
 }
 
-export async function removePriceCategoryMemberAction(id: string, variantId: string): Promise<void> {
+export async function removePriceCategoryMemberAction(id: string, variantId: string): Promise<ActionResult> {
   try {
     await apiFetch(`/api/v1/catalog/price-categories/${id}/members/${variantId}/remove`, { method: "POST" });
+    return { ok: true, data: undefined };
   } catch (e) {
-    const message = e instanceof ApiError ? e.message : "Could not remove that item.";
-    redirect(`/catalog/price-categories/${id}?error=${encodeURIComponent(message)}`);
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not remove that item." };
   }
-  redirect(`/catalog/price-categories/${id}?saved=1`);
 }
 
-/** No-JS fallback for the speed-scan box -- a full round trip that still works with JavaScript disabled. */
-export async function scanAddToPriceCategoryAction(id: string, formData: FormData): Promise<void> {
-  const code = String(formData.get("code") ?? "").trim();
-  if (!code) {
-    redirect(`/catalog/price-categories/${id}`);
-  }
+interface ScannedMember {
+  variant_id: string;
+  product_name: string;
+  variant_name: string | null;
+  sku: string;
+}
 
-  let match: { sku: string };
-  try {
-    match = await apiFetch<{ sku: string }>(`/api/v1/catalog/price-categories/${id}/scan`, {
-      method: "POST",
-      body: JSON.stringify({ code }),
-    });
-  } catch (e) {
-    const message = e instanceof ApiError ? e.message : "Could not add that item.";
-    redirect(`/catalog/price-categories/${id}?error=${encodeURIComponent(message)}`);
-    return;
+export async function scanAddToPriceCategoryAction(id: string, code: string): Promise<ActionResult<ScannedMember>> {
+  if (!code.trim()) {
+    return { ok: false, error: "Type or scan a code first." };
   }
-  redirect(`/catalog/price-categories/${id}?justAdded=${encodeURIComponent(match.sku)}`);
+  try {
+    const data = await apiFetch<ScannedMember>(`/api/v1/catalog/price-categories/${id}/scan`, {
+      method: "POST",
+      body: JSON.stringify({ code: code.trim() }),
+    });
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not add that item." };
+  }
 }

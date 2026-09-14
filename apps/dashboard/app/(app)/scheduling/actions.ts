@@ -1,13 +1,14 @@
 "use server";
 
-import { redirect } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/api";
+import type { ActionResult } from "@/lib/action-result";
+import type { Shift } from "@snappos/contracts";
 
 function toIso(date: string, time: string): string {
   return new Date(`${date}T${time}:00`).toISOString();
 }
 
-export async function createShiftAction(weekStart: string, formData: FormData): Promise<void> {
+export async function createShiftAction(formData: FormData): Promise<ActionResult<Shift>> {
   const storeId = String(formData.get("store_id") ?? "").trim();
   const userId = String(formData.get("user_id") ?? "").trim();
   const date = String(formData.get("date") ?? "").trim();
@@ -15,14 +16,12 @@ export async function createShiftAction(weekStart: string, formData: FormData): 
   const endTime = String(formData.get("end_time") ?? "").trim();
   const note = String(formData.get("note") ?? "").trim();
 
-  const backTo = `/scheduling?weekStart=${weekStart}`;
-
   if (!storeId || !userId || !date || !startTime || !endTime) {
-    redirect(`${backTo}&error=${encodeURIComponent("An employee, a date, and a start and end time are required.")}`);
+    return { ok: false, error: "An employee, a date, and a start and end time are required." };
   }
 
   try {
-    await apiFetch(`/api/v1/scheduling/shifts`, {
+    const data = await apiFetch<Shift>(`/api/v1/scheduling/shifts`, {
       method: "POST",
       body: JSON.stringify({
         store_id: storeId,
@@ -32,20 +31,17 @@ export async function createShiftAction(weekStart: string, formData: FormData): 
         ...(note ? { note } : {}),
       }),
     });
+    return { ok: true, data };
   } catch (e) {
-    const message = e instanceof ApiError ? e.message : "Could not add that shift.";
-    redirect(`${backTo}&error=${encodeURIComponent(message)}`);
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not add that shift." };
   }
-  redirect(`${backTo}&saved=1`);
 }
 
-export async function cancelShiftAction(weekStart: string, shiftId: string): Promise<void> {
-  const backTo = `/scheduling?weekStart=${weekStart}`;
+export async function cancelShiftAction(shiftId: string): Promise<ActionResult> {
   try {
     await apiFetch(`/api/v1/scheduling/shifts/${shiftId}/cancel`, { method: "POST" });
+    return { ok: true, data: undefined };
   } catch (e) {
-    const message = e instanceof ApiError ? e.message : "Could not cancel that shift.";
-    redirect(`${backTo}&error=${encodeURIComponent(message)}`);
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not cancel that shift." };
   }
-  redirect(`${backTo}&saved=1`);
 }
