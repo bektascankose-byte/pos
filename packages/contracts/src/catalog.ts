@@ -149,6 +149,29 @@ export const productComplianceSchema = z.object({
   is_smokable: z.boolean(),
 });
 
+/**
+ * A suggestion only -- see `AiService.classifyCompliance`. Nothing writes this
+ * straight into `product_compliance`; a human reviews it on the create-product
+ * form and the fields they actually submit (edited or not) are what's saved.
+ */
+export const aiComplianceSuggestionSchema = z.object({
+  is_age_restricted: z.boolean(),
+  minimum_age: z.number().int().min(0).max(120).nullable(),
+  id_scan_required: z.boolean(),
+  regulated_class: z.string().nullable(),
+  contains_nicotine: z.boolean(),
+  contains_cannabinoid: z.boolean(),
+  is_smokable: z.boolean(),
+  confidence: z.number(),
+});
+
+export const suggestComplianceSchema = z.object({
+  name: z.string().min(1).max(256),
+  brand: z.string().max(128).optional(),
+  category: z.string().max(128).optional(),
+  description: z.string().max(4096).optional(),
+});
+
 export const productSchema = z.object({
   id: uuid,
   name: z.string().min(1).max(256),
@@ -277,6 +300,46 @@ export const bulkPriceVariantsSchema = z
     message: 'give either variant_ids (to form or reprice a specific set) or price_group_id, not both',
   });
 
+/**
+ * A named `price_groups` row, declared ahead of time rather than formed
+ * incidentally by `bulkSetPrice` -- so a manager can build its membership over
+ * one or more sessions before ever setting a price. Reuses the same table and
+ * `product.update` gate `bulkSetPrice` already sits behind.
+ */
+export const createPriceCategorySchema = z.object({ name: z.string().min(1).max(128) });
+
+/**
+ * Stamps `price_group_id` on every given variant without touching price --
+ * unlike `bulkPriceVariantsSchema`, forming/joining a category here is a
+ * separate, deliberate act from repricing it later. A variant carries at most
+ * one price category at a time (a plain FK column, not a join table), so
+ * adding it here silently moves it out of whatever category it was in.
+ */
+export const addPriceCategoryMembersSchema = z.object({
+  variant_ids: z.array(uuid).min(1).max(500),
+});
+
+/** One scanned code at a time -- resolved the same way a manually typed SKU is during invoice review. */
+export const scanPriceCategoryMemberSchema = z.object({ code: z.string().min(1).max(64) });
+
+export const priceCategorySchema = z.object({
+  id: uuid,
+  name: z.string().nullable(),
+  created_at: timestamp,
+  member_count: z.number().int(),
+  /** Null when empty, or when current members don't all share one price. */
+  current_price_minor: moneyNonNegative.nullable(),
+});
+
+export const priceCategoryMemberSchema = z.object({
+  variant_id: uuid,
+  product_id: uuid,
+  product_name: z.string(),
+  variant_name: z.string().nullable(),
+  sku,
+  price_minor: moneyNonNegative.nullable(),
+});
+
 export const taxCategorySchema = z.object({
   id: uuid,
   code: z.string(),
@@ -313,3 +376,11 @@ export type BulkPriceVariants = z.infer<typeof bulkPriceVariantsSchema>;
 export type CreateVariant = z.infer<typeof createVariantSchema>;
 export type TaxCategory = z.infer<typeof taxCategorySchema>;
 export type ProductSearch = z.infer<typeof productSearchSchema>;
+export type ProductCompliance = z.infer<typeof productComplianceSchema>;
+export type AiComplianceSuggestion = z.infer<typeof aiComplianceSuggestionSchema>;
+export type SuggestCompliance = z.infer<typeof suggestComplianceSchema>;
+export type CreatePriceCategory = z.infer<typeof createPriceCategorySchema>;
+export type AddPriceCategoryMembers = z.infer<typeof addPriceCategoryMembersSchema>;
+export type ScanPriceCategoryMember = z.infer<typeof scanPriceCategoryMemberSchema>;
+export type PriceCategory = z.infer<typeof priceCategorySchema>;
+export type PriceCategoryMember = z.infer<typeof priceCategoryMemberSchema>;

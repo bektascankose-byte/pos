@@ -4,9 +4,11 @@ import { zodTextFormat } from 'openai/helpers/zod';
 import {
   aiExtractedInvoiceSchema,
   aiMatchPredictionsSchema,
+  aiComplianceSuggestionSchema,
   type AiExtractedInvoice,
   type AiLineMatchPrediction,
   type AiMatchLineInput,
+  type AiComplianceSuggestion,
 } from '@snappos/contracts';
 import { ApiException } from '../errors/api-exception.js';
 
@@ -34,6 +36,20 @@ For each line you are given its raw text, parsed description/SKU, and a short li
 - is_ambiguous_multi_item: true when the line's OWN TEXT implies it actually bundles more than one distinct sellable variant under a single line -- for example "Assorted Flavors", "Mixed Case", or a list of several flavors/colors/sizes for what is billed as one line. This means a human needs to split this line into separate variants (a different situation than simply being unsure which single candidate is right), and it can be true even when matched_candidate_index is null for that same reason.
 
 Never invent an index outside the candidates given for that specific line. When nothing in the candidate list is right, set matched_candidate_index to null rather than picking the closest wrong one.`;
+
+const CLASSIFICATION_INSTRUCTIONS = `You are deciding whether a retail product is age-restricted for a point-of-sale system in the United States, from its name, brand, category and description.
+
+Return:
+- is_age_restricted: true if the law requires checking a buyer's age before this can be sold
+- minimum_age: the statutory age for this item (usually 21 for vape/ENDS, tobacco, and THC/cannabinoid products in most US states; null if not age-restricted)
+- id_scan_required: true when an ID should be scanned rather than judged by eye -- true for vape/ENDS, THC/cannabinoid and tobacco by default
+- regulated_class: a short label such as "ends" (vapes/disposables/e-liquid), "tobacco" (cigarettes/cigars/pouches/chew), "consumable_hemp" (THC, delta-8/9/10, THCP, CBD with intoxicating cannabinoids), "kratom", or null if not regulated
+- contains_nicotine: true for vapes, cigarettes, cigars, pouches, chew
+- contains_cannabinoid: true for anything THC/delta-8/delta-9/delta-10/THCP/CBD-with-cannabinoids
+- is_smokable: true for anything meant to be smoked or vaped (flower, pre-rolls, disposables, cigars, cigarettes) rather than eaten/applied
+- confidence: your confidence from 0 to 1
+
+Concrete cues: "THC", "delta-8", "delta-9", "delta-10", "THCP", "seltzer/soda/gummies... THC/MG" implies an infused drink or edible; "vape", "ENDS", "disposable", "e-liquid", "pod" implies a vape; "cigar", "cigarette", "pouch", "chew", "nicotine" implies tobacco; "kratom" is its own class. An ordinary grocery, snack, drink, or household item with none of these cues is not age-restricted -- set is_age_restricted to false and every other flag to false/null rather than guessing a restriction that isn't there.`;
 
 /**
  * The only place this API talks to OpenAI. Every method here only ever
@@ -98,5 +114,29 @@ export class AiService {
       throw new Error('the model returned no parsed output');
     }
     return response.output_parsed.predictions;
+  }
+
+  /**
+   * A suggestion only, same rule as every other method here -- the caller
+   * shows this on the create-product form for a human to review and edit; it
+   * never gets written to `product_compliance` on its own.
+   */
+  async classifyCompliance(input: {
+    name: string;
+    brand?: string | null | undefined;
+    category?: string | null | undefined;
+    description?: string | null | undefined;
+  }): Promise<AiComplianceSuggestion> {
+    const { client, model } = this.getClient();
+    const response = await client.responses.parse({
+      model,
+      instructions: CLASSIFICATION_INSTRUCTIONS,
+      input: JSON.stringify(input),
+      text: { format: zodTextFormat(aiComplianceSuggestionSchema, 'compliance_suggestion') },
+    });
+    if (!response.output_parsed) {
+      throw new Error('the model returned no parsed output');
+    }
+    return response.output_parsed;
   }
 }

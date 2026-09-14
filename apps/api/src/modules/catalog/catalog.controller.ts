@@ -11,6 +11,10 @@ import {
   updateVariantSchema,
   setVariantPriceSchema,
   bulkPriceVariantsSchema,
+  suggestComplianceSchema,
+  createPriceCategorySchema,
+  addPriceCategoryMembersSchema,
+  scanPriceCategoryMemberSchema,
 } from '@snappos/contracts';
 import { CatalogService } from './catalog.service.js';
 import { zodBody } from '../../platform/validation/zod.pipe.js';
@@ -153,5 +157,68 @@ export class CatalogController {
     @Body(zodBody(bulkPriceVariantsSchema)) body: ReturnType<typeof bulkPriceVariantsSchema.parse>,
   ) {
     return this.catalog.bulkSetPrice(user.orgId, user.userId, body);
+  }
+
+  /** A suggestion only -- see `AiService.classifyCompliance`. Nothing here persists anything. */
+  @Post('compliance/suggest')
+  @RequirePermissions('product.create')
+  suggestCompliance(
+    @Body(zodBody(suggestComplianceSchema)) body: ReturnType<typeof suggestComplianceSchema.parse>,
+  ) {
+    return this.catalog.suggestCompliance(body);
+  }
+
+  @Get('price-categories')
+  @RequirePermissions('product.view')
+  listPriceCategories(@CurrentUser() user: AuthenticatedUser, @Query('store_id') storeId?: string) {
+    return this.catalog.listPriceCategories(user.orgId, storeId ?? null);
+  }
+
+  @Post('price-categories')
+  @RequirePermissions('product.update')
+  createPriceCategory(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body(zodBody(createPriceCategorySchema)) body: ReturnType<typeof createPriceCategorySchema.parse>,
+  ) {
+    return this.catalog.createPriceCategory(user.orgId, user.userId, body.name);
+  }
+
+  @Get('price-categories/:id')
+  @RequirePermissions('product.view')
+  getPriceCategory(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Query('store_id') storeId?: string,
+  ) {
+    return this.catalog.getPriceCategory(user.orgId, id, storeId ?? null);
+  }
+
+  @Post('price-categories/:id/members')
+  @RequirePermissions('product.update')
+  addPriceCategoryMembers(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(zodBody(addPriceCategoryMembersSchema)) body: ReturnType<typeof addPriceCategoryMembersSchema.parse>,
+  ) {
+    return this.catalog.addVariantsToPriceCategory(user.orgId, user.userId, id, body.variant_ids);
+  }
+
+  @Post('price-categories/:id/members/:variantId/remove')
+  @RequirePermissions('product.update')
+  removePriceCategoryMember(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('variantId') variantId: string,
+  ) {
+    return this.catalog.removeVariantFromPriceCategory(user.orgId, user.userId, variantId);
+  }
+
+  @Post('price-categories/:id/scan')
+  @RequirePermissions('product.update')
+  scanPriceCategoryMember(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(zodBody(scanPriceCategoryMemberSchema)) body: ReturnType<typeof scanPriceCategoryMemberSchema.parse>,
+  ) {
+    return this.catalog.scanAddToPriceCategory(user.orgId, user.userId, id, body.code);
   }
 }

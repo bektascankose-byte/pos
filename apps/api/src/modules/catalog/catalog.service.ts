@@ -10,10 +10,12 @@ import type {
   UpdateVariant,
   SetVariantPrice,
   BulkPriceVariants,
+  SuggestCompliance,
 } from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
 import { AuditService } from '../../platform/audit/audit.service.js';
 import { ApiException } from '../../platform/errors/api-exception.js';
+import { AiService } from '../../platform/ai/ai.service.js';
 
 const NO_STORE = '00000000-0000-0000-0000-000000000000';
 
@@ -22,6 +24,7 @@ export class CatalogService {
   constructor(
     private readonly db: DatabaseService,
     private readonly audit: AuditService,
+    private readonly ai: AiService,
   ) {}
 
   /**
@@ -494,6 +497,15 @@ export class CatalogService {
     return rows[0]!.id;
   }
 
+  /**
+   * A suggestion only -- nothing here touches `product_compliance`. The
+   * dashboard shows this on the create-product form for a human to review,
+   * edit, and submit through the ordinary `createProduct` path.
+   */
+  async suggestCompliance(input: SuggestCompliance) {
+    return this.ai.classifyCompliance(input);
+  }
+
   async listTaxCategories(orgId: string) {
     return this.db.withOrg(orgId, async (tx) => {
       const { rows } = await tx.query(
@@ -806,6 +818,205 @@ export class CatalogService {
       }
 
       return { price_group_id: priceGroupId, prices };
+    });
+  }
+
+  /**
+   * A named `price_groups` row, declared ahead of its first member -- unlike
+   * `bulkSetPrice`, which only ever forms a group incidentally while pricing
+   * one. Building a category's membership and setting its price are two
+   * separate, deliberate actions from here on.
+   */
+  async createPriceCategory(orgId: string, actorUserId: string, name: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        `INSERT INTO price_groups (org_id, name, created_by)
+         VALUES (current_setting('app.org_id')::uuid, $1, $2)
+         RETURNING id`,
+        [name, actorUserId],
+      );
+      return { id: rows[0]!.id };
+    });
+  }
+
+  async listPriceCategories(orgId: string, storeId: string | null) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query(
+        `SELECT pg.id, pg.name, pg.created_at,
+                count(v.id)::int AS member_count,
+                (CASE WHEN count(DISTINCT pr.price_minor) = 1 THEN min(pr.price_minor) ELSE NULL END)::text
+                  AS current_price_minor
+         FROM price_groups pg
+         LEFT JOIN product_variants v ON v.price_group_id = pg.id
+         LEFT JOIN LATERAL (
+           SELECT price_minor FROM variant_prices
+           WHERE variant_id = v.id
+             AND (store_id = $2 OR store_id IS NULL)
+             AND kind = 'regular'
+             AND effective_from <= now()
+             AND (effective_to IS NULL OR effective_to > now())
+           ORDER BY store_id NULLS LAST, effective_from DESC
+           LIMIT 1
+         ) pr ON true
+         WHERE pg.org_id = $1
+         GROUP BY pg.id
+         ORDER BY pg.created_at DESC`,
+        [orgId, storeId],
+      );
+      return rows;
+    });
+  }
+
+  async getPriceCategory(orgId: string, id: string, storeId: string | null) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows: categoryRows } = await tx.query(
+        `SELECT pg.id, pg.name, pg.created_at,
+                count(v.id)::int AS member_count,
+                (CASE WHEN count(DISTINCT pr.price_minor) = 1 THEN min(pr.price_minor) ELSE NULL END)::text
+                  AS current_price_minor
+         FROM price_groups pg
+         LEFT JOIN product_variants v ON v.price_group_id = pg.id
+         LEFT JOIN LATERAL (
+           SELECT price_minor FROM variant_prices
+           WHERE variant_id = v.id
+             AND (store_id = $3 OR store_id IS NULL)
+             AND kind = 'regular'
+             AND effective_from <= now()
+             AND (effective_to IS NULL OR effective_to > now())
+           ORDER BY store_id NULLS LAST, effective_from DESC
+           LIMIT 1
+         ) pr ON true
+         WHERE pg.id = $1 AND pg.org_id = $2
+         GROUP BY pg.id`,
+        [id, orgId, storeId],
+      );
+      const category = categoryRows[0];
+      if (!category) throw ApiException.notFound('price category');
+
+      const { rows: members } = await tx.query(
+        `SELECT v.id AS variant_id, p.id AS product_id, p.name AS product_name,
+                v.variant_name, v.sku, pr.price_minor::text AS price_minor
+         FROM product_variants v
+         JOIN products p ON p.id = v.product_id
+         LEFT JOIN LATERAL (
+           SELECT price_minor FROM variant_prices
+           WHERE variant_id = v.id
+             AND (store_id = $2 OR store_id IS NULL)
+             AND kind = 'regular'
+             AND effective_from <= now()
+             AND (effective_to IS NULL OR effective_to > now())
+           ORDER BY store_id NULLS LAST, effective_from DESC
+           LIMIT 1
+         ) pr ON true
+         WHERE v.price_group_id = $1
+         ORDER BY p.name, v.variant_name`,
+        [id, storeId],
+      );
+
+      return { ...category, members };
+    });
+  }
+
+  /**
+   * Stamps `price_group_id` on every given variant, without touching price --
+   * building a category's membership is separate from setting its price
+   * (`bulkSetPrice`, unchanged, does that). A variant carries at most one
+   * price category at a time, so this silently moves it out of any other.
+   */
+  async addVariantsToPriceCategory(
+    orgId: string,
+    actorUserId: string,
+    categoryId: string,
+    variantIds: string[],
+  ) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows: categoryRows } = await tx.query(`SELECT id FROM price_groups WHERE id = $1`, [categoryId]);
+      if (!categoryRows[0]) throw ApiException.notFound('price category');
+
+      const { rows: variantRows } = await tx.query<{ id: string }>(
+        `SELECT id FROM product_variants WHERE id = ANY($1::uuid[])`,
+        [variantIds],
+      );
+      if (variantRows.length !== variantIds.length) throw ApiException.notFound('variant');
+
+      await tx.query(`UPDATE product_variants SET price_group_id = $2 WHERE id = ANY($1::uuid[])`, [
+        variantIds,
+        categoryId,
+      ]);
+
+      await this.audit.record(tx, {
+        action: 'product.price_category_add_member',
+        entityType: 'price_group',
+        entityId: categoryId,
+        actorUserId,
+        newValue: { variant_ids: variantIds },
+      });
+
+      return { price_group_id: categoryId, added: variantIds.length };
+    });
+  }
+
+  async removeVariantFromPriceCategory(orgId: string, actorUserId: string, variantId: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      // `RETURNING price_group_id` on the UPDATE below would reflect the row
+      // *after* it's set to NULL, always -- never the value that justified the
+      // match. Joining against a pre-update snapshot is what lets RETURNING
+      // report the old value instead.
+      const { rows } = await tx.query<{ price_group_id: string | null }>(
+        `UPDATE product_variants v SET price_group_id = NULL
+         FROM (SELECT id, price_group_id FROM product_variants WHERE id = $1 AND price_group_id IS NOT NULL) AS old
+         WHERE v.id = old.id
+         RETURNING old.price_group_id`,
+        [variantId],
+      );
+      const categoryId = rows[0]?.price_group_id;
+      if (!categoryId) throw ApiException.notFound('price category member');
+
+      await this.audit.record(tx, {
+        action: 'product.price_category_remove_member',
+        entityType: 'price_group',
+        entityId: categoryId,
+        actorUserId,
+        newValue: { variant_id: variantId },
+      });
+
+      return { removed: variantId };
+    });
+  }
+
+  /**
+   * The speed-scan path: one typed/scanned SKU or barcode at a time, resolved
+   * the same way a manually typed SKU is during invoice review
+   * (`findVariantBySkuOrBarcodeTx`), then added to the category exactly like
+   * `addVariantsToPriceCategory` -- just returning enough about the match for
+   * the caller to show an on-page confirmation.
+   */
+  async scanAddToPriceCategory(orgId: string, actorUserId: string, categoryId: string, code: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows: categoryRows } = await tx.query(`SELECT id FROM price_groups WHERE id = $1`, [categoryId]);
+      if (!categoryRows[0]) throw ApiException.notFound('price category');
+
+      const match = await this.findVariantBySkuOrBarcodeTx(tx, code);
+      if (!match) throw ApiException.notFound(`item for code "${code}"`);
+
+      await tx.query(`UPDATE product_variants SET price_group_id = $2 WHERE id = $1`, [match.id, categoryId]);
+
+      const { rows } = await tx.query<{ product_name: string; variant_name: string | null; sku: string }>(
+        `SELECT p.name AS product_name, v.variant_name, v.sku
+         FROM product_variants v JOIN products p ON p.id = v.product_id
+         WHERE v.id = $1`,
+        [match.id],
+      );
+
+      await this.audit.record(tx, {
+        action: 'product.price_category_add_member',
+        entityType: 'price_group',
+        entityId: categoryId,
+        actorUserId,
+        newValue: { variant_id: match.id, via: 'scan' },
+      });
+
+      return { variant_id: match.id, ...rows[0]! };
     });
   }
 

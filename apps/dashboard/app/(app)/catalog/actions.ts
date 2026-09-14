@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/api";
 import { parseMajorToMinor } from "@/lib/money";
 import { primaryStoreId } from "@/lib/store";
-import type { Product, Variant } from "@snappos/contracts";
+import type { Product, Variant, AiComplianceSuggestion } from "@snappos/contracts";
 
 interface CreatedVariant {
   id: string;
@@ -154,11 +154,26 @@ export async function createProductAction(formData: FormData): Promise<void> {
     redirect(`/catalog/new?error=${encodeURIComponent("Enter a valid price, like 24.99")}`);
   }
 
+  let compliance: Record<string, unknown> | undefined;
+  if (formData.get("age_restricted") === "on") {
+    const minimumAge = String(formData.get("minimum_age") ?? "").trim();
+    const regulatedClass = String(formData.get("regulated_class") ?? "").trim();
+    compliance = {
+      minimum_age: minimumAge ? Number(minimumAge) : null,
+      id_scan_required: formData.get("id_scan_required") === "on",
+      regulated_class: regulatedClass || null,
+      contains_nicotine: formData.get("contains_nicotine") === "on",
+      contains_cannabinoid: formData.get("contains_cannabinoid") === "on",
+      is_smokable: formData.get("is_smokable") === "on",
+    };
+  }
+
   const body = {
     name,
     ...(brandId ? { brand_id: brandId } : {}),
     ...(categoryId ? { category_id: categoryId } : {}),
     ...(taxCategoryId ? { tax_category_id: taxCategoryId } : {}),
+    ...(compliance ? { compliance } : {}),
     variants: [
       {
         sku,
@@ -183,6 +198,48 @@ export async function createProductAction(formData: FormData): Promise<void> {
     return;
   }
   redirect(`/catalog/${created.id}?saved=1`);
+}
+
+/**
+ * A suggestion only -- redirects back to the same form with every field the
+ * user already typed preserved, plus the AI's guess prefilled alongside them.
+ * Nothing is written to the catalog here; "Create product" still has to be
+ * clicked afterward for any of it to be saved.
+ */
+export async function suggestComplianceAction(formData: FormData): Promise<void> {
+  const name = String(formData.get("name") ?? "").trim();
+  const params = new URLSearchParams();
+  for (const field of ["name", "sku", "barcode", "cost", "price", "brand_id", "category_id", "tax_category_id"]) {
+    const value = String(formData.get(field) ?? "").trim();
+    if (value) params.set(field, value);
+  }
+
+  if (!name) {
+    params.set("error", "Type a product name first.");
+    redirect(`/catalog/new?${params}`);
+  }
+
+  let suggestion: AiComplianceSuggestion;
+  try {
+    suggestion = await apiFetch<AiComplianceSuggestion>(`/api/v1/catalog/compliance/suggest`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+  } catch (e) {
+    params.set("error", e instanceof ApiError ? e.message : "Could not get an AI suggestion.");
+    redirect(`/catalog/new?${params}`);
+    return;
+  }
+
+  params.set("suggested_is_restricted", String(suggestion.is_age_restricted));
+  if (suggestion.minimum_age !== null) params.set("suggested_minimum_age", String(suggestion.minimum_age));
+  params.set("suggested_id_scan_required", String(suggestion.id_scan_required));
+  if (suggestion.regulated_class) params.set("suggested_regulated_class", suggestion.regulated_class);
+  params.set("suggested_contains_nicotine", String(suggestion.contains_nicotine));
+  params.set("suggested_contains_cannabinoid", String(suggestion.contains_cannabinoid));
+  params.set("suggested_is_smokable", String(suggestion.is_smokable));
+  params.set("suggested_confidence", String(suggestion.confidence));
+  redirect(`/catalog/new?${params}`);
 }
 
 /** Each checkbox's value is "product_id:variant_id" -- one selection serves both bulk actions below, since the editable fields live on different rows of the same list. */
@@ -251,4 +308,100 @@ export async function bulkSetPriceAction(formData: FormData): Promise<void> {
     redirect(`/catalog?error=${encodeURIComponent(message)}`);
   }
   redirect(`/catalog?saved=1`);
+}
+
+/** The "traditional" way to add members to a price category -- from the same checkbox selection the other two bulk actions above already use. */
+export async function addToPriceCategoryAction(formData: FormData): Promise<void> {
+  const { variantIds } = splitRowKeys(formData);
+  const categoryId = String(formData.get("target_price_category_id") ?? "").trim();
+
+  if (variantIds.length === 0) {
+    redirect(`/catalog?error=${encodeURIComponent("Select at least one product first.")}`);
+  }
+  if (!categoryId) {
+    redirect(`/catalog?error=${encodeURIComponent("Choose a price category first.")}`);
+  }
+
+  try {
+    await apiFetch(`/api/v1/catalog/price-categories/${categoryId}/members`, {
+      method: "POST",
+      body: JSON.stringify({ variant_ids: variantIds }),
+    });
+  } catch (e) {
+    const message = e instanceof ApiError ? e.message : "Could not add those items to the category.";
+    redirect(`/catalog?error=${encodeURIComponent(message)}`);
+  }
+  redirect(`/catalog?saved=1`);
+}
+
+export async function createPriceCategoryAction(formData: FormData): Promise<void> {
+  const name = String(formData.get("name") ?? "").trim();
+  if (!name) {
+    redirect(`/catalog/price-categories/new?error=${encodeURIComponent("Give this category a name.")}`);
+  }
+
+  let created: { id: string };
+  try {
+    created = await apiFetch<{ id: string }>(`/api/v1/catalog/price-categories`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+  } catch (e) {
+    const message = e instanceof ApiError ? e.message : "Could not create that category.";
+    redirect(`/catalog/price-categories/new?error=${encodeURIComponent(message)}`);
+    return;
+  }
+  redirect(`/catalog/price-categories/${created.id}?saved=1`);
+}
+
+export async function setPriceCategoryPriceAction(id: string, formData: FormData): Promise<void> {
+  const priceMajor = String(formData.get("price") ?? "").trim();
+  const priceMinor = parseMajorToMinor(priceMajor);
+  if (priceMinor === null) {
+    redirect(`/catalog/price-categories/${id}?error=${encodeURIComponent("Enter a valid price, like 24.99")}`);
+  }
+
+  const storeId = await primaryStoreId();
+
+  try {
+    await apiFetch(`/api/v1/catalog/variants/bulk-price`, {
+      method: "POST",
+      body: JSON.stringify({ price_minor: priceMinor, price_group_id: id, store_id: storeId }),
+    });
+  } catch (e) {
+    const message = e instanceof ApiError ? e.message : "Could not price this category.";
+    redirect(`/catalog/price-categories/${id}?error=${encodeURIComponent(message)}`);
+  }
+  redirect(`/catalog/price-categories/${id}?saved=1`);
+}
+
+export async function removePriceCategoryMemberAction(id: string, variantId: string): Promise<void> {
+  try {
+    await apiFetch(`/api/v1/catalog/price-categories/${id}/members/${variantId}/remove`, { method: "POST" });
+  } catch (e) {
+    const message = e instanceof ApiError ? e.message : "Could not remove that item.";
+    redirect(`/catalog/price-categories/${id}?error=${encodeURIComponent(message)}`);
+  }
+  redirect(`/catalog/price-categories/${id}?saved=1`);
+}
+
+/** No-JS fallback for the speed-scan box -- a full round trip that still works with JavaScript disabled. */
+export async function scanAddToPriceCategoryAction(id: string, formData: FormData): Promise<void> {
+  const code = String(formData.get("code") ?? "").trim();
+  if (!code) {
+    redirect(`/catalog/price-categories/${id}`);
+  }
+
+  let match: { sku: string };
+  try {
+    match = await apiFetch<{ sku: string }>(`/api/v1/catalog/price-categories/${id}/scan`, {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    });
+  } catch (e) {
+    const message = e instanceof ApiError ? e.message : "Could not add that item.";
+    redirect(`/catalog/price-categories/${id}?error=${encodeURIComponent(message)}`);
+    return;
+  }
+  redirect(`/catalog/price-categories/${id}?justAdded=${encodeURIComponent(match.sku)}`);
 }

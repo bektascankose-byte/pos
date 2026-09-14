@@ -2,6 +2,66 @@
 
 Notable changes. Newest first.
 
+## Price categories, and AI-suggested age restrictions
+
+Two requests: a way to group items so their price can be bulk-changed in one shot later (with two ways
+to build a group -- picking from a list, or scanning items back to back), and a way to flag THC/vape/
+tobacco items as age-restricted at creation time, with AI suggesting the flag instead of a manager
+having to know every regulated SKU by heart.
+
+- **Price categories** turn out to be ~80% already built under the name "price groups" --
+  `price_groups` + `product_variants.price_group_id` + `CatalogService.bulkSetPrice` (`POST
+  /variants/bulk-price`) already formed a group from a variant selection and repriced it all at once in
+  one transaction. What was missing was a *named*, browsable category and a way to build its membership
+  without repricing on every change. New `CatalogService.createPriceCategory`/`listPriceCategories`/
+  `getPriceCategory`/`addVariantsToPriceCategory`/`removeVariantFromPriceCategory`/
+  `scanAddToPriceCategory` (all reusing `price_groups`/`product.update`, no new permission, no
+  migration) and matching `POST/GET /catalog/price-categories[...]` routes. `bulkSetPrice` itself is
+  unchanged -- it's still exactly what "set this category's price" calls, via `price_group_id`.
+- Dashboard: `/catalog/price-categories` (list), `/new` (name only), `/[id]` (members, a "set price for
+  everyone" form, and the scan box below). The existing `/catalog` list page's row-checkbox selection
+  gained a third bulk action, "Add selected to category" -- the traditional way to build a category,
+  reusing the same search/select UI already there rather than building a second one.
+- **Speed-scan**: the one page in this dashboard with page-local JavaScript, by deliberate choice --
+  asked directly, given every other page here is zero-client-JS, and chose a smoother non-reloading scan
+  experience over a page reload per scan. A new same-origin Next.js Route Handler
+  (`app/api/price-categories/[id]/scan/route.ts`) is the only proxy of its kind in the app: the browser
+  calls it, it calls the same server-only `apiFetch` every Server Action already uses, so auth and
+  business logic stay exactly where they already live. A real `<form>` with a genuine Server Action
+  fallback still works with JavaScript disabled; the inline `<script>` on top of it is plain DOM, no
+  framework, confined to this one file. Each scan commits immediately (no pending/draft state to lose);
+  a mis-scan is corrected with the same per-row "Remove" button used for anything else.
+- **Age restriction**: `product_compliance` (`minimum_age`, `id_scan_required`, `regulated_class`,
+  `contains_nicotine`, `contains_cannabinoid`, `is_smokable`) turned out to be fully wired already --
+  `createProductTx` already saved it, the scan endpoint already returned it, and the Android register
+  already blocks checkout on it (`RegisterScreen.kt`'s "blocks PAY rather than warning beside it"
+  age-gate). The only real gap was that nothing in the dashboard ever *set* it. `/catalog/new` gained a
+  collapsible compliance section, and a new `AiService.classifyCompliance` (same
+  `client.responses.parse()` + `zodTextFormat()` shape as the existing invoice-matching methods, same
+  rule: only ever a suggestion, never written to the catalog directly) backs a "Suggest with AI" button
+  that round-trips through a new stateless `POST /catalog/compliance/suggest` and re-renders the same
+  form with every field -- including everything the user had already typed -- prefilled from the
+  suggestion, still fully editable before the real "Create product" submit.
+
+Verified against the real dev database and API: created a price category by name, added members both
+by checking rows on the catalog list and by scanning SKUs on the category's own page (confirmed an
+unknown code shows a clear "not found" instead of silently doing nothing), set a price and confirmed
+every member repriced together in one transaction, and removed a member. Found and fixed a real bug
+along the way: `removeVariantFromPriceCategory`'s `UPDATE ... SET price_group_id = NULL ... RETURNING
+price_group_id` always returned the post-update `NULL`, so the "did this actually remove a member"
+check always failed even on a genuine match -- fixed by joining against a pre-update snapshot so
+`RETURNING` reports the old value instead. Verified the AI compliance suggestion against a real THC
+product ("Sherpa THC Seltzer 100mg Soda" -> correctly flagged age-restricted, 21+, consumable_hemp,
+99% confidence) and an ordinary one ("Bottled Spring Water" -> correctly not restricted), then created
+the THC product for real and confirmed `product_compliance` persisted exactly what was submitted and
+that `GET /catalog/scan/:barcode` returns it. Full verification suite green: typecheck, lint, all
+contracts/db/pricing-spec tests (pglite and real Postgres, including RLS), and a clean dashboard
+production build. All test data removed afterward, including reverting two seed variants' price back to
+what it was before bulk-pricing them during the test. Left one pre-existing, unrelated finding
+unresolved rather than guessing at it: an unnamed price group (4 Geek Bar Pulse X variants at $23.99)
+that predates this work and wasn't created by this pass -- likely uncleaned test debris from an earlier
+phase, surfaced to the user rather than deleted.
+
 ## Invoice review: brand auto-creation, SKU=UPC, and inline product creation
 
 The user tested the shipped invoice-ingestion system against a real vendor invoice and hit several
