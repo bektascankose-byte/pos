@@ -2,6 +2,76 @@
 
 Notable changes. Newest first.
 
+## Client-side interactivity for catalog and invoice review, sharper invoice matching
+
+"Add JS in whole back office, I don't want the page to refresh every time I click something," plus
+"improve invoice parsing, matching product information, tabs and UI/UX." This app had been built with
+zero client-side JavaScript everywhere -- every click was a real Server Action ending in `redirect()`,
+which is what read as "the page refreshes." The literal ask ("client components fetching the API
+directly") turned out to be incompatible with this app's own security model: auth tokens live in
+**httpOnly cookies** specifically so client JS can never read them (`lib/cookies.ts`'s own words: "the
+whole point of the backend-for-frontend pattern this app uses"). What actually delivers "click something,
+it updates instantly, no navigation" without that regression: keep every Server Action's real work
+(validation, permission checks, audit logging, the actual `apiFetch` call) exactly as it is, call it from
+a Client Component instead of a plain `<form>`, and stop calling `redirect()` -- return a result the
+component merges into its own state instead. This pass converts the two highest-value, most-requested
+areas end to end; the rest of the app (customers, employees, inventory, purchase orders, loyalty,
+reports, scheduling, price categories) is the same technique, still to be applied page by page.
+
+- **Invoice matching fixes**, all backend-only: the vendor-SKU-memory tier (`vendor_variants`) was
+  completely dead in the shipped product -- nothing in the dashboard ever set `invoice_imports.vendor_id`,
+  so that tier could never fire and `commit` should have refused every invoice. `/invoice-imports/new`
+  now has a vendor picker. Fuzzy matching and the AI candidate shortlist used to score only
+  `product_name || variant_name`, so a wrong-brand item with an identical name could crowd the real match
+  out of the AI's top 5 candidates entirely, reading as "no match" even though the product existed --
+  brand and category now join the scored text in both tiers. Neither tier ever saw the line's own
+  quantity or cost, so a single unit and a 12-pack of a near-identically-named product couldn't be told
+  apart -- `match()` now selects them, both AI schemas carry them, and the matching prompt tells the model
+  to use cost-per-unit as a tiebreaker. Exact-match tiers (barcode, vendor SKU) are now case/whitespace
+  normalized, matching how the catalog's own SKU index already works. CSV header recognition changed from
+  requiring an exact string match to recognizing a word inside a compound header (`"Item Description"`
+  now finds `description`), specific fields resolving before the generic ones so one column is never
+  claimed by two different fields. A PDF/EDI document long enough to hit the extraction character limit
+  now says so on the review page instead of silently dropping its tail.
+- **The pattern**: a page's outer Server Component keeps doing the exact same initial data fetch as
+  before; its interactive body becomes a Client Component that holds that data as local state. A mutation
+  either updates that state directly from what the action returned, or -- for the more complex pages --
+  refetches the canonical record through a new same-origin Route Handler (`api/catalog/search`,
+  `api/invoice-imports/[id]`, alongside the pre-existing `api/price-categories/[id]/scan`), the same
+  "browser never talks to the API directly" shape already established. A hand-rolled `<Tabs>` component
+  (plain `useState`, no new dependency -- nothing like it existed anywhere in this app yet) backs the
+  product page's new tabs. Every fixed `Array.from({length: N})` blank-row block converted this pass
+  became "click Add to reveal one more row" -- pure client state, no server round trip just to show a
+  blank input.
+- **Invoice review** (`invoice-imports/[id]`): resolve/ignore/create-product/add-secondary-sku all commit
+  instantly with no navigation. The 7 fixed blank `extra_variants` rows are gone -- "Add another variant"
+  reveals one at a time, and one submission can still create a product with several flavors/sizes at
+  once, exactly as before. Found and fixed a real bug live: `defaultValue` only applies when a form field
+  first mounts, so the resolve dropdown and the create-product form's prefilled fields kept showing their
+  original (usually empty) values even after "Find matches" filled in a real suggestion for that exact
+  line, since the already-mounted elements never picked up the new default. Fixed by keying those elements
+  on the data that should re-baseline them, so they remount (and re-baseline) exactly when that line's own
+  suggestion actually changes, and stay put (preserving in-progress typing) for everything else.
+- **Catalog**: the product page (`catalog/[id]`) now has Details and Variants tabs; "Add variant" no
+  longer shows an always-open form -- clicking it reveals one, submits, and collapses back, ready to add
+  another. `catalog/new`'s "Suggest with AI" fills the compliance section from local state instead of a
+  full-page redirect carrying every field as a query parameter. The list page's search box and its three
+  bulk actions (field update, bulk price, add-to-price-category) all update the table in place.
+
+Verified against the real dev database and API, including the actual invoice that originally prompted
+the ingestion feature (`INV_2026_09_0010.pdf`): uploaded with a vendor attached, parsed (19 lines,
+confirmed no navigation at any point), ran matching and got both a real 100%-confidence catalog match and
+clean AI brand/category suggestions on the rest, resolved a matched line, and used two "Add another
+variant" clicks to create one product with three variants (a main item plus two dynamically-added
+flavors) in a single submission -- confirmed all three rows landed correctly in the catalog. Verified the
+`defaultValue` bug above by reproducing it, fixing it, and re-confirming the resolve dropdown and
+create-product prefill both now update correctly after "Find matches." Verified the catalog list's live
+search, a bulk price change across two selected rows (and that unselected rows were untouched), and the
+product page's tabs plus dynamic add-variant, all with zero page navigations. Full verification suite
+green: typecheck, lint, all contracts/db/pricing-spec tests (pglite and real Postgres, including RLS),
+and a clean dashboard production build. All test data (invoice import, test vendor, test products and
+variants) removed afterward.
+
 ## Price categories, and AI-suggested age restrictions
 
 Two requests: a way to group items so their price can be bulk-changed in one shot later (with two ways

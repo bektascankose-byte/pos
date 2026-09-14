@@ -15,7 +15,7 @@ import {
 } from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
 import { ObjectStorageService } from '../../platform/storage/object-storage.service.js';
-import { AiService } from '../../platform/ai/ai.service.js';
+import { AiService, MAX_DOCUMENT_CHARS } from '../../platform/ai/ai.service.js';
 import { PurchasingService } from '../purchasing/purchasing.service.js';
 import { CatalogService } from '../catalog/catalog.service.js';
 import { ApiException } from '../../platform/errors/api-exception.js';
@@ -54,14 +54,41 @@ const HEADER_ALIASES = {
   vendor_sku: ['sku', 'vendor_sku', 'item_code', 'code'],
 } as const;
 
-/** `"Unit Cost"`, `"unit-cost"` and `"unit_cost"` are the same header to a human; collapsing everything but letters and digits before comparing is what makes them the same header here too. */
-function normalizeHeader(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+/** `"Unit Cost"`, `"unit-cost"` and `"unit_cost"` are the same header to a human -- split into lowercase word tokens is what makes them comparable here too, and what lets a compound header like `"Item Description"` still recognize the word `"description"` inside it. */
+function headerTokens(value: string): string[] {
+  return value
+    .trim()
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
 }
 
-function findColumnKey(row: Record<string, string>, aliases: readonly string[]): string | null {
-  const normalizedAliases = aliases.map(normalizeHeader);
-  const key = Object.keys(row).find((k) => normalizedAliases.includes(normalizeHeader(k)));
+/**
+ * A single-word alias (`"sku"`) matches a header if any of its tokens equal
+ * that word -- so `"Item SKU"` still matches even though it isn't *only*
+ * "sku". A multi-word alias (`"unit_cost"` -> `["unit","cost"]`) requires
+ * those words adjacent and in order, so it doesn't fire on an unrelated
+ * header that merely contains both words separately.
+ *
+ * `claimed` prevents one column from being recognized for two different
+ * fields at once -- e.g. "Item Code" legitimately matches the generic
+ * `description` alias "item" AND the `vendor_sku` alias "code". Callers
+ * resolve the more specific fields (sku, cost, quantity) before the generic
+ * `description` one, so a header already claimed by a specific field is
+ * skipped rather than also being read as the description.
+ */
+function findColumnKey(row: Record<string, string>, aliases: readonly string[], claimed: Set<string>): string | null {
+  const key = Object.keys(row).find((k) => {
+    if (claimed.has(k)) return false;
+    const tokens = headerTokens(k);
+    return aliases.some((alias) => {
+      const aliasTokens = headerTokens(alias);
+      return aliasTokens.length === 1
+        ? tokens.includes(aliasTokens[0]!)
+        : tokens.join(' ').includes(aliasTokens.join(' '));
+    });
+  });
+  if (key) claimed.add(key);
   return key ?? null;
 }
 
@@ -87,10 +114,14 @@ function parseCsvLines(buffer: Buffer): ParsedCsvLine[] {
   }) as Record<string, string>[];
 
   return rows.map((row) => {
-    const quantityKey = findColumnKey(row, HEADER_ALIASES.quantity);
-    const costKey = findColumnKey(row, HEADER_ALIASES.unit_cost);
-    const descriptionKey = findColumnKey(row, HEADER_ALIASES.description);
-    const skuKey = findColumnKey(row, HEADER_ALIASES.vendor_sku);
+    const claimed = new Set<string>();
+    // Specific fields claim their column first; `description`'s generic
+    // aliases ("item", "name", "product") run last so they never steal a
+    // column a more specific field already recognized (see findColumnKey).
+    const quantityKey = findColumnKey(row, HEADER_ALIASES.quantity, claimed);
+    const costKey = findColumnKey(row, HEADER_ALIASES.unit_cost, claimed);
+    const skuKey = findColumnKey(row, HEADER_ALIASES.vendor_sku, claimed);
+    const descriptionKey = findColumnKey(row, HEADER_ALIASES.description, claimed);
 
     return {
       rawText: Object.entries(row)
@@ -234,7 +265,7 @@ export class InvoicingService {
         const buffer = await this.storage.get(invoiceImport.source_object_key);
         const parsed =
           format === 'csv'
-            ? { lines: parseCsvLines(buffer), vendorInvoiceNo: null, invoiceTotalMinor: null }
+            ? { lines: parseCsvLines(buffer), vendorInvoiceNo: null, invoiceTotalMinor: null, truncated: false }
             : await this.parseWithAi(buffer, format);
 
         for (const [index, line] of parsed.lines.entries()) {
@@ -247,13 +278,22 @@ export class InvoicingService {
           );
         }
 
+        // `parse_error` doubles as a non-fatal note here -- status is still
+        // 'parsed', not 'failed'; a reviewer just needs to know the document
+        // was cut off so a missing tail of line items isn't mistaken for the
+        // model having missed them.
+        const warning = parsed.truncated
+          ? `this document is long enough that only its first ${MAX_DOCUMENT_CHARS.toLocaleString()} characters were read -- line items past that point were not extracted`
+          : null;
+
         await tx.query(
           `UPDATE invoice_imports
              SET status = 'parsed',
                  vendor_invoice_no = COALESCE($2, vendor_invoice_no),
-                 invoice_total_minor = COALESCE($3, invoice_total_minor)
+                 invoice_total_minor = COALESCE($3, invoice_total_minor),
+                 parse_error = $4
            WHERE id = $1`,
-          [id, parsed.vendorInvoiceNo, parsed.invoiceTotalMinor],
+          [id, parsed.vendorInvoiceNo, parsed.invoiceTotalMinor, warning],
         );
       } catch (e) {
         const message = e instanceof Error ? e.message : 'unknown parse error';
@@ -272,7 +312,12 @@ export class InvoicingService {
   private async parseWithAi(
     buffer: Buffer,
     format: 'pdf' | 'edi',
-  ): Promise<{ lines: ParsedCsvLine[]; vendorInvoiceNo: string | null; invoiceTotalMinor: string | null }> {
+  ): Promise<{
+    lines: ParsedCsvLine[];
+    vendorInvoiceNo: string | null;
+    invoiceTotalMinor: string | null;
+    truncated: boolean;
+  }> {
     const text = format === 'pdf' ? await extractPdfText(buffer) : buffer.toString('utf-8');
     if (text.trim().length < 20) {
       throw new Error(
@@ -291,6 +336,7 @@ export class InvoicingService {
       })),
       vendorInvoiceNo: extracted.vendor_invoice_no,
       invoiceTotalMinor: extracted.invoice_total !== null ? costToMinor(extracted.invoice_total.toFixed(2)).toString() : null,
+      truncated: text.length > MAX_DOCUMENT_CHARS,
     };
   }
 
@@ -326,8 +372,12 @@ export class InvoicingService {
         raw_text: string;
         parsed_vendor_sku: string | null;
         parsed_description: string | null;
+        parsed_quantity: string | null;
+        parsed_unit_cost: string | null;
       }>(
-        `SELECT id, raw_text, parsed_vendor_sku, parsed_description FROM invoice_import_lines
+        `SELECT id, raw_text, parsed_vendor_sku, parsed_description,
+                parsed_quantity::text, parsed_unit_cost::text
+         FROM invoice_import_lines
          WHERE invoice_import_id = $1 AND status = 'pending' AND ai_suggested_variant_id IS NULL`,
         [id],
       );
@@ -370,7 +420,14 @@ export class InvoicingService {
 
   private async runAiMatchTier(
     tx: PoolClient,
-    lines: { id: string; raw_text: string; parsed_vendor_sku: string | null; parsed_description: string | null }[],
+    lines: {
+      id: string;
+      raw_text: string;
+      parsed_vendor_sku: string | null;
+      parsed_description: string | null;
+      parsed_quantity: string | null;
+      parsed_unit_cost: string | null;
+    }[],
   ): Promise<number> {
     const [{ rows: brandRows }, { rows: categoryRows }] = await Promise.all([
       tx.query<{ name: string }>(`SELECT name FROM brands WHERE status = 'active' ORDER BY name`),
@@ -388,10 +445,21 @@ export class InvoicingService {
         variant_name: string | null;
         brand: string | null;
         category: string | null;
+        cost: string;
+        case_quantity: number;
+        pack_quantity: number;
         score: number;
       }>(
+        // Brand and category join the scored text itself, not just the
+        // display fields, so a wrong-brand item with an otherwise identical
+        // name scores lower and doesn't crowd the right one out of LIMIT 5.
         `SELECT v.id, p.name AS product_name, v.variant_name, b.name AS brand, c.name AS category,
-                similarity(p.name || ' ' || COALESCE(v.variant_name, ''), $1) AS score
+                v.cost::text, v.case_quantity, v.pack_quantity,
+                similarity(
+                  p.name || ' ' || COALESCE(v.variant_name, '') || ' ' ||
+                  COALESCE(b.name, '') || ' ' || COALESCE(c.name, ''),
+                  $1
+                ) AS score
          FROM product_variants v
          JOIN products p ON p.id = v.product_id
          LEFT JOIN brands b ON b.id = p.brand_id
@@ -412,12 +480,17 @@ export class InvoicingService {
         raw_text: line.raw_text,
         description: line.parsed_description,
         vendor_sku: line.parsed_vendor_sku,
+        quantity: line.parsed_quantity !== null ? Number(line.parsed_quantity) : null,
+        unit_cost: line.parsed_unit_cost !== null ? Number(line.parsed_unit_cost) : null,
         candidates: candidates.map((r, i) => ({
           index: i,
           product_name: r.product_name,
           variant_name: r.variant_name,
           brand: r.brand,
           category: r.category,
+          unit_cost: Number(r.cost),
+          case_quantity: r.case_quantity,
+          pack_quantity: r.pack_quantity,
         })),
       });
     }
@@ -467,10 +540,14 @@ export class InvoicingService {
     description: string | null,
   ): Promise<{ variantId: string; confidence: number } | null> {
     if (vendorSku) {
+      // upper(trim(...)) on both sides -- a vendor resending the same SKU
+      // with different case or a trailing space would otherwise silently
+      // miss an exact-match tier, the same normalization the catalog's own
+      // SKU uniqueness index already applies.
       const { rows: barcodeRows } = await tx.query<{ id: string }>(
         `SELECT v.id FROM variant_barcodes b
          JOIN product_variants v ON v.id = b.variant_id
-         WHERE b.barcode = $1 AND v.status = 'active'
+         WHERE upper(trim(b.barcode)) = upper(trim($1)) AND v.status = 'active'
          LIMIT 1`,
         [vendorSku],
       );
@@ -480,7 +557,7 @@ export class InvoicingService {
         const { rows: vendorSkuRows } = await tx.query<{ variant_id: string }>(
           `SELECT vv.variant_id FROM vendor_variants vv
            JOIN product_variants v ON v.id = vv.variant_id
-           WHERE vv.vendor_id = $1 AND vv.vendor_sku = $2 AND v.status = 'active'
+           WHERE vv.vendor_id = $1 AND upper(trim(vv.vendor_sku)) = upper(trim($2)) AND v.status = 'active'
            LIMIT 1`,
           [vendorId, vendorSku],
         );
@@ -489,11 +566,20 @@ export class InvoicingService {
     }
 
     if (description) {
+      // Brand and category join the scored text so a wrong-brand item with
+      // an otherwise identical name doesn't outscore the right one -- the
+      // same widening applied to the AI tier's own candidate search below.
       const { rows: fuzzyRows } = await tx.query<{ id: string; score: number }>(
         `SELECT v.id,
-                similarity(p.name || ' ' || COALESCE(v.variant_name, ''), $1) AS score
+                similarity(
+                  p.name || ' ' || COALESCE(v.variant_name, '') || ' ' ||
+                  COALESCE(b.name, '') || ' ' || COALESCE(c.name, ''),
+                  $1
+                ) AS score
          FROM product_variants v
          JOIN products p ON p.id = v.product_id
+         LEFT JOIN brands b ON b.id = p.brand_id
+         LEFT JOIN categories c ON c.id = p.category_id
          WHERE v.status = 'active' AND p.status = 'active'
          ORDER BY score DESC
          LIMIT 1`,

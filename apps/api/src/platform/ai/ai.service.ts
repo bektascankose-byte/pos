@@ -12,7 +12,8 @@ import {
 } from '@snappos/contracts';
 import { ApiException } from '../errors/api-exception.js';
 
-const MAX_DOCUMENT_CHARS = 20_000;
+/** Exported so callers with the raw text in hand (see `InvoicingService.parseWithAi`) can tell ahead of time whether this same limit is about to silently drop the tail of a document. */
+export const MAX_DOCUMENT_CHARS = 20_000;
 
 const EXTRACTION_INSTRUCTIONS = `You are extracting line items from a vendor invoice for a retail point-of-sale system. The text below was pulled from a PDF or an EDI/plain-text document and may have irregular spacing, broken lines, or raw EDI segment codes and delimiters (such as *, ~, or |) instead of natural prose -- in either case, find the actual billed line items it describes.
 
@@ -27,7 +28,7 @@ Do not return invoice-level rows like subtotals, tax, shipping, or the grand tot
 
 const MATCHING_INSTRUCTIONS = `You are matching vendor invoice line items against an existing product catalog for a retail point-of-sale system, and suggesting catalog metadata when the invoice implies it.
 
-For each line you are given its raw text, parsed description/SKU, and a short list of catalog candidates (each with an index, product name, variant name, brand, and category) drawn from a fuzzy text search -- not the full catalog. For every line, return:
+For each line you are given its raw text, parsed description/SKU/quantity/unit cost, and a short list of catalog candidates (each with an index, product name, variant name, brand, category, and that candidate's own unit cost/case quantity/pack quantity) drawn from a fuzzy text search -- not the full catalog. When two candidates read almost identically in name but differ in case/pack quantity (a single can vs. a 12-pack of the same product), use the line's own quantity and unit cost as a tiebreaker: the vendor's unit cost should land close to whichever candidate's own unit cost times its pack size actually matches, not just whichever name reads closer. For every line, return:
 - line_index: copy the line's own index back unchanged
 - matched_candidate_index: the index of the ONE candidate that is clearly this exact sellable item (same product AND same variant/flavor/size), or null if none of the candidates is clearly correct
 - confidence: your confidence in that match from 0 to 1 (0 if matched_candidate_index is null)

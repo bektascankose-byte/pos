@@ -185,13 +185,22 @@ export const aiExtractedInvoiceSchema = z.object({
   lines: z.array(aiExtractedLineSchema),
 });
 
-/** One catalog row offered to the AI matching tier as a candidate for a single line -- never the whole catalog, just a bounded, already-validated shortlist. */
+/**
+ * One catalog row offered to the AI matching tier as a candidate for a single
+ * line -- never the whole catalog, just a bounded, already-validated
+ * shortlist. `unit_cost`/`case_quantity`/`pack_quantity` give the model a
+ * numeric signal to tell apart a single unit from a case of the otherwise
+ * near-identically-named same product.
+ */
 export const aiMatchCandidateSchema = z.object({
   index: z.number().int(),
   product_name: z.string(),
   variant_name: z.string().nullable(),
   brand: z.string().nullable(),
   category: z.string().nullable(),
+  unit_cost: z.number().nullable(),
+  case_quantity: z.number().int().nullable(),
+  pack_quantity: z.number().int().nullable(),
 });
 
 export const aiMatchLineInputSchema = z.object({
@@ -199,6 +208,9 @@ export const aiMatchLineInputSchema = z.object({
   raw_text: z.string(),
   description: z.string().nullable(),
   vendor_sku: z.string().nullable(),
+  /** The invoice's own quantity/cost for this line, when parsing found them -- lets the model sanity-check a candidate's cost-per-unit against what the vendor actually billed. */
+  quantity: z.number().nullable(),
+  unit_cost: z.number().nullable(),
   candidates: z.array(aiMatchCandidateSchema),
 });
 

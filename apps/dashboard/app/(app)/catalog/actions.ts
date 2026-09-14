@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/api";
 import { parseMajorToMinor } from "@/lib/money";
 import { primaryStoreId } from "@/lib/store";
+import type { ActionResult } from "@/lib/action-result";
 import type { Product, Variant, AiComplianceSuggestion } from "@snappos/contracts";
 
 interface CreatedVariant {
@@ -11,7 +12,7 @@ interface CreatedVariant {
   sku: string;
 }
 
-export async function updateProductAction(id: string, formData: FormData): Promise<void> {
+export async function updateProductAction(id: string, formData: FormData): Promise<ActionResult<Product>> {
   const body: Record<string, unknown> = {};
   for (const field of ["name", "short_name", "description", "unit_type"] as const) {
     const value = String(formData.get(field) ?? "").trim();
@@ -30,22 +31,21 @@ export async function updateProductAction(id: string, formData: FormData): Promi
   }
 
   try {
-    await apiFetch<Product>(`/api/v1/catalog/products/${id}`, {
+    const data = await apiFetch<Product>(`/api/v1/catalog/products/${id}`, {
       method: "PATCH",
       body: JSON.stringify(body),
     });
+    return { ok: true, data };
   } catch (e) {
-    const message = e instanceof ApiError ? e.message : "Could not save changes.";
-    redirect(`/catalog/${id}?error=${encodeURIComponent(message)}`);
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not save changes." };
   }
-  redirect(`/catalog/${id}?saved=1`);
 }
 
 export async function updateVariantAction(
   productId: string,
   variantId: string,
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult<Variant>> {
   const body: Record<string, unknown> = {};
   const variantName = String(formData.get("variant_name") ?? "").trim();
   if (variantName) body.variant_name = variantName;
@@ -63,18 +63,20 @@ export async function updateVariantAction(
   if (status) body.status = status;
 
   try {
-    await apiFetch<Variant>(`/api/v1/catalog/variants/${variantId}`, {
+    const data = await apiFetch<Variant>(`/api/v1/catalog/variants/${variantId}`, {
       method: "PATCH",
       body: JSON.stringify(body),
     });
+    return { ok: true, data };
   } catch (e) {
-    const message = e instanceof ApiError ? e.message : "Could not save changes.";
-    redirect(`/catalog/${productId}?error=${encodeURIComponent(message)}`);
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not save changes." };
   }
-  redirect(`/catalog/${productId}?saved=1`);
 }
 
-export async function addVariantAction(productId: string, formData: FormData): Promise<void> {
+export async function addVariantAction(
+  productId: string,
+  formData: FormData,
+): Promise<ActionResult<CreatedVariant>> {
   const variantName = String(formData.get("variant_name") ?? "").trim();
   const sku = String(formData.get("sku") ?? "").trim();
   const attributeValue = String(formData.get("attribute_value") ?? "").trim();
@@ -84,7 +86,7 @@ export async function addVariantAction(productId: string, formData: FormData): P
   const packQty = String(formData.get("pack_quantity") ?? "").trim() || "1";
 
   if (!variantName || !sku) {
-    redirect(`/catalog/${productId}?error=${encodeURIComponent("A variant name and SKU are required.")}`);
+    return { ok: false, error: "A variant name and SKU are required." };
   }
 
   const body = {
@@ -98,15 +100,14 @@ export async function addVariantAction(productId: string, formData: FormData): P
   };
 
   try {
-    await apiFetch<CreatedVariant>(`/api/v1/catalog/products/${productId}/variants`, {
+    const data = await apiFetch<CreatedVariant>(`/api/v1/catalog/products/${productId}/variants`, {
       method: "POST",
       body: JSON.stringify(body),
     });
+    return { ok: true, data };
   } catch (e) {
-    const message = e instanceof ApiError ? e.message : "Could not add that variant.";
-    redirect(`/catalog/${productId}?error=${encodeURIComponent(message)}`);
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not add that variant." };
   }
-  redirect(`/catalog/${productId}?saved=1`);
 }
 
 export async function setPriceAction(
@@ -114,11 +115,11 @@ export async function setPriceAction(
   variantId: string,
   storeId: string | null,
   formData: FormData,
-): Promise<void> {
+): Promise<ActionResult<{ price_minor: string }>> {
   const major = String(formData.get("price") ?? "").trim();
   const minor = parseMajorToMinor(major);
   if (minor === null) {
-    redirect(`/catalog/${productId}?error=${encodeURIComponent("Enter a valid price, like 24.99")}`);
+    return { ok: false, error: "Enter a valid price, like 24.99" };
   }
 
   try {
@@ -126,15 +127,14 @@ export async function setPriceAction(
       method: "POST",
       body: JSON.stringify({ price_minor: minor, store_id: storeId }),
     });
+    return { ok: true, data: { price_minor: minor } };
   } catch (e) {
-    const message = e instanceof ApiError ? e.message : "Could not update the price.";
-    redirect(`/catalog/${productId}?error=${encodeURIComponent(message)}`);
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not update the price." };
   }
-  redirect(`/catalog/${productId}?saved=1`);
 }
 
 /** A single-variant product. Multi-variant (several flavors of one item) isn't in this form yet. */
-export async function createProductAction(formData: FormData): Promise<void> {
+export async function createProductAction(formData: FormData): Promise<ActionResult<{ id: string }>> {
   const name = String(formData.get("name") ?? "").trim();
   const sku = String(formData.get("sku") ?? "").trim();
   const cost = String(formData.get("cost") ?? "").trim() || "0";
@@ -146,12 +146,12 @@ export async function createProductAction(formData: FormData): Promise<void> {
   const storeId = String(formData.get("store_id") ?? "").trim();
 
   if (!name || !sku) {
-    redirect(`/catalog/new?error=${encodeURIComponent("Name and SKU are required.")}`);
+    return { ok: false, error: "Name and SKU are required." };
   }
 
   const priceMinor = priceMajor ? parseMajorToMinor(priceMajor) : null;
   if (priceMajor && priceMinor === null) {
-    redirect(`/catalog/new?error=${encodeURIComponent("Enter a valid price, like 24.99")}`);
+    return { ok: false, error: "Enter a valid price, like 24.99" };
   }
 
   let compliance: Record<string, unknown> | undefined;
@@ -186,60 +186,35 @@ export async function createProductAction(formData: FormData): Promise<void> {
     ],
   };
 
-  let created: { id: string };
   try {
-    created = await apiFetch<{ id: string }>(
+    const data = await apiFetch<{ id: string }>(
       `/api/v1/catalog/products${storeId ? `?store_id=${storeId}` : ""}`,
       { method: "POST", body: JSON.stringify(body) },
     );
+    return { ok: true, data };
   } catch (e) {
-    const message = e instanceof ApiError ? e.message : "Could not create the product.";
-    redirect(`/catalog/new?error=${encodeURIComponent(message)}`);
-    return;
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not create the product." };
   }
-  redirect(`/catalog/${created.id}?saved=1`);
 }
 
 /**
- * A suggestion only -- redirects back to the same form with every field the
- * user already typed preserved, plus the AI's guess prefilled alongside them.
- * Nothing is written to the catalog here; "Create product" still has to be
+ * A suggestion only -- the caller fills its own local state with the result;
+ * nothing is written to the catalog here. "Create product" still has to be
  * clicked afterward for any of it to be saved.
  */
-export async function suggestComplianceAction(formData: FormData): Promise<void> {
-  const name = String(formData.get("name") ?? "").trim();
-  const params = new URLSearchParams();
-  for (const field of ["name", "sku", "barcode", "cost", "price", "brand_id", "category_id", "tax_category_id"]) {
-    const value = String(formData.get(field) ?? "").trim();
-    if (value) params.set(field, value);
+export async function suggestComplianceAction(name: string): Promise<ActionResult<AiComplianceSuggestion>> {
+  if (!name.trim()) {
+    return { ok: false, error: "Type a product name first." };
   }
-
-  if (!name) {
-    params.set("error", "Type a product name first.");
-    redirect(`/catalog/new?${params}`);
-  }
-
-  let suggestion: AiComplianceSuggestion;
   try {
-    suggestion = await apiFetch<AiComplianceSuggestion>(`/api/v1/catalog/compliance/suggest`, {
+    const data = await apiFetch<AiComplianceSuggestion>(`/api/v1/catalog/compliance/suggest`, {
       method: "POST",
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name: name.trim() }),
     });
+    return { ok: true, data };
   } catch (e) {
-    params.set("error", e instanceof ApiError ? e.message : "Could not get an AI suggestion.");
-    redirect(`/catalog/new?${params}`);
-    return;
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not get an AI suggestion." };
   }
-
-  params.set("suggested_is_restricted", String(suggestion.is_age_restricted));
-  if (suggestion.minimum_age !== null) params.set("suggested_minimum_age", String(suggestion.minimum_age));
-  params.set("suggested_id_scan_required", String(suggestion.id_scan_required));
-  if (suggestion.regulated_class) params.set("suggested_regulated_class", suggestion.regulated_class);
-  params.set("suggested_contains_nicotine", String(suggestion.contains_nicotine));
-  params.set("suggested_contains_cannabinoid", String(suggestion.contains_cannabinoid));
-  params.set("suggested_is_smokable", String(suggestion.is_smokable));
-  params.set("suggested_confidence", String(suggestion.confidence));
-  redirect(`/catalog/new?${params}`);
 }
 
 /** Each checkbox's value is "product_id:variant_id" -- one selection serves both bulk actions below, since the editable fields live on different rows of the same list. */
@@ -250,7 +225,7 @@ function splitRowKeys(formData: FormData): { productIds: string[]; variantIds: s
   return { productIds, variantIds };
 }
 
-export async function bulkUpdateProductsAction(formData: FormData): Promise<void> {
+export async function bulkUpdateProductsAction(formData: FormData): Promise<ActionResult> {
   const { productIds } = splitRowKeys(formData);
   const categoryId = String(formData.get("bulk_category_id") ?? "").trim();
   const brandId = String(formData.get("bulk_brand_id") ?? "").trim();
@@ -258,10 +233,10 @@ export async function bulkUpdateProductsAction(formData: FormData): Promise<void
   const status = String(formData.get("bulk_status") ?? "").trim();
 
   if (productIds.length === 0) {
-    redirect(`/catalog?error=${encodeURIComponent("Select at least one product first.")}`);
+    return { ok: false, error: "Select at least one product first." };
   }
   if (!categoryId && !brandId && !taxCategoryId && !status) {
-    redirect(`/catalog?error=${encodeURIComponent("Choose a field to change for the selected products.")}`);
+    return { ok: false, error: "Choose a field to change for the selected products." };
   }
 
   const body = {
@@ -273,27 +248,23 @@ export async function bulkUpdateProductsAction(formData: FormData): Promise<void
   };
 
   try {
-    await apiFetch(`/api/v1/catalog/products/bulk`, {
-      method: "PATCH",
-      body: JSON.stringify(body),
-    });
+    await apiFetch(`/api/v1/catalog/products/bulk`, { method: "PATCH", body: JSON.stringify(body) });
+    return { ok: true, data: undefined };
   } catch (e) {
-    const message = e instanceof ApiError ? e.message : "Could not update those products.";
-    redirect(`/catalog?error=${encodeURIComponent(message)}`);
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not update those products." };
   }
-  redirect(`/catalog?saved=1`);
 }
 
-export async function bulkSetPriceAction(formData: FormData): Promise<void> {
+export async function bulkSetPriceAction(formData: FormData): Promise<ActionResult> {
   const { variantIds } = splitRowKeys(formData);
   const priceMajor = String(formData.get("bulk_price") ?? "").trim();
 
   if (variantIds.length === 0) {
-    redirect(`/catalog?error=${encodeURIComponent("Select at least one product first.")}`);
+    return { ok: false, error: "Select at least one product first." };
   }
   const priceMinor = parseMajorToMinor(priceMajor);
   if (priceMinor === null) {
-    redirect(`/catalog?error=${encodeURIComponent("Enter a valid price, like 24.99")}`);
+    return { ok: false, error: "Enter a valid price, like 24.99" };
   }
 
   const storeId = await primaryStoreId();
@@ -303,23 +274,22 @@ export async function bulkSetPriceAction(formData: FormData): Promise<void> {
       method: "POST",
       body: JSON.stringify({ price_minor: priceMinor, variant_ids: variantIds, store_id: storeId }),
     });
+    return { ok: true, data: undefined };
   } catch (e) {
-    const message = e instanceof ApiError ? e.message : "Could not price those products.";
-    redirect(`/catalog?error=${encodeURIComponent(message)}`);
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not price those products." };
   }
-  redirect(`/catalog?saved=1`);
 }
 
 /** The "traditional" way to add members to a price category -- from the same checkbox selection the other two bulk actions above already use. */
-export async function addToPriceCategoryAction(formData: FormData): Promise<void> {
+export async function addToPriceCategoryAction(formData: FormData): Promise<ActionResult> {
   const { variantIds } = splitRowKeys(formData);
   const categoryId = String(formData.get("target_price_category_id") ?? "").trim();
 
   if (variantIds.length === 0) {
-    redirect(`/catalog?error=${encodeURIComponent("Select at least one product first.")}`);
+    return { ok: false, error: "Select at least one product first." };
   }
   if (!categoryId) {
-    redirect(`/catalog?error=${encodeURIComponent("Choose a price category first.")}`);
+    return { ok: false, error: "Choose a price category first." };
   }
 
   try {
@@ -327,12 +297,17 @@ export async function addToPriceCategoryAction(formData: FormData): Promise<void
       method: "POST",
       body: JSON.stringify({ variant_ids: variantIds }),
     });
+    return { ok: true, data: undefined };
   } catch (e) {
-    const message = e instanceof ApiError ? e.message : "Could not add those items to the category.";
-    redirect(`/catalog?error=${encodeURIComponent(message)}`);
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not add those items to the category." };
   }
-  redirect(`/catalog?saved=1`);
 }
+
+// -------------------------------------------------------------------------
+// Price categories: unchanged, plain redirecting Server Actions. Those pages
+// aren't converted to the client-interactivity pattern this pass -- see the
+// plan's "deferred" list.
+// -------------------------------------------------------------------------
 
 export async function createPriceCategoryAction(formData: FormData): Promise<void> {
   const name = String(formData.get("name") ?? "").trim();
