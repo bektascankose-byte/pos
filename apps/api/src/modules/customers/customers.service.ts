@@ -33,7 +33,7 @@ export class CustomersService {
       const { rows } = await tx.query(
         `SELECT ${CUSTOMER_COLUMNS}
          FROM customers
-         WHERE status = 'active' AND anonymized_at IS NULL
+         WHERE status = COALESCE($4, 'active')::entity_status AND anonymized_at IS NULL
            AND ($1::text IS NULL OR phone = $1)
            AND ($2::text IS NULL OR
                 first_name ILIKE '%' || $2 || '%' OR
@@ -42,7 +42,7 @@ export class CustomersService {
                 phone      ILIKE '%' || $2 || '%')
          ORDER BY last_name NULLS LAST, first_name NULLS LAST
          LIMIT $3`,
-        [params.phone ?? null, params.q ?? null, params.limit],
+        [params.phone ?? null, params.q ?? null, params.limit, params.status ?? null],
       );
       return { data: rows, next_cursor: null };
     });
@@ -74,8 +74,9 @@ export class CustomersService {
       const { rows } = await tx.query(
         `INSERT INTO customers
            (org_id, first_name, last_name, phone, email, birth_month, birth_day,
-            home_store_id, notes)
-         VALUES (current_setting('app.org_id')::uuid, $1,$2,$3,$4,$5,$6,$7,$8)
+            home_store_id, notes, tags)
+         VALUES (current_setting('app.org_id')::uuid, $1,$2,$3,$4,$5,$6,$7,$8,
+                 COALESCE($9::text[], '{}'))
          RETURNING ${CUSTOMER_COLUMNS}`,
         [
           input.first_name ?? null,
@@ -86,6 +87,7 @@ export class CustomersService {
           input.birth_day ?? null,
           input.home_store_id ?? null,
           input.notes ?? null,
+          input.tags ?? null,
         ],
       );
       const customer = rows[0]!;
@@ -123,7 +125,9 @@ export class CustomersService {
            birth_month  = COALESCE($6, birth_month),
            birth_day    = COALESCE($7, birth_day),
            home_store_id = COALESCE($8, home_store_id),
-           notes        = COALESCE($9, notes)
+           notes        = COALESCE($9, notes),
+           tags         = COALESCE($10::text[], tags),
+           status       = COALESCE($11::entity_status, status)
          WHERE id = $1
          RETURNING ${CUSTOMER_COLUMNS}`,
         [
@@ -136,6 +140,8 @@ export class CustomersService {
           input.birth_day ?? null,
           input.home_store_id ?? null,
           input.notes ?? null,
+          input.tags ?? null,
+          input.status ?? null,
         ],
       );
       const customer = rows[0];

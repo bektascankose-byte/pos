@@ -46,6 +46,60 @@ export async function updateProductAction(id: string, formData: FormData): Promi
   }
 }
 
+/**
+ * Archive rather than delete. Sale lines, purchase orders and invoice lines
+ * all point at this product's variants; removing the row would either break
+ * that history or take it with it. Archiving hides it from the catalog,
+ * search and the register, and is reversible.
+ */
+export async function setProductStatusAction(
+  id: string,
+  status: "active" | "archived",
+): Promise<ActionResult<Product>> {
+  try {
+    const data = await apiFetch<Product>(`/api/v1/catalog/products/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    });
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not change that item's status." };
+  }
+}
+
+/**
+ * Age restriction and the rest of the compliance record. Until now these were
+ * only settable when a product was first created (from the AI suggestion on
+ * the new-item form), so a wrong or missing age restriction couldn't be
+ * corrected afterwards.
+ */
+export async function updateComplianceAction(
+  productId: string,
+  formData: FormData,
+): Promise<ActionResult<Product>> {
+  const minimumAge = String(formData.get("minimum_age") ?? "").trim();
+  const regulatedClass = String(formData.get("regulated_class") ?? "").trim();
+
+  const compliance = {
+    minimum_age: minimumAge ? Number(minimumAge) : null,
+    id_scan_required: formData.get("id_scan_required") === "on",
+    regulated_class: regulatedClass || null,
+    contains_nicotine: formData.get("contains_nicotine") === "on",
+    contains_cannabinoid: formData.get("contains_cannabinoid") === "on",
+    is_smokable: formData.get("is_smokable") === "on",
+  };
+
+  try {
+    const data = await apiFetch<Product>(`/api/v1/catalog/products/${productId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ compliance }),
+    });
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not save compliance." };
+  }
+}
+
 export async function updateVariantAction(
   productId: string,
   variantId: string,
@@ -54,6 +108,8 @@ export async function updateVariantAction(
   const body: Record<string, unknown> = {};
   const variantName = String(formData.get("variant_name") ?? "").trim();
   if (variantName) body.variant_name = variantName;
+  const plu = String(formData.get("plu") ?? "").trim();
+  if (plu) body.plu = plu;
   const cost = String(formData.get("cost") ?? "").trim();
   if (cost) body.cost = cost;
   const caseQty = String(formData.get("case_quantity") ?? "").trim();

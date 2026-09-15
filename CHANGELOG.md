@@ -2,6 +2,45 @@
 
 Notable changes. Newest first.
 
+## Full editing for items and customers, and archive instead of delete
+
+First of four passes toward customer/vendor management, AI-mapped import/export and marketing. Asked what
+"delete" should mean, the answer was **always archive** — which is what this app already did for products
+and never exposed for anything else.
+
+- **Archive everywhere.** `status` is now settable on a single product (`updateProductSchema`) and on a
+  customer, with archive/restore on both detail pages and a "show archived" view on the customer list.
+  Nothing is destroyed: sale lines, purchase orders, invoice lines and refunds all reference these rows,
+  so deleting would either break that history or drag it along. An archived record disappears from the
+  back office, search and the register — the customer search endpoint is the same one the register calls,
+  and it still defaults to active only, so archiving genuinely removes someone from the counter.
+- **Customers can be created from the back office at all**, which they couldn't before, and the edit form
+  covers the whole record rather than five fields: birthday month/day, tags and status joined name, phone,
+  email and notes. `tags` and `status` were missing from the create/update contracts entirely.
+- **Compliance is editable.** `updateProductSchema` accepted a `compliance` object and
+  `CatalogService.updateProduct` silently ignored it, so an age restriction could only ever be set at
+  creation, from the AI's guess, and never corrected. It now upserts `product_compliance` — for a shop
+  selling vape and THC this is the field the register actually enforces at the counter.
+- **PLU is editable** on a variant (keypad code for items rung up without a barcode).
+
+Two fixes that came out of using the thing:
+
+- **Every validation failure in the back office read as "the request did not validate."** The API answers
+  a rejected body with that sentence *plus* an `issues` array naming each field, and `ApiError` was
+  dropping the array. It now folds the issues into the message, so a bad phone says
+  `phone: phone must be E.164, e.g. +15125550123`. That applies to every form in the app, not just the
+  new ones.
+- **Phone numbers are normalized on the way in.** The contract stores E.164 so a lookup by phone matches,
+  but nobody types `+15125550123` — and the form's own placeholder suggested a format that would be
+  rejected. Ten digits, or eleven starting with 1, now become E.164 automatically; anything else is passed
+  through for the API to judge rather than guessing a country code.
+
+Verified live: a customer created with a typed `(512) 555-0199` stored as `+15125550199` with birthday and
+tags intact, archived, confirmed absent from the active search and present under archived, and restorable;
+compliance saved to a product that had no compliance row and read back correctly after a reload. One bug
+caught by checking the database rather than the success message — `plu` was wired through the contract and
+the SQL but not the dashboard action, so the form said "Saved." while silently discarding it.
+
 ## A dashboard worth opening
 
 Last of the four back-office passes. The dashboard showed three numbers about today and a list of recent

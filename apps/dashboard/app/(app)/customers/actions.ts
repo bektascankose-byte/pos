@@ -5,6 +5,44 @@ import type { ActionResult } from "@/lib/action-result";
 import type { Customer } from "@snappos/contracts";
 
 /**
+ * The contract stores phones as E.164 ("+15125550123") so a lookup by phone
+ * actually matches, but nobody types a US number that way. A plain 10-digit
+ * number, or 11 starting with 1, is turned into E.164 here; anything else is
+ * passed through untouched for the API to accept or reject on its own terms,
+ * since guessing a country code for an unrecognizable number would be worse
+ * than saying so.
+ */
+function normalizePhone(input: string): string {
+  const trimmed = input.trim();
+  if (trimmed.startsWith("+")) return trimmed;
+  const digits = trimmed.replace(/\D/g, "");
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return trimmed;
+}
+
+/** Shared by create and update: the fields a person types, read off the form. */
+function readCustomerFields(formData: FormData): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  for (const field of ["first_name", "last_name", "phone", "email", "notes"] as const) {
+    const value = String(formData.get(field) ?? "").trim();
+    if (value) body[field] = field === "phone" ? normalizePhone(value) : value;
+  }
+  for (const field of ["birth_month", "birth_day"] as const) {
+    const value = String(formData.get(field) ?? "").trim();
+    if (value) body[field] = Number(value);
+  }
+  const tags = String(formData.get("tags") ?? "").trim();
+  if (tags) {
+    body.tags = tags
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+  }
+  return body;
+}
+
+/**
  * Only fields the admin actually typed something into are sent -- an empty
  * field means "leave this alone", not "clear it" (the API's update endpoint
  * has no way to clear a field yet either; see `CustomersService.update`).
@@ -12,19 +50,56 @@ import type { Customer } from "@snappos/contracts";
  * doesn't read as a bug.
  */
 export async function updateCustomerAction(id: string, formData: FormData): Promise<ActionResult<Customer>> {
-  const body: Record<string, string> = {};
-  for (const field of ["first_name", "last_name", "phone", "email", "notes"] as const) {
-    const value = String(formData.get(field) ?? "").trim();
-    if (value) body[field] = value;
-  }
-
   try {
     const data = await apiFetch<Customer>(`/api/v1/customers/${id}`, {
       method: "PATCH",
-      body: JSON.stringify(body),
+      body: JSON.stringify(readCustomerFields(formData)),
     });
     return { ok: true, data };
   } catch (e) {
     return { ok: false, error: e instanceof ApiError ? e.message : "Could not save changes." };
+  }
+}
+
+export async function createCustomerAction(formData: FormData): Promise<ActionResult<Customer>> {
+  const body = readCustomerFields(formData);
+  // The same rule the database and the contract both enforce, checked here so
+  // it reads as a sentence instead of a 400 from two layers down.
+  if (!body.phone && !body.email) {
+    return { ok: false, error: "A customer needs a phone number or an email." };
+  }
+
+  try {
+    const data = await apiFetch<Customer>(`/api/v1/customers`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not add that customer." };
+  }
+}
+
+/**
+ * Archive rather than delete. Sales, refunds and loyalty history all point at
+ * a customer; removing the row would either break that history or take it
+ * along. An archived customer stops appearing in search -- including at the
+ * register -- and can be restored.
+ */
+export async function setCustomerStatusAction(
+  id: string,
+  status: "active" | "archived",
+): Promise<ActionResult<Customer>> {
+  try {
+    const data = await apiFetch<Customer>(`/api/v1/customers/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    });
+    return { ok: true, data };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof ApiError ? e.message : "Could not change that customer's status.",
+    };
   }
 }

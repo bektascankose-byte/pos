@@ -730,7 +730,8 @@ export class CatalogService {
            category_id     = COALESCE($6, category_id),
            tax_category_id = COALESCE($7, tax_category_id),
            unit_type       = COALESCE($8, unit_type),
-           tags            = COALESCE($9, tags)
+           tags            = COALESCE($9, tags),
+           status          = COALESCE($10::entity_status, status)
          WHERE id = $1
          RETURNING id, name, short_name, description, brand_id, category_id, tax_category_id,
                    unit_type, has_variants, variant_axes, image_url, tags, status,
@@ -745,10 +746,44 @@ export class CatalogService {
           input.tax_category_id ?? null,
           input.unit_type ?? null,
           input.tags ?? null,
+          input.status ?? null,
         ],
       );
       const product = rows[0];
       if (!product) throw ApiException.notFound('product');
+
+      // Compliance was accepted by this endpoint's schema but never written:
+      // an age restriction set at creation could not be corrected afterwards,
+      // which for a shop selling vape and THC is the field that matters most.
+      // Upserted rather than inserted -- `product_compliance` is one row per
+      // product, and a product created without one still needs to gain it.
+      if (input.compliance) {
+        const c = input.compliance;
+        await tx.query(
+          `INSERT INTO product_compliance
+             (org_id, product_id, minimum_age, id_scan_required, regulated_class,
+              contains_nicotine, contains_cannabinoid, is_smokable, updated_by)
+           VALUES (current_setting('app.org_id')::uuid,$1,$2,$3,$4,$5,$6,$7,$8)
+           ON CONFLICT (product_id) DO UPDATE SET
+             minimum_age          = EXCLUDED.minimum_age,
+             id_scan_required     = EXCLUDED.id_scan_required,
+             regulated_class      = EXCLUDED.regulated_class,
+             contains_nicotine    = EXCLUDED.contains_nicotine,
+             contains_cannabinoid = EXCLUDED.contains_cannabinoid,
+             is_smokable          = EXCLUDED.is_smokable,
+             updated_by           = EXCLUDED.updated_by`,
+          [
+            id,
+            c.minimum_age ?? null,
+            c.id_scan_required ?? false,
+            c.regulated_class ?? null,
+            c.contains_nicotine ?? false,
+            c.contains_cannabinoid ?? false,
+            c.is_smokable ?? false,
+            actorUserId,
+          ],
+        );
+      }
 
       await this.audit.record(tx, {
         action: 'product.update',
@@ -808,6 +843,7 @@ export class CatalogService {
       const { rows } = await tx.query(
         `UPDATE product_variants SET
            variant_name     = COALESCE($2, variant_name),
+           plu              = COALESCE($13, plu),
            cost             = CASE
                                 WHEN COALESCE($9, case_cost) IS NOT NULL
                                   THEN (COALESCE($9, case_cost) - COALESCE($10, case_discount))
@@ -841,6 +877,7 @@ export class CatalogService {
           input.case_discount ?? null,
           input.case_rebate ?? null,
           input.default_margin ?? null,
+          input.plu ?? null,
         ],
       );
       const variant = rows[0];

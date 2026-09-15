@@ -48,6 +48,7 @@ export const createCustomerSchema = z
     birth_day: z.number().int().min(1).max(31).optional(),
     home_store_id: uuid.optional(),
     notes: z.string().max(2000).optional(),
+    tags: z.array(z.string().max(64)).optional(),
   })
   .refine(contactable, { message: 'a customer needs a phone or an email', path: ['phone'] });
 
@@ -68,6 +69,14 @@ export const updateCustomerSchema = z.object({
   birth_day: z.number().int().min(1).max(31).optional(),
   home_store_id: uuid.optional(),
   notes: z.string().max(2000).optional(),
+  tags: z.array(z.string().max(64)).optional(),
+  /**
+   * How a customer is removed. This app archives rather than deletes: sales,
+   * refunds and loyalty history point at a customer, and deleting the row
+   * would either break them or take them with it. An archived customer is
+   * hidden from search -- including the register's -- and restorable.
+   */
+  status: entityStatus.optional(),
 });
 
 /**
@@ -81,6 +90,11 @@ export const updateCustomerSchema = z.object({
 export const customerSearchSchema = pagination.extend({
   phone: phone.optional(),
   q: z.string().min(1).max(128).optional(),
+  /**
+   * Defaults to active only, which is what the register must keep seeing. The
+   * back office passes `archived` explicitly to review what it has removed.
+   */
+  status: entityStatus.optional(),
 });
 
 export type Customer = z.infer<typeof customerSchema>;

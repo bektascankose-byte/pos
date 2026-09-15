@@ -282,7 +282,16 @@ export const createProductSchema = z
 export const updateProductSchema = createProductSchema
   .innerType()
   .omit({ variants: true })
-  .partial();
+  .partial()
+  .extend({
+    /**
+     * Archiving is how a product is removed. Sale lines, purchase orders and
+     * invoice lines all reference a variant, so deleting the row would either
+     * break that history or drag it along; an archived product disappears from
+     * the catalog, search and the register instead, and can be restored.
+     */
+    status: entityStatus.optional(),
+  });
 
 /** Applied to every product_id in the list, in one transaction. At least one field besides the id list is required -- a bulk update that changes nothing is a mistake, not a no-op worth allowing. */
 export const bulkUpdateProductsSchema = z
@@ -308,6 +317,8 @@ export const bulkUpdateProductsSchema = z
  */
 export const updateVariantSchema = z.object({
   variant_name: z.string().max(128).optional(),
+  /** Short keypad code for items rung up without a barcode. */
+  plu: z.string().max(16).optional(),
   /** Ignored when this variant has a `case_cost`, which `cost` is derived from instead. */
   cost: costDecimal.optional(),
   case_quantity: z.number().int().min(1).optional(),

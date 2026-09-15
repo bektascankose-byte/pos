@@ -5,10 +5,14 @@ import type { Customer } from "@snappos/contracts";
 export default async function CustomersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<{ q?: string; status?: string }>;
 }) {
-  const { q } = await searchParams;
-  const qs = q ? `?q=${encodeURIComponent(q)}` : "";
+  const { q, status } = await searchParams;
+  const showingArchived = status === "archived";
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (showingArchived) params.set("status", "archived");
+  const qs = params.toString() ? `?${params}` : "";
 
   let customers: Customer[] = [];
   let error: string | null = null;
@@ -21,22 +25,44 @@ export default async function CustomersPage({
 
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="text-xl font-semibold">Customers</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold">Customers</h1>
+        <Link
+          href="/customers/new"
+          className="rounded-md bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-[var(--color-accent-contrast)]"
+        >
+          Add customer
+        </Link>
+      </div>
 
-      <form className="flex gap-2">
+      <form className="flex items-center gap-2">
         <input
           name="q"
           defaultValue={q ?? ""}
           placeholder="Search by name, email, or phone"
           className="w-72 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
         />
+        {showingArchived ? <input type="hidden" name="status" value="archived" /> : null}
         <button
           type="submit"
           className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-2 text-sm"
         >
           Search
         </button>
+        <Link
+          href={showingArchived ? `/customers${q ? `?q=${encodeURIComponent(q)}` : ""}` : "/customers?status=archived"}
+          className="text-sm text-[var(--color-accent)] underline"
+        >
+          {showingArchived ? "Show active" : "Show archived"}
+        </Link>
       </form>
+
+      {showingArchived ? (
+        <p className="text-sm text-[var(--color-text-muted)]">
+          Archived customers. They don&apos;t appear in search here or at the register, and their past
+          sales are untouched.
+        </p>
+      ) : null}
 
       {error ? <p className="text-sm text-[var(--color-error)]">{error}</p> : null}
 
@@ -64,7 +90,11 @@ export default async function CustomersPage({
             {customers.length === 0 && !error ? (
               <tr>
                 <td colSpan={3} className="px-4 py-6 text-center text-[var(--color-text-muted)]">
-                  {q ? `No match for "${q}".` : "No customers yet."}
+                  {q
+                    ? `No match for "${q}".`
+                    : showingArchived
+                      ? "Nothing archived."
+                      : "No customers yet."}
                 </td>
               </tr>
             ) : null}

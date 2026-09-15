@@ -3,11 +3,39 @@ import { getAccessToken } from "./session";
 
 const API_BASE_URL = process.env.API_BASE_URL ?? "http://localhost:3000";
 
+interface ValidationIssue {
+  path?: string;
+  message?: string;
+}
+
+/**
+ * A rejected field says which field and why.
+ *
+ * The API answers a failed `zodBody` with a generic `"the request did not
+ * validate"` plus an `issues` array naming each field. Dropping that array
+ * left every validation failure in the whole back office reading as that one
+ * unhelpful sentence -- a phone in the wrong format and a missing name were
+ * indistinguishable. The issues are folded into the message instead.
+ */
+function describe(body: { message?: string; user_message?: string; issues?: ValidationIssue[] } | null): string | undefined {
+  const issues = body?.issues;
+  if (Array.isArray(issues) && issues.length > 0) {
+    const detail = issues
+      .slice(0, 3)
+      .map((issue) => (issue.path ? `${issue.path}: ${issue.message}` : issue.message))
+      .filter(Boolean)
+      .join("; ");
+    if (detail) return detail;
+  }
+  return body?.user_message ?? body?.message;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
     public code: string | undefined,
     public userMessage: string | undefined,
+    public issues: ValidationIssue[] = [],
   ) {
     super(userMessage ?? `API request failed (HTTP ${status})`);
   }
@@ -42,7 +70,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
 
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    throw new ApiError(response.status, body?.code, body?.user_message ?? body?.message);
+    throw new ApiError(response.status, body?.code, describe(body), body?.issues ?? []);
   }
 
   if (response.status === 204) return undefined as T;

@@ -9,6 +9,8 @@ import {
   setPriceAction,
   addVariantAction,
   getProductAction,
+  setProductStatusAction,
+  updateComplianceAction,
 } from "../actions";
 import {
   CodesPanel,
@@ -67,20 +69,33 @@ export function ProductDetailClient({ productId, storeId, initialProduct, brands
 
   return (
     <div className="flex max-w-5xl flex-col gap-6">
-      <h1 className="text-xl font-semibold">{product.name}</h1>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold">{product.name}</h1>
+          {product.status === "archived" ? (
+            <p className="text-sm text-[var(--color-text-muted)]">
+              Archived — hidden from the catalog, search and the register.
+            </p>
+          ) : null}
+        </div>
+        <ArchiveButton product={product} onChanged={(updated) => setProduct(updated)} />
+      </div>
       <Tabs
         tabs={[
           {
             id: "details",
             label: "Details",
             content: (
-              <DetailsPanel
-                product={product}
-                brands={brands}
-                categories={categories}
-                taxCategories={taxCategories}
-                onSaved={(updated) => setProduct(updated)}
-              />
+              <div className="flex flex-col gap-4">
+                <DetailsPanel
+                  product={product}
+                  brands={brands}
+                  categories={categories}
+                  taxCategories={taxCategories}
+                  onSaved={(updated) => setProduct(updated)}
+                />
+                <CompliancePanel product={product} onSaved={(updated) => setProduct(updated)} />
+              </div>
             ),
           },
           {
@@ -141,6 +156,133 @@ export function ProductDetailClient({ productId, storeId, initialProduct, brands
         ]}
       />
     </div>
+  );
+}
+
+function ArchiveButton({
+  product,
+  onChanged,
+}: {
+  product: Product;
+  onChanged: (updated: Product) => void;
+}) {
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const archived = product.status === "archived";
+
+  return (
+    <div className="shrink-0 text-right">
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() => {
+          setError(null);
+          startTransition(async () => {
+            const outcome = await setProductStatusAction(product.id, archived ? "active" : "archived");
+            if (outcome.ok) onChanged(outcome.data);
+            else setError(outcome.error);
+          });
+        }}
+        title={
+          archived
+            ? "Put this item back in the catalog"
+            : "Hide from the catalog, search and the register. Past sales and receipts are kept."
+        }
+        className="rounded-md border border-[var(--color-border)] px-3 py-2 text-sm disabled:opacity-60"
+      >
+        {pending ? "Saving..." : archived ? "Restore" : "Archive"}
+      </button>
+      {error ? <p className="mt-1 text-xs text-[var(--color-error)]">{error}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Age restriction and what makes this item restricted. Previously only
+ * settable at creation from the AI suggestion, which meant a wrong guess was
+ * permanent -- and for vape, tobacco and THC this is the field the register
+ * actually enforces at the counter.
+ */
+function CompliancePanel({
+  product,
+  onSaved,
+}: {
+  product: Product;
+  onSaved: (updated: Product) => void;
+}) {
+  const [pending, startTransition] = useTransition();
+  const [message, setMessage] = useState<string | null>(null);
+  const compliance = product.compliance ?? null;
+
+  return (
+    <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+      <h2 className="mb-1 text-sm font-medium">Age restriction</h2>
+      <p className="mb-3 text-xs text-[var(--color-text-muted)]">
+        What the register enforces before this can be sold.
+      </p>
+      {message ? <p className="mb-2 text-xs text-[var(--color-text-muted)]">{message}</p> : null}
+      <form
+        className="flex flex-col gap-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setMessage(null);
+          const formData = new FormData(e.currentTarget);
+          startTransition(async () => {
+            const outcome = await updateComplianceAction(product.id, formData);
+            if (outcome.ok) {
+              onSaved(outcome.data);
+              setMessage("Saved.");
+            } else {
+              setMessage(outcome.error);
+            }
+          });
+        }}
+      >
+        <div className="grid grid-cols-2 gap-4">
+          <Field
+            label="Minimum age (blank = no restriction)"
+            name="minimum_age"
+            defaultValue={compliance?.minimum_age === null || compliance?.minimum_age === undefined ? "" : String(compliance.minimum_age)}
+          />
+          <Field
+            label="Regulated class"
+            name="regulated_class"
+            defaultValue={compliance?.regulated_class ?? ""}
+            placeholder="ends, tobacco, consumable_hemp, kratom"
+          />
+        </div>
+        <div className="flex flex-wrap gap-4 text-sm">
+          <Checkbox label="Scan an ID" name="id_scan_required" defaultChecked={compliance?.id_scan_required ?? false} />
+          <Checkbox label="Contains nicotine" name="contains_nicotine" defaultChecked={compliance?.contains_nicotine ?? false} />
+          <Checkbox label="Contains cannabinoid" name="contains_cannabinoid" defaultChecked={compliance?.contains_cannabinoid ?? false} />
+          <Checkbox label="Smokable" name="is_smokable" defaultChecked={compliance?.is_smokable ?? false} />
+        </div>
+        <button
+          type="submit"
+          disabled={pending}
+          className="self-start rounded-md border border-[var(--color-border)] px-4 py-2 text-sm disabled:opacity-60"
+        >
+          {pending ? "Saving..." : "Save age restriction"}
+        </button>
+      </form>
+    </section>
+  );
+}
+
+function Checkbox({
+  label,
+  name,
+  defaultChecked,
+}: {
+  label: string;
+  name: string;
+  defaultChecked: boolean;
+}) {
+  return (
+    <label className="flex items-center gap-2">
+      <input type="checkbox" name={name} defaultChecked={defaultChecked} />
+      {label}
+    </label>
   );
 }
 
@@ -319,7 +461,10 @@ function VariantRow({
           <p className="text-xs text-[var(--color-text-muted)]">Blank keeps the current value.</p>
           {fieldsMessage ? <p className="text-xs text-[var(--color-text-muted)]">{fieldsMessage}</p> : null}
           <div className="grid grid-cols-2 gap-3">
+            <Field label="PLU (keypad code)" name="plu" defaultValue={variant.plu ?? ""} />
             <Field label="Cost" name="cost" defaultValue={variant.cost} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
             <Select
               label="Status"
               name="status"
