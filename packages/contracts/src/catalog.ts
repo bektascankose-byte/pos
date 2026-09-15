@@ -96,6 +96,25 @@ export const createBarcodeSchema = barcodeSchema.omit({ id: true, variant_id: tr
   is_primary: true,
 });
 
+/** Mirrors the `price_kind` Postgres enum. Only `regular` is written today; the rest exist for scheduled and reference prices. */
+export const priceKind = z.enum(['regular', 'sale', 'map', 'msrp', 'cost_plus']);
+
+/**
+ * One past or present price for a variant. `variant_prices` is already
+ * effective-dated -- a price change closes the open row and opens a new one
+ * rather than editing in place -- so the history is simply that table read
+ * back in order, no extra bookkeeping.
+ */
+export const variantPriceHistoryRowSchema = z.object({
+  id: uuid,
+  store_id: uuid.nullable(),
+  kind: priceKind,
+  price_minor: moneyNonNegative,
+  effective_from: timestamp,
+  effective_to: timestamp.nullable(),
+  changed_by: z.string().nullable(),
+});
+
 // ------------------------------------------------------------------ variants
 
 export const variantSchema = z.object({
@@ -382,6 +401,8 @@ export const productSearchSchema = pagination.extend({
 /** Barcode lookup is the single hottest path in the system. */
 export const scanSchema = z.object({ barcode, store_id: uuid });
 
+export type PriceKind = z.infer<typeof priceKind>;
+export type VariantPriceHistoryRow = z.infer<typeof variantPriceHistoryRowSchema>;
 export type Barcode = z.infer<typeof barcodeSchema>;
 export type CreateBarcode = z.infer<typeof createBarcodeSchema>;
 export type Category = z.infer<typeof categorySchema>;

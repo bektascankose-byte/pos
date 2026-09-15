@@ -438,6 +438,28 @@ export class CatalogService {
   }
 
   /**
+   * What this variant has sold for over time, newest first. Free to read:
+   * `setVariantPrice` never updates a price row in place, it closes the open
+   * one and inserts another, so the table already is the history.
+   */
+  async priceHistory(orgId: string, variantId: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query(
+        `SELECT vp.id, vp.store_id, vp.kind, vp.price_minor::text,
+                vp.effective_from, vp.effective_to,
+                u.full_name AS changed_by
+         FROM variant_prices vp
+         LEFT JOIN users u ON u.id = vp.created_by
+         WHERE vp.variant_id = $1
+         ORDER BY vp.effective_from DESC, vp.id DESC
+         LIMIT 50`,
+        [variantId],
+      );
+      return rows;
+    });
+  }
+
+  /**
    * What item is this code? The back office's own lookup, deliberately not
    * `scan` above: `scan` serves the register, so it refuses an item with no
    * active price ("selling at a price nobody set is how a shop loses money

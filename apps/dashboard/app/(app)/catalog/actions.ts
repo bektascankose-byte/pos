@@ -4,7 +4,13 @@ import { apiFetch, ApiError } from "@/lib/api";
 import { parseMajorToMinor } from "@/lib/money";
 import { primaryStoreId } from "@/lib/store";
 import type { ActionResult } from "@/lib/action-result";
-import type { Product, Variant, AiComplianceSuggestion, ProductVariantSuggestion } from "@snappos/contracts";
+import type {
+  Product,
+  Variant,
+  AiComplianceSuggestion,
+  ProductVariantSuggestion,
+  LedgerEntry,
+} from "@snappos/contracts";
 
 interface CreatedVariant {
   id: string;
@@ -238,6 +244,66 @@ export async function suggestVariantsAction(
     return { ok: true, data };
   } catch (e) {
     return { ok: false, error: e instanceof ApiError ? e.message : "Could not get AI variant suggestions." };
+  }
+}
+
+/**
+ * `price_minor` is typed loosely here on purpose: the contract's own type
+ * brands it as `Money`, because that schema is shared with request validation,
+ * but this response is the plain digit string the API sends and was never
+ * parsed through it.
+ */
+export interface PriceHistoryRow {
+  id: string;
+  store_id: string | null;
+  kind: string;
+  price_minor: string;
+  effective_from: string;
+  effective_to: string | null;
+  changed_by: string | null;
+}
+
+/** Re-read one product after something about it changed -- a code added, a variant edited. */
+export async function getProductAction(
+  productId: string,
+  storeId: string | null,
+): Promise<ActionResult<Product>> {
+  try {
+    const data = await apiFetch<Product>(
+      `/api/v1/catalog/products/${productId}${storeId ? `?store_id=${storeId}` : ""}`,
+    );
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not reload that item." };
+  }
+}
+
+export async function getPriceHistoryAction(variantId: string): Promise<ActionResult<PriceHistoryRow[]>> {
+  try {
+    const data = await apiFetch<PriceHistoryRow[]>(
+      `/api/v1/catalog/variants/${variantId}/price-history`,
+    );
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not load price history." };
+  }
+}
+
+/**
+ * Every stock movement for one variant, newest first. Purchases and sales are
+ * both in here already -- they're the same ledger with different `reason`s --
+ * so the item page filters this one read rather than asking twice.
+ */
+export async function getVariantMovementsAction(
+  variantId: string,
+): Promise<ActionResult<LedgerEntry[]>> {
+  try {
+    const data = await apiFetch<LedgerEntry[]>(
+      `/api/v1/inventory/ledger?variant_id=${variantId}&limit=100`,
+    );
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not load item history." };
   }
 }
 

@@ -177,6 +177,12 @@ export class CatalogController {
     return this.catalog.suggestCompliance(body);
   }
 
+  @Get('variants/:variantId/price-history')
+  @RequirePermissions('product.view')
+  variantPriceHistory(@CurrentUser() user: AuthenticatedUser, @Param('variantId') variantId: string) {
+    return this.catalog.priceHistory(user.orgId, variantId);
+  }
+
   /**
    * An alternate or carton code for an item that already exists. A carton code
    * carries `units` above 1 -- see `CatalogService.addBarcodeToVariant`.

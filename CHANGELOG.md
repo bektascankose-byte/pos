@@ -2,6 +2,32 @@
 
 Notable changes. Newest first.
 
+## Item page: codes, carton mapping, and price/purchase/sales history
+
+Second of the four back-office passes. The item page had Details and Variants; the reference product this
+shop uses has a tab strip per item -- Carton Item Mapping, Item Codes, Price History, Purchase History,
+Sales History -- and almost all of it was data this app already stores and simply never showed.
+
+- **Item Codes** and **Carton Mapping** are separate tabs split by what a code *means*: a code whose
+  `units` is 1 scans as one of the item, a carton code carries more and makes the register ring up a
+  case. Both reuse the add/remove actions built for Item Lookup last pass, so carton mapping is now
+  reachable from the item itself rather than only by scanning it.
+- **Price History** is a new `GET catalog/variants/:variantId/price-history`. It needed no new storage:
+  `setVariantPrice` already closes the open row and inserts another instead of updating in place, so the
+  table *is* the history. Shows each price, the window it applied for, `current` on the open one, and who
+  changed it.
+- **Purchases** and **Sales** are one read of the existing `inventory/ledger?variant_id=`, filtered by
+  reason -- `receiving`/`vendor_return` against `sale`/`refund`/`online_order`. They were always the same
+  ledger with different reasons, so this asks once and splits it rather than adding two endpoints.
+- These five tabs belong to a *variant*, not a product, so they act on a selected one with a picker that
+  doesn't render at all for a single-variant item -- which is most of them, and which then reads exactly
+  like the flat item page it's modelled on.
+
+Verified live on Geek Bar Pulse X: a carton code added from the Carton Mapping tab appearing as
+`case · 10 units` and correctly absent from Item Codes; price history rendering the real effective-dated
+chain with `current` and per-change attribution; purchases showing the receiving movement with its unit
+cost; sales showing sale and refund lines. Typecheck clean, test carton code removed afterward.
+
 ## Navigation shell: grouped sidebar, launcher grid, Ctrl+K palette
 
 First of four passes prompted by screenshots of Modisoft, the back office this shop uses today, with the

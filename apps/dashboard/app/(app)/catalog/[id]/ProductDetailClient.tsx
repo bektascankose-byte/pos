@@ -8,7 +8,14 @@ import {
   updateVariantAction,
   setPriceAction,
   addVariantAction,
+  getProductAction,
 } from "../actions";
+import {
+  CodesPanel,
+  MovementsPanel,
+  PriceHistoryPanel,
+  VariantPicker,
+} from "./ItemDetailPanels";
 import type { Product, Variant, Brand, Category, TaxCategory } from "@snappos/contracts";
 
 interface Props {
@@ -23,9 +30,42 @@ interface Props {
 export function ProductDetailClient({ productId, storeId, initialProduct, brands, categories, taxCategories }: Props) {
   const [product, setProduct] = useState(initialProduct);
   const [variants, setVariants] = useState<Variant[]>(initialProduct.variants ?? []);
+  const [selectedVariantId, setSelectedVariantId] = useState(initialProduct.variants?.[0]?.id ?? "");
+
+  const selected = variants.find((variant) => variant.id === selectedVariantId) ?? variants[0];
+
+  const reloadProduct = async () => {
+    const outcome = await getProductAction(productId, storeId);
+    if (outcome.ok) {
+      setProduct(outcome.data);
+      setVariants(outcome.data.variants ?? []);
+    }
+  };
+
+  /**
+   * Codes, prices and history belong to one variant, not to the product, so
+   * these tabs work on a selected one. For the ordinary single-variant item
+   * the picker doesn't render and it reads exactly like a flat item page.
+   */
+  const variantTab = (id: string, label: string, render: (variant: Variant) => React.ReactNode) => ({
+    id,
+    label,
+    content: selected ? (
+      <div>
+        <VariantPicker
+          variants={variants}
+          selectedId={selected.id}
+          onSelect={setSelectedVariantId}
+        />
+        {render(selected)}
+      </div>
+    ) : (
+      <p className="text-sm text-[var(--color-text-muted)]">This product has no variants yet.</p>
+    ),
+  });
 
   return (
-    <div className="flex max-w-3xl flex-col gap-6">
+    <div className="flex max-w-5xl flex-col gap-6">
       <h1 className="text-xl font-semibold">{product.name}</h1>
       <Tabs
         tabs={[
@@ -58,6 +98,21 @@ export function ProductDetailClient({ productId, storeId, initialProduct, brands
               />
             ),
           },
+          variantTab("codes", "Item Codes", (variant) => (
+            <CodesPanel variant={variant} mode="unit" onChanged={reloadProduct} />
+          )),
+          variantTab("carton", "Carton Mapping", (variant) => (
+            <CodesPanel variant={variant} mode="carton" onChanged={reloadProduct} />
+          )),
+          variantTab("price-history", "Price History", (variant) => (
+            <PriceHistoryPanel variantId={variant.id} />
+          )),
+          variantTab("purchases", "Purchases", (variant) => (
+            <MovementsPanel variantId={variant.id} mode="purchases" />
+          )),
+          variantTab("sales", "Sales", (variant) => (
+            <MovementsPanel variantId={variant.id} mode="sales" />
+          )),
         ]}
       />
     </div>
