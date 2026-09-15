@@ -69,6 +69,9 @@ export const stockLevelRowSchema = z.object({
   product_name: z.string(),
   variant_name: z.string().nullable(),
   sku: z.string(),
+  /** So a stock count can be scoped to one shelf rather than the whole catalog. */
+  category_id: uuid.nullable(),
+  category_name: z.string().nullable(),
   on_hand: quantity,
   reserved: quantity,
   available: quantity,

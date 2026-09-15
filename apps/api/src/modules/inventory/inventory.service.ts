@@ -71,16 +71,22 @@ export class InventoryService {
   async stockList(orgId: string, storeId: string) {
     return this.db.withOrg(orgId, async (tx) => {
       const { rows } = await tx.query(
+        // Category comes back so a stock count can be scoped to one -- counting
+        // the vapes shelf is how this is actually done, rather than walking the
+        // whole catalog in one sitting.
         `SELECT pv.id AS variant_id,
                 p.name AS product_name,
                 pv.variant_name,
                 pv.sku,
+                p.category_id,
+                c.name AS category_name,
                 COALESCE(il.on_hand, 0)::text AS on_hand,
                 COALESCE(il.reserved, 0)::text AS reserved,
                 COALESCE(il.available, 0)::text AS available,
                 il.updated_at
          FROM product_variants pv
          JOIN products p ON p.id = pv.product_id
+         LEFT JOIN categories c ON c.id = p.category_id
          LEFT JOIN inventory_levels il ON il.variant_id = pv.id AND il.store_id = $1
          WHERE pv.status = 'active' AND p.status = 'active'
          ORDER BY p.name, pv.variant_name`,

@@ -2,6 +2,32 @@
 
 Notable changes. Newest first.
 
+## Counting stock without touching the mouse
+
+Stock on hand becomes a place you count from, not just a table you read.
+
+**Two ways in, both keyboard-only.** By category walks a shelf in order — pick "Disposable Vapes", the
+first item comes up with the quantity box already focused, type what you counted, press Enter, and the
+next item appears. By scan follows whatever you pick up: the scanner types the code and its own Enter,
+focus lands on the quantity, a second Enter files it and returns to waiting for the next scan. Esc skips
+an item without recording. There is no submit button and nothing to click between items.
+
+**Each Enter posts its own count immediately** rather than batching to the end, because a count
+interrupted by a customer at the till should not lose twenty minutes of work. Counting the number the
+system already has records nothing at all and says "no change" — a count that agrees is not an event.
+
+Counts are `count_adjustment` movements, not edits to a number: stock is a ledger, every level is the sum
+of its movements, and that is why "where did that unit go" always has an answer. A running list of what
+was counted this session sits under the panel, each line showing 60 → 61 (+1).
+
+The list itself gains a **Category column**, a filter box, and **Edit and Archive on every row** — the
+same editor the catalog list uses, fetched for just the row being edited rather than loading the whole
+catalog alongside the stock list.
+
+One bug caught in testing: after a scanned count, focus did not return to the scan box, so the next scan
+went nowhere. The scan input is disabled while a count posts, and `.focus()` on a disabled input silently
+does nothing — the effect now re-runs as the post settles.
+
 ## Editing and deleting price groups, and counting stock from the item list
 
 - **Price groups can be edited and deleted from their own list**, with buttons on each row. Edit covers
