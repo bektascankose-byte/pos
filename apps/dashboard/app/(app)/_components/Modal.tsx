@@ -61,9 +61,27 @@ export function Modal({
         e.preventDefault();
         onClose();
       }}
+      /*
+       * A modal is its own surface, so nothing that happens inside it may
+       * reach the tree it was rendered from.
+       *
+       * The portal moves the DOM node to `document.body`, but React's
+       * synthetic events still travel the *component* tree — so a dialog
+       * opened from inside a form sent its own submit straight up into that
+       * form's `onSubmit`. Creating a price group from the row editor
+       * therefore also saved and closed the row editor, which looked like the
+       * dialog randomly dismissing everything. Stopping here is what makes
+       * the portal a real boundary rather than only a visual one.
+       *
+       * Children handle their own events first, being deeper in the tree, so
+       * nothing inside the dialog loses anything by this.
+       */
+      onSubmit={(e) => e.stopPropagation()}
       onClick={(e) => {
+        e.stopPropagation();
         if (e.target === ref.current) onClose();
       }}
+      onKeyDown={(e) => e.stopPropagation()}
       className="w-[min(32rem,calc(100vw-2rem))] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-0 text-[var(--color-text)] backdrop:bg-black/40"
     >
       <div className="flex flex-col gap-4 p-5">

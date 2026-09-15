@@ -3,8 +3,8 @@
 import { useState, useTransition } from "react";
 import { quickEditRowAction } from "./actions";
 import { Modal } from "../_components/Modal";
+import { LookupSelect, type LookupOption } from "./LookupSelect";
 import type { SearchRow } from "./types";
-import type { Brand, Category } from "@snappos/contracts";
 
 /**
  * Editing one item without leaving the list.
@@ -22,13 +22,26 @@ export function RowEditor({
   row,
   categories,
   brands,
+  priceGroups,
+  onCategoryCreated,
+  onBrandCreated,
+  onPriceGroupCreated,
   storeLabel,
   onClose,
   onSaved,
 }: {
   row: SearchRow;
-  categories: Category[];
-  brands: Brand[];
+  categories: LookupOption[];
+  brands: LookupOption[];
+  priceGroups: LookupOption[];
+  /**
+   * The lists live in the list page rather than here, so a brand invented
+   * while editing one row is immediately offered on the next row and in the
+   * bulk bar — instead of existing only inside a dialog that's about to close.
+   */
+  onCategoryCreated: (option: LookupOption) => void;
+  onBrandCreated: (option: LookupOption) => void;
+  onPriceGroupCreated: (option: LookupOption) => void;
   storeLabel: string;
   onClose: () => void;
   onSaved: () => void;
@@ -67,6 +80,8 @@ export function RowEditor({
           <Field label="PLU" name="plu" defaultValue={row.plu ?? ""} />
           <Field label="Unit cost ($)" name="cost" defaultValue={row.cost ? trimDecimal(row.cost) : ""} />
         </div>
+        {/* The price as it stands, so saving can skip re-posting an untouched one. */}
+        <input type="hidden" name="current_price_minor" value={row.price_minor ?? ""} />
         <Field
           label={`Price ($) — ${storeLabel}`}
           name="price"
@@ -75,37 +90,43 @@ export function RowEditor({
         />
 
         <div className="grid grid-cols-2 gap-3">
-          <label className="flex flex-col gap-1 text-sm">
-            Category
-            <select
-              name="category_id"
-              defaultValue={row.category_id ?? ""}
-              className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm"
-            >
-              <option value="">Unchanged</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            Brand
-            <select
-              name="brand_id"
-              defaultValue={row.brand_id ?? ""}
-              className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm"
-            >
-              <option value="">Unchanged</option>
-              {brands.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <LookupSelect
+            kind="category"
+            label="Category"
+            name="category_id"
+            options={categories}
+            defaultValue={row.category_id ?? ""}
+            onCreated={onCategoryCreated}
+          />
+          <LookupSelect
+            kind="brand"
+            label="Brand"
+            name="brand_id"
+            options={brands}
+            defaultValue={row.brand_id ?? ""}
+            onCreated={onBrandCreated}
+          />
         </div>
+
+        {/*
+          The group the row is in now, so saving can tell "left alone" apart
+          from "deliberately set to none" — both arrive as a value, and only
+          the second should take the item out of its group.
+        */}
+        <input type="hidden" name="current_price_group_id" value={row.price_group_id ?? ""} />
+        <LookupSelect
+          kind="price_group"
+          label="Price group"
+          name="price_group_id"
+          options={priceGroups}
+          defaultValue={row.price_group_id ?? ""}
+          placeholder="— none —"
+          onCreated={onPriceGroupCreated}
+        />
+        <p className="-mt-2 text-xs text-[var(--color-text-muted)]">
+          Items in a group get repriced together. An item belongs to one group at a time, so choosing a
+          different one moves it.
+        </p>
 
         <div className="mt-1 flex gap-2">
           <button

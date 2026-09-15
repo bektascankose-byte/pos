@@ -50,7 +50,7 @@ export function CatalogListClient({
   );
   const [brands, setBrands] = useState<LookupOption[]>(initialBrands.map((b) => ({ id: b.id, name: b.name })));
   const [priceGroups, setPriceGroups] = useState<LookupOption[]>(
-    initialPriceCategories.map((c) => ({ id: c.id, name: c.name ?? "(unnamed)" })),
+    initialPriceCategories.map((c) => ({ id: c.id, name: priceGroupLabel(c) })),
   );
 
   const refreshRows = async (q: string) => {
@@ -211,7 +211,16 @@ export function CatalogListClient({
                   <td className="px-3 py-2 text-right tabular-nums">
                     <MarginCell priceMinor={row.price_minor} cost={row.cost} />
                   </td>
-                  <td className="px-3 py-2 text-[var(--color-text-muted)]">{row.price_group_name ?? "—"}</td>
+                  {/*
+                    Not `price_group_name ?? "—"`: most groups have no name,
+                    so that rendered an item that IS grouped identically to
+                    one that isn't — the exact thing this column was added to
+                    show. The id decides whether there's a group; the name
+                    only decides what to call it.
+                  */}
+                  <td className="px-3 py-2 text-[var(--color-text-muted)]">
+                    {row.price_group_id === null ? "—" : (row.price_group_name ?? "Grouped")}
+                  </td>
                   <td className="px-3 py-2 text-right tabular-nums">{Number(row.available)}</td>
                   <td className="px-3 py-2">
                     <div className="flex justify-end gap-1">
@@ -356,8 +365,12 @@ export function CatalogListClient({
       {editing ? (
         <RowEditor
           row={editing}
-          categories={initialCategories}
-          brands={initialBrands}
+          categories={categories}
+          brands={brands}
+          priceGroups={priceGroups}
+          onCategoryCreated={(option) => setCategories((prev) => [...prev, option])}
+          onBrandCreated={(option) => setBrands((prev) => [...prev, option])}
+          onPriceGroupCreated={(option) => setPriceGroups((prev) => [...prev, option])}
           storeLabel={storeId ? "this store" : "all stores"}
           onClose={() => setEditing(null)}
           onSaved={async () => {
@@ -387,4 +400,21 @@ function MarginCell({ priceMinor, cost }: { priceMinor: string | null; cost: str
 /** `numeric(14,6)` arrives as "9.850000"; four trailing zeros in a table column are noise. */
 function trimDecimal(value: string): string {
   return value.includes(".") ? value.replace(/0+$/, "").replace(/\.$/, "") : value;
+}
+
+/**
+ * A price group people can tell apart in a dropdown.
+ *
+ * Most groups have no name, and that isn't an oversight: "Price selected
+ * together" forms one implicitly, where the group *is* the fact that those
+ * items share a price. Four entries all reading "(unnamed)" are unusable, so
+ * an unnamed group is labelled by what actually distinguishes it — the price
+ * its members share and how many there are.
+ */
+function priceGroupLabel(category: PriceCategory): string {
+  if (category.name) return category.name;
+  const items = `${category.member_count} item${category.member_count === 1 ? "" : "s"}`;
+  return category.current_price_minor !== null
+    ? `${formatMinor(String(category.current_price_minor))} · ${items}`
+    : `Mixed prices · ${items}`;
 }

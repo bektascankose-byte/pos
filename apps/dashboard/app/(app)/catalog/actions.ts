@@ -623,7 +623,11 @@ export async function quickEditRowAction(
   const price = parseMajorToMinor(value("price"));
   if (value("price") && price === null) {
     problems.push(`"${value("price")}" isn't a price`);
-  } else if (price !== null) {
+  } else if (price !== null && price !== value("current_price_minor")) {
+    // Only when it actually changed. Re-posting the same figure would open a
+    // fresh effective-dated row saying nothing happened, and someone saving
+    // this form to fix a SKU would quietly add a price change to the history
+    // that exists to answer "when did this price move".
     try {
       await apiFetch(`/api/v1/catalog/variants/${variantId}/price`, {
         method: "POST",
@@ -631,6 +635,33 @@ export async function quickEditRowAction(
       });
     } catch (e) {
       problems.push(e instanceof ApiError ? e.message : "the price");
+    }
+  }
+
+  // Price group membership is not a column on the variant -- it has its own
+  // add/remove endpoints, because joining a group is a different act from
+  // repricing one. Comparing against the group the row was already in is what
+  // tells "left alone" apart from "deliberately set to none": both arrive as
+  // a value, and only the second should remove anything.
+  const chosenGroup = value("price_group_id");
+  const currentGroup = value("current_price_group_id");
+  if (chosenGroup !== currentGroup) {
+    try {
+      if (chosenGroup) {
+        // Adding also moves it out of whatever group it was in -- a variant
+        // carries at most one, so there is no separate "leave the old" step.
+        await apiFetch(`/api/v1/catalog/price-categories/${chosenGroup}/members`, {
+          method: "POST",
+          body: JSON.stringify({ variant_ids: [variantId] }),
+        });
+      } else {
+        await apiFetch(
+          `/api/v1/catalog/price-categories/${currentGroup}/members/${variantId}/remove`,
+          { method: "POST" },
+        );
+      }
+    } catch (e) {
+      problems.push(e instanceof ApiError ? e.message : "the price group");
     }
   }
 

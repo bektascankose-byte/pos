@@ -2,6 +2,33 @@
 
 Notable changes. Newest first.
 
+## Price group in the row editor, and creating lookups from it
+
+- **Price group is in the Edit popup**, preselected to the group the item is already in, with "— none —"
+  to take it out. It isn't a column on the variant — joining a group has its own endpoints, because
+  joining is a different act from repricing — so the form carries the group the row started in, which is
+  what tells "left it alone" apart from "deliberately set to none".
+- **Category, Brand and Price group can all be created from inside the editor**, not just from the bulk
+  bar. The lists live on the page rather than in the dialog, so a brand invented while editing one row is
+  offered on the next row and in the bulk bar immediately.
+- **An unnamed price group no longer reads as "no price group".** Most groups have no name and that isn't
+  an oversight — "Price selected together" forms one implicitly, where the group *is* the shared price —
+  but rendering `name ?? "—"` made a grouped item look ungrouped, which is the one thing the column was
+  added to show. Grouped-but-unnamed now says "Grouped", and the dropdown labels those groups by what
+  actually distinguishes them ("$6.55 · 2 items") instead of four identical "(unnamed)" entries.
+
+Two bugs, both real:
+
+- **Creating a price group from the row editor saved and closed the row editor.** A portal moves the
+  dialog's DOM node out of the form, but React's synthetic events still travel the *component* tree — so
+  the inner form's `submit` went straight up into the outer form's `onSubmit`. The modal now stops
+  submit, click and keydown at its own boundary, which is what makes the portal a real boundary rather
+  than only a visual one. This is the React-level twin of the nested-`<form>` bug fixed in the previous
+  commit; the DOM fix alone was not enough.
+- **Saving the editor re-posted an unchanged price**, opening an effective-dated history row that said
+  nothing happened — so fixing a SKU quietly logged a price change. It now skips the price call when the
+  figure hasn't moved, the same guard the spreadsheet importer already had.
+
 ## The catalog list, worked on rather than read
 
 Everything here is about not having to leave the row you're looking at.
