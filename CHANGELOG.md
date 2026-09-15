@@ -2,6 +2,51 @@
 
 Notable changes. Newest first.
 
+## Vendors, and AI reading the vendor off an invoice
+
+Second of four passes. Vendors existed as a table with ~25 columns, an API that returned nine of them,
+and no page anywhere — the only way to create one was an inline box buried in the purchase-order form.
+Worse, **an uploaded invoice could never be committed**: commit requires a vendor, the only chance to set
+one was at upload time, and the error told you to re-upload the file. All four invoices in the dev
+database were stuck there.
+
+- **A Vendors section** (`/vendors`), added to `lib/navigation.ts` so it appears in the sidebar, the
+  launcher and the Ctrl+K palette at once. The list carries the three numbers that say whether a vendor
+  is actually being bought from — items carrying their SKU, open POs, and when their last invoice landed.
+  The detail page edits the whole record (sales rep, address, terms, minimum order, free-shipping
+  threshold) and shows their items, invoice history and purchase orders.
+- **Archive, not delete**, matching customers and products. Purchase orders, receipts, invoice imports and
+  `vendor_variants` all point at a vendor; an archived one drops out of every picker and can be restored.
+- **AI reads the vendor off the invoice.** `POST invoice-imports/:id/suggest-vendor` extracts the seller
+  from the document's own letterhead and fuzzy-matches it against existing vendors, offering each with a
+  similarity score. It **writes nothing** — a separate `assign-vendor` call is the human accepting, the
+  same rule the line-matching tiers follow. Filing an invoice under the wrong vendor would quietly poison
+  `vendor_variants`, which is the second tier every later invoice from that vendor matches against, so
+  each invoice filed correctly makes the next one match better on its own.
+- The extraction prompt is explicit that an invoice names **two** businesses and the seller is the one
+  wanted — naming your own store as its own vendor is the failure mode worth spending instructions on. It
+  also reads a 6,000-character window rather than the 20,000 line extraction uses: who sent a document is
+  on page one, and twenty pages of line items only distract from that question.
+
+Three fixes that came out of using it:
+
+- **A model saying "nothing here" as a string.** On a Modisoft report with no vendor on it at all, every
+  extracted field came back as the literal text `/null`, which would have offered to create a vendor
+  named `/null`. Placeholder strings are now normalized to real nulls in `AiService.extractVendor`.
+- **`+1 346 218 4817` is not E.164.** `normalizePhone` passed anything starting with `+` through
+  untouched, so a number read off a letterhead — exactly how one is printed — failed validation. It now
+  strips spacing from international numbers too, without re-guessing the country code. Moved to
+  `lib/phone.ts` and shared by customers, vendors and vendor sales reps.
+- The purchase-order form **fabricated a Vendor object** after creating one, inventing `lead_time_days: 0`
+  when the server defaults to 7. It now uses the row the API returns.
+
+Verified live against the real dev data: a vendor created through the form with all 19 fields, both phones
+normalized and `$1,250.00` stored as `125000` minor units; an edit confirming blanked fields keep their
+values (`COALESCE` per column) while changed ones save; `INV_2026_09_0010.pdf` correctly read as "Moon
+Mist Distribution" at 78% confidence with full address, phone and COD terms, created and filed in one
+click; `PurchaseDetails (1).pdf` correctly reporting that it can't tell; and a stale-page assignment of an
+archived vendor refused by the API with a sentence saying why.
+
 ## Full editing for items and customers, and archive instead of delete
 
 First of four passes toward customer/vendor management, AI-mapped import/export and marketing. Asked what

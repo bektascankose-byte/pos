@@ -5,16 +5,21 @@ import {
   aiExtractedInvoiceSchema,
   aiMatchPredictionsSchema,
   aiComplianceSuggestionSchema,
+  aiVendorSuggestionSchema,
   type AiExtractedInvoice,
   type AiLineMatchPrediction,
   type AiMatchLineInput,
   type AiComplianceSuggestion,
+  type AiVendorSuggestion,
 } from '@snappos/contracts';
 import { z } from 'zod';
 import { ApiException } from '../errors/api-exception.js';
 
 /** Exported so callers with the raw text in hand (see `InvoicingService.parseWithAi`) can tell ahead of time whether this same limit is about to silently drop the tail of a document. */
 export const MAX_DOCUMENT_CHARS = 20_000;
+
+/** How much of a document `extractVendor` reads. Letterhead, not line items -- see that method. */
+const VENDOR_HEADER_CHARS = 6_000;
 
 const EXTRACTION_INSTRUCTIONS = `You are extracting line items from a vendor invoice for a retail point-of-sale system. The text below was pulled from a PDF or an EDI/plain-text document and may have irregular spacing, broken lines, or raw EDI segment codes and delimiters (such as *, ~, or |) instead of natural prose -- in either case, find the actual billed line items it describes.
 
@@ -53,12 +58,43 @@ Return:
 
 Concrete cues: "THC", "delta-8", "delta-9", "delta-10", "THCP", "seltzer/soda/gummies... THC/MG" implies an infused drink or edible; "vape", "ENDS", "disposable", "e-liquid", "pod" implies a vape; "cigar", "cigarette", "pouch", "chew", "nicotine" implies tobacco; "kratom" is its own class. An ordinary grocery, snack, drink, or household item with none of these cues is not age-restricted -- set is_age_restricted to false and every other flag to false/null rather than guessing a restriction that isn't there.`;
 
+const VENDOR_INSTRUCTIONS = `You are identifying WHO SENT a vendor invoice to a retail store -- the supplier/distributor the store buys from and owes money to. The text below was pulled from a PDF, a CSV, or an EDI document.
+
+An invoice names at least two businesses: the seller (the vendor, usually on the letterhead at the very top, near "Remit To", "Sold By", or the logo) and the buyer (the store itself, usually under "Bill To", "Ship To", or "Sold To"). Return the SELLER. If you cannot tell which is which, return null for name rather than guessing -- naming the store as its own vendor is worse than saying you don't know.
+
+Return:
+- name: the seller's business name as printed, else null
+- phone / email / website: the seller's own contact details, else null
+- address_line1 / city / region / postal_code: the seller's street address, city, state or province, and ZIP/postal code, else null
+- account_number: the store's account number WITH this vendor, if the invoice prints one, else null
+- payment_terms: terms as printed, normalized to a short code where obvious ("Net 30" -> "NET30", "Due on receipt" -> "COD"), else null
+- confidence: how confident you are in the name specifically, from 0 to 1
+
+Use null for anything not actually present in the text rather than inferring it.`;
+
 const VARIANT_SUGGESTION_INSTRUCTIONS = `You are helping a retail store stock every real flavor/size/color variant of a specific product. Search the web to find the actual, real variants this specific product is sold in -- not generic guesses.
 
 Answer with ONLY a JSON array of short variant name strings (e.g. ["Blueberry", "Watermelon Ice", "Mango"]) and nothing else -- no prose, no markdown code fences, no explanation. Use the product's own naming (flavor, size, color -- whatever axis it actually varies on). If you can't find reliable information on real variants for this product, answer with an empty array [] rather than guessing generic flavors.`;
 
 /** Loosely -- and defensively -- validates the model's free-text answer to `suggestProductVariants` against the shape the caller actually needs. */
 const variantSuggestionListSchema = z.array(z.string());
+
+/**
+ * Ways a model says "this field isn't in the document" as a *string* instead
+ * of as JSON null. Told to use null for anything absent, models will
+ * sometimes write the word rather than the value -- observed in practice as
+ * "/null" across every field of a document that had no vendor on it at all.
+ * Left unchecked, that placeholder reaches the UI as a vendor named "/null",
+ * and a mis-filed vendor is exactly what this whole flow exists to prevent.
+ */
+const NOTHING_HERE = new Set(['null', '/null', 'n/a', 'na', 'none', 'unknown', 'not found', '-', '--', '?']);
+
+function nullIfPlaceholder(value: string | null): string | null {
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (!trimmed || NOTHING_HERE.has(trimmed.toLowerCase())) return null;
+  return trimmed;
+}
 
 /**
  * The only place this API talks to OpenAI. Every method here only ever
@@ -103,6 +139,48 @@ export class AiService {
       throw new Error('the model returned no parsed output');
     }
     return response.output_parsed;
+  }
+
+  /**
+   * Who sent this invoice, read off its letterhead. A suggestion only, same
+   * rule as everything else here -- `InvoicingService` fuzzy-matches this
+   * against the vendors that already exist and shows the result for a person
+   * to accept; nothing assigns a vendor or creates one on its own.
+   *
+   * Reads a much smaller window than `extractInvoiceLines` does, because the
+   * two are looking for different things: line items are spread over every
+   * page, but who sent the document is at the top of the first one. Feeding
+   * twenty pages of line items to this question costs more and reads worse.
+   */
+  async extractVendor(documentText: string): Promise<AiVendorSuggestion> {
+    const { client, model } = this.getClient();
+    const response = await client.responses.parse({
+      model,
+      instructions: VENDOR_INSTRUCTIONS,
+      input: documentText.slice(0, VENDOR_HEADER_CHARS),
+      text: { format: zodTextFormat(aiVendorSuggestionSchema, 'vendor_suggestion') },
+    });
+    if (!response.output_parsed) {
+      throw new Error('the model returned no parsed output');
+    }
+
+    // Every text field goes through the placeholder check, so "nothing here"
+    // arrives at the caller as a real null whichever way the model chose to
+    // express it. `confidence` is left exactly as given.
+    const parsed = response.output_parsed;
+    return {
+      ...parsed,
+      name: nullIfPlaceholder(parsed.name),
+      phone: nullIfPlaceholder(parsed.phone),
+      email: nullIfPlaceholder(parsed.email),
+      website: nullIfPlaceholder(parsed.website),
+      address_line1: nullIfPlaceholder(parsed.address_line1),
+      city: nullIfPlaceholder(parsed.city),
+      region: nullIfPlaceholder(parsed.region),
+      postal_code: nullIfPlaceholder(parsed.postal_code),
+      account_number: nullIfPlaceholder(parsed.account_number),
+      payment_terms: nullIfPlaceholder(parsed.payment_terms),
+    };
   }
 
   /** The matching cascade's last tier -- only ever called for lines the deterministic tiers already failed to place. */

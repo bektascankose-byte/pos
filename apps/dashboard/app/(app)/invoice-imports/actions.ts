@@ -4,7 +4,9 @@ import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/api";
 import { parseMajorToMinor } from "@/lib/money";
+import { normalizePhone } from "@/lib/phone";
 import type { ActionResult } from "@/lib/action-result";
+import type { VendorSuggestion } from "@snappos/contracts";
 
 interface CreatedInvoiceImport {
   id: string;
@@ -54,6 +56,75 @@ export async function matchInvoiceAction(id: string): Promise<ActionResult> {
   } catch (e) {
     return { ok: false, error: e instanceof ApiError ? e.message : "Could not match those lines." };
   }
+}
+
+/** Reads the vendor off the document and returns the shortlist. Writes nothing -- see `assignVendorAction`. */
+export async function suggestVendorAction(id: string): Promise<ActionResult<VendorSuggestion>> {
+  try {
+    const data = await apiFetch<VendorSuggestion>(`/api/v1/invoice-imports/${id}/suggest-vendor`, {
+      method: "POST",
+    });
+    return { ok: true, data };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof ApiError ? e.message : "Could not read a vendor off this invoice.",
+    };
+  }
+}
+
+/** The human half: file this invoice under a vendor that already exists. */
+export async function assignVendorAction(id: string, vendorId: string): Promise<ActionResult> {
+  try {
+    await apiFetch(`/api/v1/invoice-imports/${id}/assign-vendor`, {
+      method: "POST",
+      body: JSON.stringify({ vendor_id: vendorId }),
+    });
+    return { ok: true, data: undefined };
+  } catch (e) {
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not file this invoice." };
+  }
+}
+
+/**
+ * Create the vendor the document describes, then file the invoice under it --
+ * the "none of these are them" path. Still two separate API calls on purpose:
+ * the vendor is a real record that outlives this invoice, created through the
+ * same endpoint the vendor form uses, not a side effect of an import.
+ *
+ * `code` isn't something an invoice prints, so one is derived from the name
+ * and offered for editing on the vendor's own page afterwards.
+ */
+export async function createVendorForInvoiceAction(
+  id: string,
+  vendor: { name: string; code: string; phone?: string; email?: string; website?: string; address_line1?: string; city?: string; region?: string; postal_code?: string; payment_terms?: string },
+): Promise<ActionResult<{ id: string }>> {
+  const body: Record<string, unknown> = { code: vendor.code, name: vendor.name };
+  for (const field of ["website", "address_line1", "city", "region", "postal_code", "payment_terms"] as const) {
+    const value = vendor[field]?.trim();
+    if (value) body[field] = value;
+  }
+  // Phone and email go through the same normalization and the same validation
+  // every other form uses: a number the model read off a letterhead as
+  // "(800) 555-0100" is no more E.164 than one a person types.
+  const phone = vendor.phone?.trim();
+  if (phone) body.phone = normalizePhone(phone);
+  const email = vendor.email?.trim();
+  if (email) body.email = email;
+
+  let created: { id: string };
+  try {
+    created = await apiFetch<{ id: string }>(`/api/v1/purchasing/vendors`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not create that vendor." };
+  }
+
+  const assigned = await assignVendorAction(id, created.id);
+  if (!assigned.ok) return assigned;
+  return { ok: true, data: created };
 }
 
 export async function resolveLineAction(id: string, lineId: string, formData: FormData): Promise<ActionResult> {

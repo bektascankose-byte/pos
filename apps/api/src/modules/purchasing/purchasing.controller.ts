@@ -1,5 +1,10 @@
-import { Body, Controller, Get, Headers, Param, Post, Query } from '@nestjs/common';
-import { createVendorSchema, createPurchaseOrderSchema, receivePurchaseOrderSchema } from '@snappos/contracts';
+import { Body, Controller, Get, Headers, Param, Patch, Post, Query } from '@nestjs/common';
+import {
+  createVendorSchema,
+  updateVendorSchema,
+  createPurchaseOrderSchema,
+  receivePurchaseOrderSchema,
+} from '@snappos/contracts';
 import { PurchasingService } from './purchasing.service.js';
 import { zodBody } from '../../platform/validation/zod.pipe.js';
 import { CurrentUser } from '../../platform/auth/current-user.decorator.js';
@@ -17,8 +22,18 @@ export class PurchasingController {
 
   @Get('vendors')
   @RequirePermissions('purchasing.view')
-  listVendors(@CurrentUser() user: AuthenticatedUser) {
-    return this.purchasing.listVendors(user.orgId);
+  listVendors(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('q') q?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.purchasing.listVendors(user.orgId, { q, status });
+  }
+
+  @Get('vendors/:id')
+  @RequirePermissions('purchasing.view')
+  getVendor(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.purchasing.getVendor(user.orgId, id);
   }
 
   @Post('vendors')
@@ -28,6 +43,17 @@ export class PurchasingController {
     @Body(zodBody(createVendorSchema)) body: ReturnType<typeof createVendorSchema.parse>,
   ) {
     return this.purchasing.createVendor(user.orgId, user.userId, body);
+  }
+
+  /** Archiving a vendor is a `status` change through here -- there is no delete. */
+  @Patch('vendors/:id')
+  @RequirePermissions('vendor.manage')
+  updateVendor(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(zodBody(updateVendorSchema)) body: ReturnType<typeof updateVendorSchema.parse>,
+  ) {
+    return this.purchasing.updateVendor(user.orgId, user.userId, id, body);
   }
 
   @Get('purchase-orders')

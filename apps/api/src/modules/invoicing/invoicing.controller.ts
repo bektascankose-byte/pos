@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Headers, Param, Post, Query, Req } from '@nestjs/common';
 import {
   createInvoiceImportSchema,
+  assignInvoiceVendorSchema,
   resolveInvoiceLineSchema,
   splitInvoiceLineSchema,
   createProductForLineSchema,
@@ -113,6 +114,28 @@ export class InvoicingController {
   @RequirePermissions('purchasing.create')
   match(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.invoicing.match(user.orgId, id);
+  }
+
+  /**
+   * Read the vendor off the document and offer the ones it resembles. A POST
+   * despite reading nothing but the file, because it costs a model call --
+   * this is something a person asks for, not something a page fetch triggers.
+   * It writes nothing; `assign-vendor` is what does.
+   */
+  @Post(':id/suggest-vendor')
+  @RequirePermissions('purchasing.create')
+  suggestVendor(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.invoicing.suggestVendor(user.orgId, id);
+  }
+
+  @Post(':id/assign-vendor')
+  @RequirePermissions('purchasing.create')
+  assignVendor(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(zodBody(assignInvoiceVendorSchema)) body: ReturnType<typeof assignInvoiceVendorSchema.parse>,
+  ) {
+    return this.invoicing.assignVendor(user.orgId, user.userId, id, body.vendor_id);
   }
 
   @Post(':id/lines/:lineId/resolve')

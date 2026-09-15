@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/api";
-import type { InvoiceImport, Category } from "@snappos/contracts";
+import type { InvoiceImport, Category, Vendor } from "@snappos/contracts";
 import { InvoiceImportClient } from "./InvoiceImportClient";
 
 interface VariantOption {
@@ -41,6 +41,18 @@ export default async function InvoiceImportDetailPage({ params }: { params: Prom
   }
   const products = [...new Map(variants.map((v) => [v.product_id, v])).values()];
 
+  // Fetched separately from the two above: the vendor picker is useful on an
+  // invoice that hasn't been parsed yet, which is exactly when there are no
+  // lines and that block is skipped.
+  let vendors: Vendor[] = [];
+  if (editable) {
+    try {
+      vendors = await apiFetch<Vendor[]>(`/api/v1/purchasing/vendors`);
+    } catch {
+      // The AI suggestion path still works without the manual picker.
+    }
+  }
+
   return (
     <InvoiceImportClient
       importId={id}
@@ -48,6 +60,7 @@ export default async function InvoiceImportDetailPage({ params }: { params: Prom
       variants={variants}
       products={products}
       categories={categories}
+      vendors={vendors}
     />
   );
 }

@@ -1,12 +1,27 @@
 import { Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
-import type { CreateVendor, CreatePurchaseOrder, ReceivePurchaseOrder } from '@snappos/contracts';
+import type { CreateVendor, UpdateVendor, CreatePurchaseOrder, ReceivePurchaseOrder } from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
 import { AuditService } from '../../platform/audit/audit.service.js';
 import { InventoryRepository, type Movement } from '../inventory/inventory.repository.js';
 import { ApiException } from '../../platform/errors/api-exception.js';
 
-const VENDOR_COLUMNS = `id, code, name, contact_name, phone, email, payment_terms, lead_time_days::int, status`;
+const VENDOR_COLUMNS = `id, code, name, contact_name, sales_rep_name, sales_rep_phone, sales_rep_email,
+       phone, email, website, address_line1, address_line2, city, region, postal_code, country,
+       payment_terms, lead_time_days::int, minimum_order_minor::text,
+       free_shipping_threshold_minor::text, edi_enabled, notes, status, created_at`;
+
+/**
+ * The three numbers that say whether a vendor is actually being bought from.
+ * Each is a correlated subquery rather than a `LEFT JOIN ... GROUP BY`: this
+ * list is a handful of rows for a single store, and three small scalar
+ * lookups read far more plainly than a triple join whose grouping has to be
+ * gotten exactly right to avoid multiplying counts against each other.
+ */
+const VENDOR_STATS = `(SELECT count(*)::int FROM vendor_variants vv WHERE vv.vendor_id = v.id) AS item_count,
+       (SELECT max(ii.created_at) FROM invoice_imports ii WHERE ii.vendor_id = v.id) AS last_invoice_at,
+       (SELECT count(*)::int FROM purchase_orders po
+         WHERE po.vendor_id = v.id AND po.status IN ('submitted','confirmed','partial')) AS open_po_count`;
 
 const PO_LINE_COLUMNS = `pol.id, pol.variant_id, p.name AS product_name, pv.variant_name, pv.sku,
        pol.vendor_sku, pol.quantity_ordered::text, pol.quantity_received::text,
@@ -24,29 +39,110 @@ export class PurchasingService {
     private readonly inventoryRepository: InventoryRepository,
   ) {}
 
-  async listVendors(orgId: string) {
+  /**
+   * Defaults to active vendors, the same way the catalog and customer lists
+   * do -- an archived vendor is still a real row with real purchase history,
+   * it just isn't one to order from, so it takes an explicit
+   * `status=archived` to see it.
+   */
+  async listVendors(orgId: string, filter: { q?: string | undefined; status?: string | undefined } = {}) {
     return this.db.withOrg(orgId, async (tx) => {
       const { rows } = await tx.query(
-        `SELECT ${VENDOR_COLUMNS} FROM vendors WHERE status = 'active' ORDER BY name`,
+        `SELECT ${VENDOR_COLUMNS},
+                ${VENDOR_STATS}
+         FROM vendors v
+         WHERE status = COALESCE($1, 'active')::entity_status
+           AND ($2::text IS NULL OR v.name ILIKE '%' || $2 || '%' OR v.code ILIKE '%' || $2 || '%')
+         ORDER BY name`,
+        [filter.status ?? null, filter.q?.trim() || null],
       );
       return rows;
+    });
+  }
+
+  /**
+   * The vendor record plus what a person actually came to this page for: the
+   * items bought from them, the invoices they've sent, and what's on order.
+   * Each list is capped -- this is a summary page, not an export.
+   */
+  async getVendor(orgId: string, id: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query(
+        `SELECT ${VENDOR_COLUMNS}, ${VENDOR_STATS} FROM vendors v WHERE id = $1`,
+        [id],
+      );
+      const vendor = rows[0];
+      if (!vendor) throw ApiException.notFound('vendor');
+
+      const { rows: items } = await tx.query(
+        `SELECT vv.id, vv.variant_id, pv.product_id, p.name AS product_name, pv.variant_name, pv.sku,
+                vv.vendor_sku, vv.vendor_barcode, vv.case_quantity::int, vv.case_cost::text,
+                vv.unit_cost::text, vv.is_preferred, vv.last_ordered_at
+         FROM vendor_variants vv
+         JOIN product_variants pv ON pv.id = vv.variant_id
+         JOIN products p ON p.id = pv.product_id
+         WHERE vv.vendor_id = $1
+         ORDER BY p.name, pv.variant_name
+         LIMIT 500`,
+        [id],
+      );
+
+      const { rows: invoices } = await tx.query(
+        `SELECT ii.id, ii.source_filename, ii.vendor_invoice_no, ii.invoice_total_minor::text, ii.status,
+                (SELECT count(*)::int FROM invoice_import_lines l WHERE l.invoice_import_id = ii.id) AS line_count,
+                ii.created_at, ii.committed_at
+         FROM invoice_imports ii
+         WHERE ii.vendor_id = $1
+         ORDER BY ii.created_at DESC
+         LIMIT 50`,
+        [id],
+      );
+
+      const { rows: purchaseOrders } = await tx.query(
+        `SELECT id, reference, status, total_minor::text, created_at
+         FROM purchase_orders
+         WHERE vendor_id = $1
+         ORDER BY created_at DESC
+         LIMIT 50`,
+        [id],
+      );
+
+      return { ...vendor, items, invoices, purchase_orders: purchaseOrders };
     });
   }
 
   async createVendor(orgId: string, actorUserId: string, input: CreateVendor) {
     return this.db.withOrg(orgId, async (tx) => {
       const { rows } = await tx.query(
-        `INSERT INTO vendors (org_id, code, name, contact_name, phone, email, payment_terms, lead_time_days)
-         VALUES (current_setting('app.org_id')::uuid, $1,$2,$3,$4,$5,$6,$7)
+        `INSERT INTO vendors
+           (org_id, code, name, contact_name, sales_rep_name, sales_rep_phone, sales_rep_email,
+            phone, email, website, address_line1, address_line2, city, region, postal_code,
+            country, payment_terms, lead_time_days, minimum_order_minor,
+            free_shipping_threshold_minor, notes)
+         VALUES (current_setting('app.org_id')::uuid, $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
+                 COALESCE($15, 'US'), $16, COALESCE($17, 7), COALESCE($18, 0), $19, $20)
          RETURNING ${VENDOR_COLUMNS}`,
         [
           input.code,
           input.name,
           input.contact_name ?? null,
+          input.sales_rep_name ?? null,
+          input.sales_rep_phone ?? null,
+          input.sales_rep_email ?? null,
           input.phone ?? null,
           input.email ?? null,
+          input.website ?? null,
+          input.address_line1 ?? null,
+          input.address_line2 ?? null,
+          input.city ?? null,
+          input.region ?? null,
+          input.postal_code ?? null,
+          input.country ?? null,
           input.payment_terms ?? null,
-          input.lead_time_days ?? 7,
+          input.lead_time_days ?? null,
+          input.minimum_order_minor?.toString() ?? null,
+          input.free_shipping_threshold_minor?.toString() ?? null,
+          input.notes ?? null,
         ],
       );
       const vendor = rows[0]!;
@@ -57,6 +153,89 @@ export class PurchasingService {
         entityId: vendor.id,
         actorUserId,
         newValue: { code: input.code, name: input.name },
+      });
+
+      return vendor;
+    });
+  }
+
+  /**
+   * `COALESCE` per column: an omitted field keeps whatever the row already
+   * holds rather than clearing it -- the same rule `CustomersService.update`
+   * follows, and the reason the form says "leave blank to keep".
+   *
+   * Archiving is a `status` change through here rather than a delete, because
+   * purchase orders, receipts, invoice imports and `vendor_variants` all
+   * reference this row; removing it would either break that history or drag
+   * it along.
+   */
+  async updateVendor(orgId: string, actorUserId: string, id: string, input: UpdateVendor) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query(
+        `UPDATE vendors SET
+           code            = COALESCE($2, code),
+           name            = COALESCE($3, name),
+           contact_name    = COALESCE($4, contact_name),
+           sales_rep_name  = COALESCE($5, sales_rep_name),
+           sales_rep_phone = COALESCE($6, sales_rep_phone),
+           sales_rep_email = COALESCE($7, sales_rep_email),
+           phone           = COALESCE($8, phone),
+           email           = COALESCE($9, email),
+           website         = COALESCE($10, website),
+           address_line1   = COALESCE($11, address_line1),
+           address_line2   = COALESCE($12, address_line2),
+           city            = COALESCE($13, city),
+           region          = COALESCE($14, region),
+           postal_code     = COALESCE($15, postal_code),
+           country         = COALESCE($16, country),
+           payment_terms   = COALESCE($17, payment_terms),
+           lead_time_days  = COALESCE($18, lead_time_days),
+           minimum_order_minor = COALESCE($19::money_minor, minimum_order_minor),
+           free_shipping_threshold_minor = COALESCE($20::money_minor, free_shipping_threshold_minor),
+           notes           = COALESCE($21, notes),
+           status          = COALESCE($22::entity_status, status)
+         WHERE id = $1
+         RETURNING ${VENDOR_COLUMNS}`,
+        [
+          id,
+          input.code ?? null,
+          input.name ?? null,
+          input.contact_name ?? null,
+          input.sales_rep_name ?? null,
+          input.sales_rep_phone ?? null,
+          input.sales_rep_email ?? null,
+          input.phone ?? null,
+          input.email ?? null,
+          input.website ?? null,
+          input.address_line1 ?? null,
+          input.address_line2 ?? null,
+          input.city ?? null,
+          input.region ?? null,
+          input.postal_code ?? null,
+          input.country ?? null,
+          input.payment_terms ?? null,
+          input.lead_time_days ?? null,
+          input.minimum_order_minor?.toString() ?? null,
+          input.free_shipping_threshold_minor?.toString() ?? null,
+          input.notes ?? null,
+          input.status ?? null,
+        ],
+      );
+      const vendor = rows[0];
+      if (!vendor) throw ApiException.notFound('vendor');
+
+      await this.audit.record(tx, {
+        action: 'vendor.update',
+        entityType: 'vendor',
+        entityId: id,
+        actorUserId,
+        // Not `input` directly: `minimum_order_minor` parses to a branded
+        // bigint, and the audit writer's own `JSON.stringify` throws on one.
+        newValue: {
+          ...input,
+          minimum_order_minor: input.minimum_order_minor?.toString(),
+          free_shipping_threshold_minor: input.free_shipping_threshold_minor?.toString(),
+        },
       });
 
       return vendor;

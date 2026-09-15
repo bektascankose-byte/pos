@@ -12,7 +12,8 @@ import {
   addSecondaryBarcodeAction,
 } from "../actions";
 import { suggestVariantsAction } from "../../catalog/actions";
-import type { InvoiceImport, InvoiceImportLine, Category } from "@snappos/contracts";
+import { InvoiceVendorPanel } from "./InvoiceVendorPanel";
+import type { InvoiceImport, InvoiceImportLine, Category, Vendor } from "@snappos/contracts";
 import type { ActionResult } from "@/lib/action-result";
 
 interface VariantOption {
@@ -35,12 +36,14 @@ export function InvoiceImportClient({
   variants,
   products,
   categories,
+  vendors,
 }: {
   importId: string;
   initialImport: InvoiceImport;
   variants: VariantOption[];
   products: VariantOption[];
   categories: Category[];
+  vendors: Vendor[];
 }) {
   const [invoiceImport, setInvoiceImport] = useState(initialImport);
   const [message, setMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null);
@@ -66,7 +69,14 @@ export function InvoiceImportClient({
   const lines = invoiceImport.lines ?? [];
   const editable = invoiceImport.status !== "committed";
   const pendingCount = lines.filter((l) => l.status === "pending").length;
-  const canCommit = editable && lines.length > 0 && pendingCount === 0 && invoiceImport.status !== "uploaded";
+  // A vendor is required by commit itself -- checked here too so the button
+  // says why it's disabled instead of failing after the click.
+  const canCommit =
+    editable &&
+    lines.length > 0 &&
+    pendingCount === 0 &&
+    invoiceImport.status !== "uploaded" &&
+    Boolean(invoiceImport.vendor_id);
 
   return (
     <div className="flex max-w-5xl flex-col gap-6">
@@ -101,6 +111,14 @@ export function InvoiceImportClient({
         )
       ) : null}
 
+      <InvoiceVendorPanel
+        importId={importId}
+        invoiceImport={invoiceImport}
+        vendors={vendors}
+        editable={editable}
+        onChanged={refresh}
+      />
+
       <div className="flex flex-wrap items-center gap-2">
         {invoiceImport.status === "uploaded" || invoiceImport.status === "failed" ? (
           <button
@@ -128,7 +146,13 @@ export function InvoiceImportClient({
             disabled={!canCommit || pending}
             onClick={() => runPageAction(() => commitInvoiceAction(importId))}
             className="self-start rounded-md bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-[var(--color-accent-contrast)] disabled:cursor-not-allowed disabled:opacity-40"
-            title={canCommit ? undefined : `${pendingCount} line(s) still need review`}
+            title={
+              canCommit
+                ? undefined
+                : !invoiceImport.vendor_id
+                  ? "File this invoice under a vendor first"
+                  : `${pendingCount} line(s) still need review`
+            }
           >
             Commit — create purchase order &amp; receive stock
           </button>
@@ -138,7 +162,9 @@ export function InvoiceImportClient({
         <p className="text-xs text-[var(--color-text-muted)]">
           {pendingCount > 0
             ? `${pendingCount} line(s) still need to be resolved, ignored, or split before this can be committed.`
-            : null}
+            : !invoiceImport.vendor_id
+              ? "This invoice needs a vendor before it can be committed — use the panel above."
+              : null}
         </p>
       ) : null}
       {lines.length > 0 ? (

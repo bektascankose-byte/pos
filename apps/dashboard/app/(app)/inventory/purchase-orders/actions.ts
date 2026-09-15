@@ -3,8 +3,10 @@
 import { randomUUID } from "node:crypto";
 import { apiFetch, ApiError } from "@/lib/api";
 import type { ActionResult } from "@/lib/action-result";
+import { normalizePhone } from "@/lib/phone";
+import type { Vendor } from "@snappos/contracts";
 
-export async function createVendorAction(formData: FormData): Promise<ActionResult<{ id: string }>> {
+export async function createVendorAction(formData: FormData): Promise<ActionResult<Vendor>> {
   const code = String(formData.get("code") ?? "").trim();
   const name = String(formData.get("name") ?? "").trim();
   const phone = String(formData.get("phone") ?? "").trim();
@@ -15,12 +17,14 @@ export async function createVendorAction(formData: FormData): Promise<ActionResu
   }
 
   try {
-    const data = await apiFetch<{ id: string }>(`/api/v1/purchasing/vendors`, {
+    // The API returns the whole created row, not just its id -- the caller
+    // adds it straight to its own list rather than inventing a stand-in.
+    const data = await apiFetch<Vendor>(`/api/v1/purchasing/vendors`, {
       method: "POST",
       body: JSON.stringify({
         code,
         name,
-        ...(phone ? { phone } : {}),
+        ...(phone ? { phone: normalizePhone(phone) } : {}),
         ...(email ? { email } : {}),
       }),
     });

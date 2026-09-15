@@ -35,12 +35,7 @@ export function NewPurchaseOrderClient({
     startVendorTransition(async () => {
       const result = await createVendorAction(formData);
       if (result.ok) {
-        const code = String(formData.get("code") ?? "").trim();
-        const name = String(formData.get("name") ?? "").trim();
-        setVendors((prev) => [
-          ...prev,
-          { id: result.data.id, code, name, contact_name: null, phone: null, email: null, payment_terms: null, lead_time_days: 0, status: "active" },
-        ]);
+        setVendors((prev) => [...prev, result.data]);
         setVendorSaved(true);
       } else {
         setError(result.error);

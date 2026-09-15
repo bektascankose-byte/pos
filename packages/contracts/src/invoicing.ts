@@ -74,6 +74,18 @@ export const createInvoiceImportSchema = z.object({
   vendor_id: uuid.optional(),
 });
 
+/**
+ * File this invoice under a vendor. Separate from upload because which vendor
+ * sent a document usually isn't known until someone has looked at it -- and
+ * because this is the human half of `suggest-vendor`: the AI proposes, a
+ * person picks. Beyond tidiness, it's what makes the next invoice from the
+ * same vendor match better: commit writes `vendor_variants` keyed by this
+ * vendor, which is matching tier 2.
+ */
+export const assignInvoiceVendorSchema = z.object({
+  vendor_id: uuid,
+});
+
 /** Accept the AI's own suggestion, or point a line at a different existing variant entirely. */
 export const resolveInvoiceLineSchema = z.object({
   variant_id: uuid,
@@ -162,6 +174,7 @@ export type ResolveInvoiceLine = z.infer<typeof resolveInvoiceLineSchema>;
 export type SplitInvoiceLineItem = z.infer<typeof splitInvoiceLineItemSchema>;
 export type SplitInvoiceLine = z.infer<typeof splitInvoiceLineSchema>;
 export type CreateProductForLine = z.infer<typeof createProductForLineSchema>;
+export type AssignInvoiceVendor = z.infer<typeof assignInvoiceVendorSchema>;
 
 /**
  * AI Structured Outputs schemas -- a different shape than the rest of this
@@ -234,9 +247,51 @@ export const aiMatchPredictionsSchema = z.object({
   predictions: z.array(aiLineMatchPredictionSchema),
 });
 
+/**
+ * Who *sent* this invoice, read off its letterhead -- as distinct from every
+ * other AI schema here, which reads what was billed. Strict-mode rules apply
+ * the same way: every field present, `null` for anything the document doesn't
+ * actually show.
+ */
+export const aiVendorSuggestionSchema = z.object({
+  name: z.string().nullable(),
+  phone: z.string().nullable(),
+  email: z.string().nullable(),
+  website: z.string().nullable(),
+  address_line1: z.string().nullable(),
+  city: z.string().nullable(),
+  region: z.string().nullable(),
+  postal_code: z.string().nullable(),
+  account_number: z.string().nullable(),
+  payment_terms: z.string().nullable(),
+  confidence: z.number(),
+});
+
+/**
+ * The `suggest-vendor` response: what the model read off the document, and
+ * which existing vendors that name resembles. Nothing here has been written
+ * anywhere -- `match` is a ranked shortlist for a human to pick from, and an
+ * empty one means "none of your vendors look like this, so create it".
+ */
+export const vendorSuggestionSchema = z.object({
+  extracted: aiVendorSuggestionSchema.nullable(),
+  matches: z.array(
+    z.object({
+      vendor_id: uuid,
+      code: z.string(),
+      name: z.string(),
+      score: z.number(),
+    }),
+  ),
+  /** Already filed under a vendor -- shown so the UI can say so rather than silently re-asking. */
+  current_vendor_id: uuid.nullable(),
+});
+
 export type AiExtractedLine = z.infer<typeof aiExtractedLineSchema>;
 export type AiExtractedInvoice = z.infer<typeof aiExtractedInvoiceSchema>;
 export type AiMatchCandidate = z.infer<typeof aiMatchCandidateSchema>;
 export type AiMatchLineInput = z.infer<typeof aiMatchLineInputSchema>;
 export type AiLineMatchPrediction = z.infer<typeof aiLineMatchPredictionSchema>;
 export type AiMatchPredictions = z.infer<typeof aiMatchPredictionsSchema>;
+export type AiVendorSuggestion = z.infer<typeof aiVendorSuggestionSchema>;
+export type VendorSuggestion = z.infer<typeof vendorSuggestionSchema>;

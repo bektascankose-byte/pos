@@ -2,24 +2,8 @@
 
 import { apiFetch, ApiError } from "@/lib/api";
 import type { ActionResult } from "@/lib/action-result";
+import { normalizePhone } from "@/lib/phone";
 import type { Customer } from "@snappos/contracts";
-
-/**
- * The contract stores phones as E.164 ("+15125550123") so a lookup by phone
- * actually matches, but nobody types a US number that way. A plain 10-digit
- * number, or 11 starting with 1, is turned into E.164 here; anything else is
- * passed through untouched for the API to accept or reject on its own terms,
- * since guessing a country code for an unrecognizable number would be worse
- * than saying so.
- */
-function normalizePhone(input: string): string {
-  const trimmed = input.trim();
-  if (trimmed.startsWith("+")) return trimmed;
-  const digits = trimmed.replace(/\D/g, "");
-  if (digits.length === 10) return `+1${digits}`;
-  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
-  return trimmed;
-}
 
 /** Shared by create and update: the fields a person types, read off the form. */
 function readCustomerFields(formData: FormData): Record<string, unknown> {

@@ -14,6 +14,7 @@ import {
   type CreateProductForLine,
 } from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
+import { AuditService } from '../../platform/audit/audit.service.js';
 import { ObjectStorageService } from '../../platform/storage/object-storage.service.js';
 import { AiService, MAX_DOCUMENT_CHARS } from '../../platform/ai/ai.service.js';
 import { PurchasingService } from '../purchasing/purchasing.service.js';
@@ -169,6 +170,7 @@ export class InvoicingService {
     private readonly ai: AiService,
     private readonly purchasing: PurchasingService,
     private readonly catalog: CatalogService,
+    private readonly audit: AuditService,
   ) {}
 
   async list(orgId: string, storeId?: string) {
@@ -262,11 +264,17 @@ export class InvoicingService {
       }
 
       try {
-        const buffer = await this.storage.get(invoiceImport.source_object_key);
         const parsed =
           format === 'csv'
-            ? { lines: parseCsvLines(buffer), vendorInvoiceNo: null, invoiceTotalMinor: null, truncated: false }
-            : await this.parseWithAi(buffer, format);
+            ? {
+                lines: parseCsvLines(await this.storage.get(invoiceImport.source_object_key)),
+                vendorInvoiceNo: null,
+                invoiceTotalMinor: null,
+                truncated: false,
+              }
+            : await this.parseWithAi(
+                await this.readDocumentText(invoiceImport.source_object_key, format),
+              );
 
         for (const [index, line] of parsed.lines.entries()) {
           await tx.query(
@@ -308,23 +316,32 @@ export class InvoicingService {
     });
   }
 
-  /** Text-based PDF and EDI both reduce to "extract text, hand it to the model" -- not parallel pipelines. */
-  private async parseWithAi(
-    buffer: Buffer,
-    format: 'pdf' | 'edi',
-  ): Promise<{
-    lines: ParsedCsvLine[];
-    vendorInvoiceNo: string | null;
-    invoiceTotalMinor: string | null;
-    truncated: boolean;
-  }> {
+  /**
+   * A document's own text, whatever it arrived as. A PDF goes through
+   * `pdf-parse`; everything else is already text (an EDI document is, and so
+   * is a CSV -- whose letterhead rows are exactly what vendor extraction
+   * wants, even though line parsing reads it by column instead).
+   */
+  private async readDocumentText(objectKey: string, format: InvoiceSourceFormat): Promise<string> {
+    const buffer = await this.storage.get(objectKey);
     const text = format === 'pdf' ? await extractPdfText(buffer) : buffer.toString('utf-8');
     if (text.trim().length < 20) {
       throw new Error(
         'could not find any readable text in this file -- if this is a scanned/image pdf, that is not supported yet; only text-based pdfs are',
       );
     }
+    return text;
+  }
 
+  /** Text-based PDF and EDI both reduce to "extract text, hand it to the model" -- not parallel pipelines. */
+  private async parseWithAi(
+    text: string,
+  ): Promise<{
+    lines: ParsedCsvLine[];
+    vendorInvoiceNo: string | null;
+    invoiceTotalMinor: string | null;
+    truncated: boolean;
+  }> {
     const extracted = await this.ai.extractInvoiceLines(text);
     return {
       lines: extracted.lines.map((line) => ({
@@ -338,6 +355,123 @@ export class InvoicingService {
       invoiceTotalMinor: extracted.invoice_total !== null ? costToMinor(extracted.invoice_total.toFixed(2)).toString() : null,
       truncated: text.length > MAX_DOCUMENT_CHARS,
     };
+  }
+
+  /**
+   * Read who sent this invoice off the document itself, and offer the vendors
+   * that name resembles.
+   *
+   * Nothing here writes anything -- not the extraction, not the shortlist.
+   * The same rule the line-matching tiers follow: a suggestion, however
+   * confident, is not a human confirming it, and filing an invoice under the
+   * wrong vendor quietly poisons `vendor_variants`, which is what every later
+   * invoice from that vendor matches against. A person picks, through
+   * `assignVendor`.
+   *
+   * Deliberately not persisted either, for the same reason it isn't written:
+   * there is no fact here to store. Re-running it costs one model call and
+   * always reflects the document as it is now.
+   */
+  async suggestVendor(orgId: string, id: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query<{
+        source_object_key: string;
+        source_format: InvoiceSourceFormat;
+        vendor_id: string | null;
+      }>(`SELECT source_object_key, source_format, vendor_id FROM invoice_imports WHERE id = $1`, [id]);
+      const invoiceImport = rows[0];
+      if (!invoiceImport) throw ApiException.notFound('invoice import');
+
+      const format = invoiceImport.source_format;
+      if (format === 'png' || format === 'jpg') {
+        throw new ApiException(
+          'validation_failed',
+          `reading the vendor off a "${format}" invoice isn't built yet -- image extraction is a later slice; csv, pdf, and edi work today`,
+          { retryable: false },
+        );
+      }
+      if (!this.ai.isConfigured()) {
+        throw new ApiException(
+          'provider_unavailable',
+          'AI extraction is not configured on this server -- ask an admin to set OPENAI_API_KEY and OPENAI_MODEL, or pick the vendor from the list yourself',
+          { retryable: false },
+        );
+      }
+
+      const text = await this.readDocumentText(invoiceImport.source_object_key, format);
+      const extracted = await this.ai.extractVendor(text);
+
+      return {
+        extracted,
+        matches: extracted.name ? await this.findVendorMatches(tx, extracted.name) : [],
+        current_vendor_id: invoiceImport.vendor_id,
+      };
+    });
+  }
+
+  /**
+   * Existing vendors whose name resembles what was read off the document.
+   *
+   * Trigram similarity on the name, the same tool and the same 0.3 floor the
+   * line-matching tier uses -- below that a "closest available" vendor is
+   * noise, and offering one invites exactly the mis-filing this whole flow is
+   * built to avoid. An empty list is a real answer: it means create it.
+   *
+   * `code` is matched too because a vendor's code is often an abbreviation of
+   * their name ("MWG" for Midwest Goods), which similarity alone would miss.
+   */
+  private async findVendorMatches(tx: PoolClient, name: string) {
+    const { rows } = await tx.query<{ vendor_id: string; code: string; name: string; score: number }>(
+      `SELECT id AS vendor_id, code, name,
+              GREATEST(similarity(name, $1), similarity(code, $1))::float8 AS score
+       FROM vendors
+       WHERE status = 'active'
+         AND GREATEST(similarity(name, $1), similarity(code, $1)) > 0.3
+       ORDER BY score DESC
+       LIMIT 5`,
+      [name],
+    );
+    return rows;
+  }
+
+  /**
+   * File this invoice under a vendor -- the human half of `suggestVendor`,
+   * and the only thing that actually writes `vendor_id`.
+   *
+   * Refused once committed: commit writes `vendor_variants` keyed by this
+   * vendor, so moving the invoice afterwards would leave those SKU mappings
+   * pointing at a vendor the invoice no longer claims to be from.
+   */
+  async assignVendor(orgId: string, actorUserId: string, importId: string, vendorId: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      await this.assertImportEditable(tx, importId);
+
+      const { rows: vendorRows } = await tx.query<{ id: string; name: string; status: string }>(
+        `SELECT id, name, status FROM vendors WHERE id = $1`,
+        [vendorId],
+      );
+      const vendor = vendorRows[0];
+      if (!vendor) throw ApiException.notFound('vendor');
+      if (vendor.status !== 'active') {
+        throw new ApiException(
+          'validation_failed',
+          `${vendor.name} is archived -- restore that vendor before filing invoices under them`,
+          { retryable: false },
+        );
+      }
+
+      await tx.query(`UPDATE invoice_imports SET vendor_id = $2 WHERE id = $1`, [importId, vendorId]);
+
+      await this.audit.record(tx, {
+        action: 'invoicing.assign_vendor',
+        entityType: 'invoice_import',
+        entityId: importId,
+        actorUserId,
+        newValue: { vendor_id: vendorId, vendor_name: vendor.name },
+      });
+
+      return this.loadImport(tx, importId);
+    });
   }
 
   /**
@@ -987,7 +1121,7 @@ export class InvoicingService {
       if (!invoiceImport.vendor_id) {
         throw new ApiException(
           'validation_failed',
-          'this invoice has no vendor -- re-upload it with a vendor selected before committing',
+          'this invoice has no vendor -- file it under one before committing',
           { retryable: false },
         );
       }

@@ -126,6 +126,25 @@ export const NAV_ENTRIES: NavEntry[] = [
   },
 
   {
+    id: "vendors",
+    label: "Vendors",
+    href: "/vendors",
+    group: "Purchasing",
+    surfaces: ["work", "setup"],
+    icon: "🏭",
+    keywords: ["supplier", "distributor", "rep", "terms", "who we buy from"],
+  },
+  {
+    id: "vendor-new",
+    label: "Add a vendor",
+    href: "/vendors/new",
+    group: "Purchasing",
+    surfaces: ["setup"],
+    icon: "➕",
+    keywords: ["new supplier", "new distributor"],
+    isAction: true,
+  },
+  {
     id: "invoices",
     label: "Invoices",
     href: "/invoice-imports",
