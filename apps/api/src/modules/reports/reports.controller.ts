@@ -13,6 +13,17 @@ import type { AuthenticatedUser } from '../../platform/auth/auth.service.js';
 export class ReportsController {
   constructor(private readonly reports: ReportsService) {}
 
+  /**
+   * The dashboard's own read. Gated on `report.sales` like everything else
+   * here: it summarizes the state of the business across catalog, inventory
+   * and purchasing, which is the same audience the sales reports are for.
+   */
+  @Get('needs-attention')
+  @RequirePermissions('report.sales')
+  needsAttention(@CurrentUser() user: AuthenticatedUser, @Query('store_id') storeId?: string) {
+    return this.reports.needsAttention(user.orgId, storeId ?? null);
+  }
+
   @Get('sales/summary')
   @RequirePermissions('report.sales')
   salesSummary(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string>) {

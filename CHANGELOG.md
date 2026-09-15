@@ -2,6 +2,38 @@
 
 Notable changes. Newest first.
 
+## A dashboard worth opening
+
+Last of the four back-office passes. The dashboard showed three numbers about today and a list of recent
+sales -- true, but nothing anyone would act on. The reference product answers this with P&L, balance
+sheet and bank balance cards, which need a general ledger this app doesn't have. What it *can* answer,
+from data already on hand, is the more immediately useful question: **what is waiting on me right now.**
+
+`GET reports/needs-attention` returns six open loops in one read:
+
+- **Stock below zero** -- not a reordering problem but a counting one: something sold that the system
+  didn't know was there, so valuation and reordering downstream of it are already wrong. Added beyond the
+  four signals originally planned, because the dev data turned out to have one and nothing would have
+  surfaced it: the item had no reorder point, so "below reorder point" couldn't see it.
+- **Selling below cost** -- losing money on every one that goes out the door. Zero-cost items are
+  excluded: nobody having said what it costs is a different problem from selling under cost.
+- **No price set** -- the register refuses these outright, so they can't be sold at all.
+- **Below reorder point** -- by the shop's own reorder point.
+- **Not sold in 60 days**, with stock on hand -- money sitting on a shelf.
+- **Invoices parsed but never committed** -- stock the shop believes it received and didn't.
+
+Each group is one query returning both its first few rows and a `count(*) OVER ()` total, so "12 items,
+here are 5" costs one round trip per signal rather than two. The endpoint returns the numbers that make
+each item qualify and leaves the phrasing to whoever renders it, since what makes an item interesting
+differs per group. Groups with nothing in them don't render at all -- a dashboard of five headings all
+reading "0" teaches people to stop reading it -- and when everything is clear it says so plainly.
+
+Verified against the real dev database, where it immediately found things worth knowing: a variant with
+no price at all, five items with stock that has never sold, four invoices left uncommitted, and Watermelon
+Ice sitting at -2 on hand. Below-cost was proved with a throwaway item priced at $7.99 against a $10.00
+cost, which also confirmed it drops out again once the item is archived. Typecheck, unit tests and the
+Postgres schema suite including RLS all green; probe archived afterward.
+
 ## Case costing and margin
 
 Third back-office pass, and the one that answers "what am I actually making on this." A shop buys a case

@@ -8,6 +8,10 @@ import type {
   TopProductRow,
   ByCashierRow,
   ByPaymentMethodRow,
+  AttentionItem,
+  AttentionGroup,
+  NeedsAttention,
+  OpenInvoiceRow,
 } from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
 
@@ -181,6 +185,156 @@ export class ReportsService {
         payment_count: Number(row.payment_count),
         amount_minor: row.amount_minor,
       }));
+    });
+  }
+
+  /**
+   * Everything waiting on a person, in one read.
+   *
+   * Each group runs as a single query that returns both its first few rows and
+   * a `count(*) OVER ()` total, so a dashboard showing "12 items, here are 5"
+   * doesn't cost two round trips per signal. No rows means a total of zero,
+   * which is the answer either way.
+   *
+   * The price lookup repeated below is the same one the register and the
+   * catalog use: a store's own price wins over the org default, and a price
+   * that hasn't started or has already ended doesn't count.
+   */
+  async needsAttention(orgId: string, storeId: string | null): Promise<NeedsAttention> {
+    const CURRENT_PRICE = `
+      SELECT price_minor FROM variant_prices
+      WHERE variant_id = v.id
+        AND (store_id = $1 OR store_id IS NULL)
+        AND kind = 'regular'
+        AND effective_from <= now()
+        AND (effective_to IS NULL OR effective_to > now())
+      ORDER BY store_id NULLS LAST, effective_from DESC
+      LIMIT 1`;
+
+    const SELECT_ITEM = `
+      v.id AS variant_id, p.id AS product_id, p.name AS product_name,
+      v.variant_name, v.sku, count(*) OVER ()::int AS total`;
+
+    return this.db.withOrg(orgId, async (tx) => {
+      const group = (rows: (AttentionItem & { total: number })[]): AttentionGroup => ({
+        count: rows[0]?.total ?? 0,
+        items: rows.map(({ total: _total, ...item }) => item),
+      });
+
+      const [unpriced, belowCost, lowStock, negativeStock, deadStock, invoices] = await Promise.all([
+        // Can't be sold at all: the register refuses an item with no price.
+        tx.query<AttentionItem & { total: number }>(
+          `SELECT ${SELECT_ITEM},
+                  NULL::text AS price_minor, v.cost::text,
+                  NULL::text AS on_hand, NULL::text AS reorder_point,
+                  NULL::timestamptz AS last_sold_at
+           FROM product_variants v
+           JOIN products p ON p.id = v.product_id
+           LEFT JOIN LATERAL (${CURRENT_PRICE}) pr ON true
+           WHERE v.status = 'active' AND p.status = 'active' AND pr.price_minor IS NULL
+           ORDER BY p.name, v.sort_order
+           LIMIT 5`,
+          [storeId],
+        ),
+
+        // Losing money on every sale. Zero cost means nobody has said what it
+        // cost yet, which is a different problem from selling under cost.
+        tx.query<AttentionItem & { total: number }>(
+          `SELECT ${SELECT_ITEM},
+                  pr.price_minor::text, v.cost::text,
+                  NULL::text AS on_hand, NULL::text AS reorder_point,
+                  NULL::timestamptz AS last_sold_at
+           FROM product_variants v
+           JOIN products p ON p.id = v.product_id
+           JOIN LATERAL (${CURRENT_PRICE}) pr ON true
+           WHERE v.status = 'active' AND p.status = 'active'
+             AND v.cost > 0
+             AND pr.price_minor < v.cost * 100
+           ORDER BY (v.cost * 100 - pr.price_minor) DESC
+           LIMIT 5`,
+          [storeId],
+        ),
+
+        // About to run out, by the shop's own reorder point.
+        tx.query<AttentionItem & { total: number }>(
+          `SELECT ${SELECT_ITEM},
+                  NULL::text AS price_minor, NULL::text AS cost,
+                  il.available::text AS on_hand, v.reorder_point::text,
+                  NULL::timestamptz AS last_sold_at
+           FROM product_variants v
+           JOIN products p ON p.id = v.product_id
+           JOIN inventory_levels il ON il.variant_id = v.id AND il.store_id = $1
+           WHERE v.status = 'active' AND p.status = 'active'
+             AND v.reorder_point IS NOT NULL
+             AND il.available < v.reorder_point
+           ORDER BY (il.available - v.reorder_point)
+           LIMIT 5`,
+          [storeId],
+        ),
+
+        // Below zero, which no shelf ever is: a count is wrong somewhere, and
+        // everything derived from it -- valuation, reordering -- is wrong too.
+        tx.query<AttentionItem & { total: number }>(
+          `SELECT ${SELECT_ITEM},
+                  NULL::text AS price_minor, NULL::text AS cost,
+                  il.on_hand::text, v.reorder_point::text,
+                  NULL::timestamptz AS last_sold_at
+           FROM product_variants v
+           JOIN products p ON p.id = v.product_id
+           JOIN inventory_levels il ON il.variant_id = v.id AND il.store_id = $1
+           WHERE v.status = 'active' AND p.status = 'active'
+             AND il.on_hand < 0
+           ORDER BY il.on_hand
+           LIMIT 5`,
+          [storeId],
+        ),
+
+        // Money sitting on a shelf: stock on hand that hasn't sold in 60 days.
+        tx.query<AttentionItem & { total: number }>(
+          `SELECT ${SELECT_ITEM},
+                  NULL::text AS price_minor, NULL::text AS cost,
+                  il.on_hand::text,
+                  NULL::text AS reorder_point,
+                  (SELECT max(l.occurred_at) FROM inventory_ledger l
+                    WHERE l.variant_id = v.id AND l.reason = 'sale') AS last_sold_at
+           FROM product_variants v
+           JOIN products p ON p.id = v.product_id
+           JOIN inventory_levels il ON il.variant_id = v.id AND il.store_id = $1
+           WHERE v.status = 'active' AND p.status = 'active'
+             AND il.on_hand > 0
+             AND NOT EXISTS (
+               SELECT 1 FROM inventory_ledger l
+               WHERE l.variant_id = v.id AND l.reason = 'sale'
+                 AND l.occurred_at > now() - interval '60 days'
+             )
+           ORDER BY il.on_hand DESC
+           LIMIT 5`,
+          [storeId],
+        ),
+
+        // Parsed but never committed: stock the shop believes it has and doesn't.
+        tx.query<OpenInvoiceRow & { total: number }>(
+          `SELECT id, source_filename, status::text, created_at, count(*) OVER ()::int AS total
+           FROM invoice_imports
+           WHERE status IN ('parsed', 'reviewed')
+             AND ($1::uuid IS NULL OR store_id = $1)
+           ORDER BY created_at DESC
+           LIMIT 5`,
+          [storeId],
+        ),
+      ]);
+
+      return {
+        unpriced: group(unpriced.rows),
+        below_cost: group(belowCost.rows),
+        low_stock: group(lowStock.rows),
+        negative_stock: group(negativeStock.rows),
+        dead_stock: group(deadStock.rows),
+        open_invoices: {
+          count: invoices.rows[0]?.total ?? 0,
+          items: invoices.rows.map(({ total: _total, ...row }) => row),
+        },
+      };
     });
   }
 }

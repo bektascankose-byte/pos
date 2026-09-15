@@ -1,6 +1,8 @@
 import { apiFetch, ApiError } from "@/lib/api";
 import { formatMinor } from "@/lib/money";
-import type { SalesSummary } from "@snappos/contracts";
+import { primaryStoreId } from "@/lib/store";
+import { NeedsAttentionSection } from "./_components/NeedsAttention";
+import type { NeedsAttention, SalesSummary } from "@snappos/contracts";
 
 interface SaleRow {
   id: string;
@@ -31,12 +33,17 @@ export default async function DashboardPage() {
 
   let summary: SalesSummary | null = null;
   let recent: SaleRow[] = [];
+  let attention: NeedsAttention | null = null;
   let error: string | null = null;
 
   try {
-    [summary, recent] = await Promise.all([
+    const storeId = await primaryStoreId();
+    [summary, recent, attention] = await Promise.all([
       apiFetch<SalesSummary>(`/api/v1/reports/sales/summary?from=${from}&to=${to}`),
       apiFetch<{ data: SaleRow[] }>(`/api/v1/sales?limit=20`).then((r) => r.data),
+      apiFetch<NeedsAttention>(
+        `/api/v1/reports/needs-attention${storeId ? `?store_id=${storeId}` : ""}`,
+      ),
     ]);
   } catch (e) {
     error = e instanceof ApiError ? e.message : "Could not load today's numbers.";
@@ -55,6 +62,8 @@ export default async function DashboardPage() {
           <SummaryCard label="Average ticket" value={formatMinor(summary?.average_ticket_minor ?? "0")} />
         </div>
       )}
+
+      {attention ? <NeedsAttentionSection attention={attention} /> : null}
 
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
         <div className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-medium">
