@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import {
   createProductSchema,
   createVariantSchema,
@@ -15,6 +15,7 @@ import {
   suggestVariantsSchema,
   createBarcodeSchema,
   createPriceCategorySchema,
+  updatePriceCategorySchema,
   addPriceCategoryMembersSchema,
   scanPriceCategoryMemberSchema,
 } from '@snappos/contracts';
@@ -223,6 +224,28 @@ export class CatalogController {
     @Body(zodBody(createPriceCategorySchema)) body: ReturnType<typeof createPriceCategorySchema.parse>,
   ) {
     return this.catalog.createPriceCategory(user.orgId, user.userId, body.name);
+  }
+
+  @Patch('price-categories/:id')
+  @RequirePermissions('product.update')
+  renamePriceCategory(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(zodBody(updatePriceCategorySchema)) body: ReturnType<typeof updatePriceCategorySchema.parse>,
+  ) {
+    return this.catalog.renamePriceCategory(user.orgId, user.userId, id, body.name);
+  }
+
+  /**
+   * A real delete, unlike anything else in the catalog. A price group is a
+   * saved grouping rather than something that was ever sold, so nothing
+   * references it historically -- its members are simply released, prices and
+   * all, and the row goes.
+   */
+  @Delete('price-categories/:id')
+  @RequirePermissions('product.update')
+  deletePriceCategory(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.catalog.deletePriceCategory(user.orgId, user.userId, id);
   }
 
   @Get('price-categories/:id')

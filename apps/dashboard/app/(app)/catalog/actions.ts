@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { apiFetch, ApiError } from "@/lib/api";
 import { parseMajorToMinor } from "@/lib/money";
 import { primaryStoreId } from "@/lib/store";
@@ -698,4 +699,90 @@ function slugify(name: string): string {
     .slice(0, 64)
     .replace(/-+$/, "");
   return slug || `category-${Date.now()}`;
+}
+
+export async function renamePriceCategoryAction(id: string, name: string): Promise<ActionResult> {
+  if (!name.trim()) return { ok: false, error: "Give this group a name." };
+  try {
+    await apiFetch(`/api/v1/catalog/price-categories/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    return { ok: true, data: undefined };
+  } catch (e) {
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not rename that group." };
+  }
+}
+
+/**
+ * Dissolve a price group. Releases its members and destroys nothing else --
+ * the items, their prices and their price history all stay. This is a real
+ * delete, unlike anything else in the catalog, because a group is a saved
+ * grouping rather than something that was ever sold.
+ */
+export async function deletePriceCategoryAction(
+  id: string,
+): Promise<ActionResult<{ released: number }>> {
+  try {
+    const data = await apiFetch<{ released: number }>(`/api/v1/catalog/price-categories/${id}`, {
+      method: "DELETE",
+    });
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not delete that group." };
+  }
+}
+
+/**
+ * Correct what's on the shelf, by recording a count rather than editing a
+ * number.
+ *
+ * Stock is a ledger: every level is the sum of its movements, so there is no
+ * "quantity" column to set. Counting 11 where the system says 12 posts a
+ * movement of -1 with reason `count_adjustment`, which is why "where did that
+ * unit go" always has an answer. The caller supplies what they counted and
+ * this works out the difference.
+ *
+ * An Idempotency-Key is required by the endpoint for the obvious reason: a
+ * retried request without one would post the adjustment twice.
+ */
+export async function setCountedStockAction(
+  variantId: string,
+  currentOnHand: string,
+  countedText: string,
+  note: string,
+): Promise<ActionResult<{ delta: string }>> {
+  const counted = Number(countedText.trim());
+  if (!countedText.trim() || !Number.isFinite(counted)) {
+    return { ok: false, error: "Enter the number you counted." };
+  }
+
+  const storeId = await primaryStoreId();
+  if (!storeId) return { ok: false, error: "No store is selected, so stock can't be counted." };
+
+  // Three decimals, matching `quantity` -- weighed goods exist. Rounding here
+  // rather than sending a float keeps the arithmetic exact.
+  const delta = (Math.round((counted - Number(currentOnHand)) * 1000) / 1000).toString();
+  if (Number(delta) === 0) return { ok: true, data: { delta: "0" } };
+
+  try {
+    await apiFetch(`/api/v1/inventory/movements`, {
+      method: "POST",
+      headers: { "Idempotency-Key": randomUUID() },
+      body: JSON.stringify({
+        movements: [
+          {
+            store_id: storeId,
+            variant_id: variantId,
+            delta,
+            reason: "count_adjustment",
+            ...(note.trim() ? { note: note.trim() } : {}),
+          },
+        ],
+      }),
+    });
+    return { ok: true, data: { delta } };
+  } catch (e) {
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not record that count." };
+  }
 }

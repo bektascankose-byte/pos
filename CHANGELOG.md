@@ -2,6 +2,31 @@
 
 Notable changes. Newest first.
 
+## Editing and deleting price groups, and counting stock from the item list
+
+- **Price groups can be edited and deleted from their own list**, with buttons on each row. Edit covers
+  the name and the group price in one dialog but two calls underneath, because they're genuinely
+  different acts: renaming relabels a folder, repricing changes what every member costs at the counter.
+  The price field says how many items it will move before you save it.
+- **Deleting a group deletes only the group.** Its members are released and nothing else happens — no
+  archiving, no price changes, no history touched. That's why this is a real DELETE while a product can
+  only ever be archived: a group is a saved grouping, not something anyone sold. The confirmation says so
+  and names the number of items involved, and the result reports how many were released.
+- **A group can be renamed from its own page too**, inline next to the title — which is where it's most
+  wanted, since most groups arrive unnamed from "Price selected together".
+- **Stock is changeable from the item row editor**, as a count rather than an edit. Stock is a ledger:
+  every level is the sum of its movements, so there is no quantity to set. The editor asks what you
+  counted and posts the difference as a `count_adjustment` — which is why "where did that unit go" always
+  has an answer, and why a correction is a new movement rather than a silent overwrite.
+
+One bug caught while testing: recording a count left the dialog open with the pre-count figure still in
+it, so a second count would have computed its difference from the stale number and posted the change
+twice over. The open editor now follows the refreshed row.
+
+Verified against real data: deleting a group holding two live products released both and left them
+active, priced and untouched; and two counts in a row on one item (+1 then −1) produced exactly two
+ledger entries and returned the level to where it started.
+
 ## Price group in the row editor, and creating lookups from it
 
 - **Price group is in the Edit popup**, preselected to the group the item is already in, with "— none —"

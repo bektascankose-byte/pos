@@ -1030,6 +1030,67 @@ export class CatalogService {
     });
   }
 
+  async renamePriceCategory(orgId: string, actorUserId: string, id: string, name: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string; name: string }>(
+        `UPDATE price_groups SET name = $2 WHERE id = $1 RETURNING id, name`,
+        [id, name],
+      );
+      const group = rows[0];
+      if (!group) throw ApiException.notFound('price group');
+
+      await this.audit.record(tx, {
+        action: 'product.price_group_rename',
+        entityType: 'price_group',
+        entityId: id,
+        actorUserId,
+        newValue: { name },
+      });
+
+      return group;
+    });
+  }
+
+  /**
+   * Dissolve a price group.
+   *
+   * Releases its members and destroys nothing else -- the items, their prices
+   * and their price history are untouched. A group is a saved grouping, not
+   * something anyone sells, so deleting one is the cheap, reversible act of
+   * ungrouping rather than the expensive one of removing products. That
+   * distinction is the whole reason this is a real DELETE while a product can
+   * only ever be archived.
+   *
+   * Members are detached explicitly rather than by leaning on the column's
+   * `ON DELETE SET NULL`: doing it here is what makes the count available to
+   * report back, and it states the intent at the place someone reads it.
+   */
+  async deletePriceCategory(orgId: string, actorUserId: string, id: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows: existing } = await tx.query<{ id: string }>(
+        `SELECT id FROM price_groups WHERE id = $1`,
+        [id],
+      );
+      if (!existing[0]) throw ApiException.notFound('price group');
+
+      const { rowCount } = await tx.query(
+        `UPDATE product_variants SET price_group_id = NULL WHERE price_group_id = $1`,
+        [id],
+      );
+      await tx.query(`DELETE FROM price_groups WHERE id = $1`, [id]);
+
+      await this.audit.record(tx, {
+        action: 'product.price_group_delete',
+        entityType: 'price_group',
+        entityId: id,
+        actorUserId,
+        newValue: { released: rowCount ?? 0 },
+      });
+
+      return { deleted: true, released: rowCount ?? 0 };
+    });
+  }
+
   async listPriceCategories(orgId: string, storeId: string | null) {
     return this.db.withOrg(orgId, async (tx) => {
       // `mismatch_count` is the point of grouping prices in the first place:

@@ -63,8 +63,15 @@ export function CatalogListClient({
       setMessage({ kind: "error", text: json.error ?? "Could not load the catalog." });
       return;
     }
-    setRows(json.data);
+    const fresh: SearchRow[] = json.data;
+    setRows(fresh);
     setSelectedCount(0);
+    // Keep an open editor pointing at the refreshed row. Recording a stock
+    // count leaves the dialog open, and a second count computed against the
+    // pre-count figure would post the difference twice over.
+    setEditing((current) =>
+      current ? (fresh.find((row) => row.variant_id === current.variant_id) ?? current) : null,
+    );
   };
 
   const handleSearch = (e: React.FormEvent) => {
@@ -372,6 +379,7 @@ export function CatalogListClient({
           onBrandCreated={(option) => setBrands((prev) => [...prev, option])}
           onPriceGroupCreated={(option) => setPriceGroups((prev) => [...prev, option])}
           storeLabel={storeId ? "this store" : "all stores"}
+          onStockChanged={() => void refreshRows(query)}
           onClose={() => setEditing(null)}
           onSaved={async () => {
             setEditing(null);

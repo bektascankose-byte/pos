@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { quickEditRowAction } from "./actions";
+import { quickEditRowAction, setCountedStockAction } from "./actions";
 import { Modal } from "../_components/Modal";
 import { LookupSelect, type LookupOption } from "./LookupSelect";
 import type { SearchRow } from "./types";
@@ -29,6 +29,7 @@ export function RowEditor({
   storeLabel,
   onClose,
   onSaved,
+  onStockChanged,
 }: {
   row: SearchRow;
   categories: LookupOption[];
@@ -45,9 +46,39 @@ export function RowEditor({
   storeLabel: string;
   onClose: () => void;
   onSaved: () => void;
+  /** Recording a count changes the list's stock column while this dialog stays open. */
+  onStockChanged: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+
+  const [counted, setCounted] = useState("");
+  const [countNote, setCountNote] = useState("");
+  const [countMessage, setCountMessage] = useState<string | null>(null);
+  const [countPending, startCountTransition] = useTransition();
+
+  const recordCount = () => {
+    setCountMessage(null);
+    setError(null);
+    startCountTransition(async () => {
+      const result = await setCountedStockAction(row.variant_id, row.on_hand, counted, countNote);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      const delta = Number(result.data.delta);
+      setCountMessage(
+        delta === 0
+          ? "That matches what the system already had — nothing recorded."
+          : `Recorded: ${delta > 0 ? "+" : ""}${delta}. On hand is now ${Number(counted)}.`,
+      );
+      setCounted("");
+      setCountNote("");
+      // The list behind this dialog is now stale on the stock column, so it
+      // gets refreshed even though the dialog stays open for further edits.
+      onStockChanged();
+    });
+  };
 
   return (
     <Modal
@@ -127,6 +158,52 @@ export function RowEditor({
           Items in a group get repriced together. An item belongs to one group at a time, so choosing a
           different one moves it.
         </p>
+
+        {/*
+          Stock is a ledger, not a number you set: every level is the sum of
+          its movements. So this asks what was counted and posts the
+          difference as a `count_adjustment`, which is why "where did that
+          unit go" always has an answer. Saved separately from the rest of the
+          form for the same reason — it's a stock movement, not an edit.
+        */}
+        <div className="flex flex-col gap-2 border-t border-[var(--color-border)] pt-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="flex flex-col gap-1 text-sm">
+              Counted on hand
+              <input
+                value={counted}
+                onChange={(e) => setCounted(e.target.value)}
+                placeholder={row.on_hand}
+                className="w-32 rounded-md border border-[var(--color-border)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
+              />
+            </label>
+            <label className="flex flex-1 flex-col gap-1 text-sm">
+              Why (optional)
+              <input
+                value={countNote}
+                onChange={(e) => setCountNote(e.target.value)}
+                placeholder="Shelf count, Monday"
+                className="rounded-md border border-[var(--color-border)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
+              />
+            </label>
+            <button
+              type="button"
+              disabled={countPending || !counted.trim()}
+              onClick={recordCount}
+              className="rounded-md border border-[var(--color-border)] px-3 py-2 text-sm disabled:opacity-40"
+            >
+              {countPending ? "Recording..." : "Record count"}
+            </button>
+          </div>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            {countMessage ??
+              `System says ${Number(row.on_hand)} on hand${
+                Number(row.on_hand) === Number(row.available)
+                  ? ""
+                  : `, ${Number(row.available)} available`
+              }. Type what you actually counted — the difference is recorded as a stock count, not a silent edit.`}
+          </p>
+        </div>
 
         <div className="mt-1 flex gap-2">
           <button

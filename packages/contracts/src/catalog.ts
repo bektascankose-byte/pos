@@ -379,6 +379,30 @@ export const bulkPriceVariantsSchema = z
 export const createPriceCategorySchema = z.object({ name: z.string().min(1).max(128) });
 
 /**
+ * Rename a price group.
+ *
+ * Only the name: the group's *price* is changed by repricing its members
+ * (`bulkPriceVariantsSchema`), which is a different act with different
+ * consequences — one relabels a folder, the other changes what customers pay.
+ * Keeping them apart is why a group has no price column of its own.
+ */
+export const updatePriceCategorySchema = z.object({ name: z.string().min(1).max(128) });
+
+/**
+ * What dissolving a group did.
+ *
+ * Deleting a price group releases its members and destroys nothing else:
+ * the items, their prices and their history all stay exactly as they are.
+ * A group is a saved grouping, not a thing anyone sells. `released` is how
+ * many items came out of it, so the confirmation can say so plainly rather
+ * than leaving someone wondering what they just did to their catalog.
+ */
+export const deletePriceCategoryResultSchema = z.object({
+  deleted: z.boolean(),
+  released: z.number().int(),
+});
+
+/**
  * Stamps `price_group_id` on every given variant without touching price --
  * unlike `bulkPriceVariantsSchema`, forming/joining a category here is a
  * separate, deliberate act from repricing it later. A variant carries at most
@@ -462,6 +486,8 @@ export type SuggestCompliance = z.infer<typeof suggestComplianceSchema>;
 export type ProductVariantSuggestion = z.infer<typeof productVariantSuggestionSchema>;
 export type SuggestVariants = z.infer<typeof suggestVariantsSchema>;
 export type CreatePriceCategory = z.infer<typeof createPriceCategorySchema>;
+export type UpdatePriceCategory = z.infer<typeof updatePriceCategorySchema>;
+export type DeletePriceCategoryResult = z.infer<typeof deletePriceCategoryResultSchema>;
 export type AddPriceCategoryMembers = z.infer<typeof addPriceCategoryMembersSchema>;
 export type ScanPriceCategoryMember = z.infer<typeof scanPriceCategoryMemberSchema>;
 export type PriceCategory = z.infer<typeof priceCategorySchema>;

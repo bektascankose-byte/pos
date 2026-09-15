@@ -7,6 +7,7 @@ import {
   setPriceCategoryPriceAction,
   removePriceCategoryMemberAction,
   scanAddToPriceCategoryAction,
+  renamePriceCategoryAction,
 } from "../../actions";
 import type { PriceCategory, PriceCategoryMember } from "@snappos/contracts";
 
@@ -31,6 +32,28 @@ export function PriceCategoryClient({
   const [category, setCategory] = useState(initialCategory);
   const [message, setMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null);
   const [pricePending, startPriceTransition] = useTransition();
+
+  // Renaming is inline rather than a dialog: it's one field on the thing
+  // already being looked at, and most of these groups arrive unnamed (they're
+  // formed implicitly by "Price selected together"), so giving one a name is
+  // the first thing anyone does here.
+  const [renaming, setRenaming] = useState(false);
+  const [name, setName] = useState(initialCategory.name ?? "");
+  const [renamePending, startRenameTransition] = useTransition();
+
+  const rename = () => {
+    setMessage(null);
+    startRenameTransition(async () => {
+      const result = await renamePriceCategoryAction(categoryId, name);
+      if (result.ok) {
+        setCategory((prev) => ({ ...prev, name: name.trim() }));
+        setRenaming(false);
+        setMessage({ kind: "success", text: "Renamed." });
+      } else {
+        setMessage({ kind: "error", text: result.error });
+      }
+    });
+  };
 
   const [scanStatus, setScanStatus] = useState<string | null>(null);
   const [scanCount, setScanCount] = useState(0);
@@ -114,7 +137,50 @@ export function PriceCategoryClient({
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold">{category.name ?? "(unnamed)"}</h1>
+          {renaming ? (
+            <form
+              className="flex items-center gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                rename();
+              }}
+            >
+              <input
+                autoFocus
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-lg font-semibold outline-none focus:border-[var(--color-accent)]"
+              />
+              <button
+                type="submit"
+                disabled={renamePending}
+                className="rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-sm font-medium text-[var(--color-accent-contrast)] disabled:opacity-60"
+              >
+                {renamePending ? "Saving..." : "Save"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setName(category.name ?? "");
+                  setRenaming(false);
+                }}
+                className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-sm"
+              >
+                Cancel
+              </button>
+            </form>
+          ) : (
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-semibold">{category.name ?? "(unnamed)"}</h1>
+              <button
+                type="button"
+                onClick={() => setRenaming(true)}
+                className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs"
+              >
+                Rename
+              </button>
+            </div>
+          )}
           <p className="text-sm text-[var(--color-text-muted)]">
             {category.member_count} member{category.member_count === 1 ? "" : "s"} ·{" "}
             {category.current_price_minor !== null
@@ -125,7 +191,7 @@ export function PriceCategoryClient({
           </p>
         </div>
         <Link href="/catalog/price-categories" className="text-sm text-[var(--color-accent)]">
-          ← All categories
+          ← All price groups
         </Link>
       </div>
 
