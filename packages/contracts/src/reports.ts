@@ -42,6 +42,60 @@ export const salesTrendPointSchema = z.object({
   gross_minor: z.string(),
 });
 
+/**
+ * Money out against money in, one point per calendar day.
+ *
+ * The two halves are not measured the same way and the UI has to say so.
+ * Sales are recorded as they happen, so the daily figure is exact. Purchases
+ * are whatever vendor invoices are dated that day, which is lumpy -- a single
+ * delivery lands a month's stock on one date and nothing on the six around
+ * it -- and only counts invoices that have actually been uploaded. Comparing
+ * a single day of each is close to meaningless; comparing the totals over a
+ * month is the question worth asking.
+ */
+export const moneyFlowPointSchema = z.object({
+  date: z.string(), // YYYY-MM-DD
+  /** Gross sales completed that day. */
+  sales_minor: z.string(),
+  /** Cost of the goods in those sales, snapshotted at the time of sale. */
+  cogs_minor: z.string(),
+  /** Vendor invoices dated that day, whether or not they have been paid. */
+  purchases_minor: z.string(),
+});
+
+/** Totals for the whole range, so the page never re-adds the series itself and risks disagreeing with it. */
+export const moneyFlowSummarySchema = z.object({
+  sales_minor: z.string(),
+  cogs_minor: z.string(),
+  /** Sales less the cost of what was sold. Negative is possible and is not hidden. */
+  gross_profit_minor: z.string(),
+  /** Gross profit as a share of sales, 0-1, or null when nothing sold. */
+  margin_rate: z.number().nullable(),
+  purchases_minor: z.string(),
+  /** How many invoices the purchases figure is built from -- context for how lumpy it is. */
+  invoice_count: z.number().int().nonnegative(),
+  /** Invoices in this range that carry no date, and so appear in no daily point. */
+  undated_invoice_count: z.number().int().nonnegative(),
+});
+
+export const moneyFlowSchema = z.object({
+  points: z.array(moneyFlowPointSchema),
+  summary: moneyFlowSummarySchema,
+});
+
+/** What each vendor was invoiced, and what the paperwork says is still owed. */
+export const vendorSpendRowSchema = z.object({
+  vendor_id: uuid.nullable(),
+  /** Null vendor means invoices uploaded but never filed under one. */
+  vendor_name: z.string().nullable(),
+  invoice_count: z.number().int().nonnegative(),
+  invoiced_minor: z.string(),
+  paid_minor: z.string(),
+  /** Invoiced less paid, floored at zero -- an overpayment is a credit, not a negative debt. */
+  outstanding_minor: z.string(),
+  last_invoice_date: z.string().nullable(),
+});
+
 export const topProductRowSchema = z.object({
   product_id: uuid,
   product_name: z.string(),
@@ -134,3 +188,7 @@ export type TopProductsQuery = z.infer<typeof topProductsQuerySchema>;
 export type TopProductRow = z.infer<typeof topProductRowSchema>;
 export type ByCashierRow = z.infer<typeof byCashierRowSchema>;
 export type ByPaymentMethodRow = z.infer<typeof byPaymentMethodRowSchema>;
+export type MoneyFlowPoint = z.infer<typeof moneyFlowPointSchema>;
+export type MoneyFlowSummary = z.infer<typeof moneyFlowSummarySchema>;
+export type MoneyFlow = z.infer<typeof moneyFlowSchema>;
+export type VendorSpendRow = z.infer<typeof vendorSpendRowSchema>;

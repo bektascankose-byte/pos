@@ -6,7 +6,10 @@ import type {
   TopProductRow,
   ByCashierRow,
   ByPaymentMethodRow,
+  MoneyFlow,
+  VendorSpendRow,
 } from "@snappos/contracts";
+import { MoneyFlowSection, VendorSpendPanel } from "./MoneyFlow";
 
 interface DateRange {
   from: string; // ISO, inclusive
@@ -68,18 +71,23 @@ export default async function ReportsPage({
   let topProducts: TopProductRow[] = [];
   let byCashier: ByCashierRow[] = [];
   let byPaymentMethod: ByPaymentMethodRow[] = [];
+  let moneyFlow: MoneyFlow | null = null;
+  let vendorSpend: VendorSpendRow[] = [];
   let error: string | null = null;
 
   const qs = `from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`;
 
   try {
-    [summary, trend, topProducts, byCashier, byPaymentMethod] = await Promise.all([
-      apiFetch<SalesSummary>(`/api/v1/reports/sales/summary?${qs}`),
-      apiFetch<SalesTrendPoint[]>(`/api/v1/reports/sales/trend?${qs}`),
-      apiFetch<TopProductRow[]>(`/api/v1/reports/sales/top-products?${qs}&limit=10`),
-      apiFetch<ByCashierRow[]>(`/api/v1/reports/sales/by-cashier?${qs}`),
-      apiFetch<ByPaymentMethodRow[]>(`/api/v1/reports/sales/by-payment-method?${qs}`),
-    ]);
+    [summary, trend, topProducts, byCashier, byPaymentMethod, moneyFlow, vendorSpend] =
+      await Promise.all([
+        apiFetch<SalesSummary>(`/api/v1/reports/sales/summary?${qs}`),
+        apiFetch<SalesTrendPoint[]>(`/api/v1/reports/sales/trend?${qs}`),
+        apiFetch<TopProductRow[]>(`/api/v1/reports/sales/top-products?${qs}&limit=10`),
+        apiFetch<ByCashierRow[]>(`/api/v1/reports/sales/by-cashier?${qs}`),
+        apiFetch<ByPaymentMethodRow[]>(`/api/v1/reports/sales/by-payment-method?${qs}`),
+        apiFetch<MoneyFlow>(`/api/v1/reports/money-flow?${qs}`),
+        apiFetch<VendorSpendRow[]>(`/api/v1/reports/vendor-spend?${qs}`),
+      ]);
   } catch (e) {
     error = e instanceof ApiError ? e.message : "Could not load this report.";
   }
@@ -138,7 +146,11 @@ export default async function ReportsPage({
             <SummaryCard label="Average ticket" value={formatMinor(summary?.average_ticket_minor ?? "0")} />
           </div>
 
+          {moneyFlow ? <MoneyFlowSection flow={moneyFlow} /> : null}
+
           <TrendChart points={trend} />
+
+          <VendorSpendPanel rows={vendorSpend} />
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             <Panel title="Top products">

@@ -2,6 +2,113 @@
 
 Notable changes. Newest first.
 
+## One code, called UPC — and what an invoice says about money
+
+An item had a `sku` and a list of barcodes, and the new-item form asked for both. In this shop they are
+the same number, so it was asking for the same digits twice — and since the barcode box was the optional
+one, items were being created with a code that could not be scanned. **Every screen now says UPC, and
+there is one box.** Whatever is typed becomes the item's code and its scannable barcode together. Carton
+codes are unaffected: they still live on the item's own page, where they can carry the units-per-scan
+that makes a case of 12 ring up as twelve.
+
+The vendor's own item code survives this, relabelled **"vendor item code"** — it is not a UPC and never
+was. It is what makes the second invoice from a vendor match itself, and deleting the word "SKU" from
+the screen is not a reason to throw that away.
+
+**The invoice that started this.** A distributor's PDF with a Barcode column and no SKU column came back
+with, apparently, no barcodes. It turned out the AI had read all eleven of them perfectly — the
+extraction schema simply had one field, called `vendor_sku`, so a UPC had nowhere else to go and the
+screen labelled it SKU. The schema now has a `barcode` field of its own, the instructions describe what
+a UPC looks like and how PDF extraction tends to glue it onto the end of the previous column, and an
+exact barcode is the **first** matching tier: a UPC identifies a product to the whole world, while a
+vendor SKU only means something to that one vendor.
+
+**Invoices now give up what they say about money.** Invoice date, due date, total, amount paid, shipping,
+discount, payment method and terms (migration 0022). Dated by the date the *vendor* put on the document,
+not the day it was uploaded — an invoice typed in November for a September delivery is September's cost,
+and reporting it in November would misstate both months. Dates are shape-checked before they reach the
+database, because a model handed a free-text field will occasionally return "Net 30": a missing invoice
+date costs a row on a chart, a wrong one misstates a month.
+
+None of it is accounts payable, and the screen says so. These figures are the vendor's own statement as
+of the day they printed it, so anything paid since is invisible — the panel is headed "Per this invoice".
+
+**Reports grew a purchases-vs-sales chart** and, with it, gross profit. Cost of goods comes from the cost
+snapshotted on each sale line at the time of sale, not today's average cost, which would restate last
+month's margin every time a vendor changes a price. The two series share one scale so they can be read
+against each other, and the caveats are printed under the chart rather than left to be discovered:
+sales are counted the day they happen and are exact; purchases are lumpy by nature, since one delivery
+lands a month of stock on a single date; and any invoice with no date is **counted and named** as
+excluded rather than silently dropped. **Spend by vendor** sits below it with what each was invoiced,
+what their paperwork says was paid, and what is still outstanding.
+
+Verified against the real invoice: all 11 barcodes extracted, `vendor_sku` correctly empty, invoice no.
+56539, dated 2026-09-10, total $302.91, paid $275.00 — leaving $27.91, which is exactly what the document
+prints as outstanding. Chart bar heights confirmed to be on one shared scale. Test uploads removed
+afterwards; the user's own five invoices untouched.
+
+Found and fixed on the way: **parsing an invoice twice duplicated every one of its lines** — and with
+them the stock a commit would receive — because parse only ever inserted. It now replaces what the last
+read produced, and refuses outright once a human has resolved, split or ignored anything, since that is a
+decision the machine cannot make again. This was latent before and would have started biting
+immediately, because the reason to re-read an invoice is usually that extraction has since improved —
+which is exactly what just happened. A **Re-read document** button now offers it for invoices parsed
+before this change.
+
+## Known products: the old system's item file, without the old system's junk in your catalog
+
+The Modisoft export holds 8,649 items. At most a thousand are actually on a shelf. Loading all of it into
+`products` would be wrong in both directions — it would bury the real catalog in dead SKUs, and it would
+tell the register, the reports and every export that the shop sells things it hasn't carried in two years.
+
+So it lives in its own table (migration 0020) and is **not inventory**. Nothing in it is sellable,
+counted, priced or reported on. Its whole job is to answer one question at the moment somebody scans
+something unfamiliar — *what IS this?* — and to make turning that answer into a real catalog item one
+click instead of a retyping exercise. Deliberately not a `product_variants` row marked inactive: status
+describes something that *was* stocked, and every piece of code that reads the catalog would have needed
+a new exception to keep these out. A separate table needs no exceptions.
+
+**It shows up where codes are actually scanned.** Item Lookup, when nothing in the catalog matches, now
+fills the "add it" form in with the name, price and cost already on record. Receiving's *Identify* does
+the same over a box. And **Known Products** (under Catalog) is the browsable list, which says for each
+row whether it is already in your catalog rather than offering to add it twice.
+
+**The names were cleaned on the way in.** 5,791 of 8,649 needed it: UTF-8 read as Latin-1 so `®` arrived
+as `Â®`, 3,891 names in all lower case, 80 shouted, doubled spaces, stray whitespace. The rule for
+capitals is per *word*, not per name — a word somebody typed with capitals in it is theirs and survives,
+so "SS Banana Smash" and "FOGER SwitchPro" are untouched while the lowercase half of "Marlboro blk sp
+blend" gets tidied; a name that is *entirely* upper case is the one exception, since shouting carries no
+information. Units are regularised throughout ("6MG/100ML" → "6mg/100ml").
+
+**What it deliberately does not do is guess.** "bule kush cake hybird" stays misspelled and "happy" stays
+meaningless, because a rule that corrected those would also quietly rewrite real brand names. 58 rows
+that nothing can be made of — 19 empty, a few that are just a barcode pasted into the name column — are
+*flagged* rather than invented. The untouched original of every row is kept in `raw`, so cleaning is
+never a lossy edit. The pass is idempotent, and tested to be: re-importing must not keep changing names.
+
+**Scan codes are normalised too.** Legacy exports wrap Code 39 values in the `*` start/stop characters,
+which are part of the symbology rather than the number — a scanner never sends them, so left in, those
+rows would be unfindable. Three more turned out to be UPC-A codes with a stray keystroke in front
+(`+850058810676`, `\011000000006`); each collided with a row that already existed without it, which is
+what confirmed the diagnosis. Punctuation is stripped only when what remains is *entirely* digits, so
+real internal codes like `42030-43` and `B4SLOT` survive untouched.
+
+**Promoting a row creates the item and nothing else.** No stock. Having an item and having some of it are
+separate facts, and stock still only ever comes from the ledger. The old system's department is matched
+to a category only on an exact name match — a near miss filing an item under the wrong category is worse
+than leaving the field blank for a human, and the dialog says which happened.
+
+Verified against real data: all 8,646 distinct rows loaded with prices, costs and departments intact; a
+promoted item came out with the right name, SKU, barcode, $19.99 price, $10 cost, 10 to a case and **zero
+ledger rows**; and all five genuinely unidentified lines in the open receiving session are now named,
+priced and costed — including the one whose barcode had the stray `+`. Test product removed afterwards.
+
+Two things found along the way and fixed: the API had **no unit-test runner at all**, so the name
+normaliser — pure logic that 8,646 names depend on — now ships with 13 tests built from real strings out
+of the file; and **Escape did not close any modal in the app**. The `stopPropagation` that makes the
+portal a real boundary was also suppressing the browser's own Escape handling, so every dialog could only
+be dismissed with the mouse, despite a docblock promising otherwise.
+
 ## Receiving: stock that arrived before its paperwork
 
 The schema knew two ways goods come in, and neither is what happens most days. A purchase order is

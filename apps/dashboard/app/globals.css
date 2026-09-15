@@ -18,6 +18,17 @@
   --color-accent-contrast: #ffffff;
   --color-error: #dc2626;
   --color-success: #16a34a;
+
+  /*
+   * Chart series. The accent above is reserved for actions, so data that has
+   * to be told apart gets its own two colors -- money coming in and money
+   * going out are different quantities, and distinguishing them is encoding,
+   * not decoration. Both are dark enough to read against --color-surface and
+   * differ in lightness as well as hue, so they stay distinguishable to a
+   * red-green colorblind reader and in grayscale print.
+   */
+  --color-series-in: #0f766e;
+  --color-series-out: #b45309;
 }
 
 body {

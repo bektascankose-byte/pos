@@ -147,12 +147,14 @@ export async function addVariantAction(
   const sku = String(formData.get("sku") ?? "").trim();
   const attributeValue = String(formData.get("attribute_value") ?? "").trim();
   const cost = String(formData.get("cost") ?? "").trim() || "0";
-  const barcode = String(formData.get("barcode") ?? "").trim();
+  // Defaults to the UPC for the same reason as `createProductAction` -- one
+  // number, entered once, stored as both the code and the scannable barcode.
+  const barcode = String(formData.get("barcode") ?? "").trim() || sku;
   const caseQty = String(formData.get("case_quantity") ?? "").trim() || "1";
   const packQty = String(formData.get("pack_quantity") ?? "").trim() || "1";
 
   if (!variantName || !sku) {
-    return { ok: false, error: "A variant name and SKU are required." };
+    return { ok: false, error: "A variant name and UPC are required." };
   }
 
   const body = {
@@ -204,7 +206,13 @@ export async function createProductAction(formData: FormData): Promise<ActionRes
   const name = String(formData.get("name") ?? "").trim();
   const sku = String(formData.get("sku") ?? "").trim();
   const cost = String(formData.get("cost") ?? "").trim() || "0";
-  const barcode = String(formData.get("barcode") ?? "").trim();
+  // One number, entered once. This business scans the UPC and files it as the
+  // item's own code, so a form that asks for a "SKU" and a "barcode"
+  // separately is asking for the same digits twice — and the second box being
+  // optional meant half the catalog ended up with a code that could not be
+  // scanned. A caller that genuinely has two distinct codes can still send
+  // both; everything else gets the one it typed, in both places.
+  const barcode = String(formData.get("barcode") ?? "").trim() || sku;
   const priceMajor = String(formData.get("price") ?? "").trim();
   const brandId = String(formData.get("brand_id") ?? "").trim();
   const categoryId = String(formData.get("category_id") ?? "").trim();
@@ -212,7 +220,7 @@ export async function createProductAction(formData: FormData): Promise<ActionRes
   const storeId = String(formData.get("store_id") ?? "").trim();
 
   if (!name || !sku) {
-    return { ok: false, error: "Name and SKU are required." };
+    return { ok: false, error: "Name and UPC are required." };
   }
 
   const priceMinor = priceMajor ? parseMajorToMinor(priceMajor) : null;

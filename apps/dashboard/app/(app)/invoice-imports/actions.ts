@@ -248,7 +248,7 @@ export async function createProductForLineAction(
   const restRows = rows.slice(1);
 
   if (!firstRow.sku) {
-    return { ok: false, error: "A SKU / UPC is required." };
+    return { ok: false, error: "A UPC is required." };
   }
   if (existingProductId && !firstRow.variantName) {
     return {

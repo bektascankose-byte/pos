@@ -57,7 +57,7 @@ export async function searchEverythingAction(query: string): Promise<ActionResul
           res.data.map((row) => ({
             id: row.variant_id,
             label: `${row.product_name}${row.variant_name ? ` | ${row.variant_name}` : ""}`,
-            sublabel: `${row.brand_name ? `${row.brand_name} · ` : ""}SKU ${row.sku}`,
+            sublabel: `${row.brand_name ? `${row.brand_name} · ` : ""}UPC ${row.sku}`,
             href: `/catalog/${row.product_id}`,
           })),
         )

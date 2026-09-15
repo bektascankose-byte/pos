@@ -227,7 +227,7 @@ export function PriceCategoryClient({
           <span className="text-sm font-medium">Speed-scan add</span>
           <form onSubmit={handleScan} className="flex items-end gap-3">
             <label className="flex flex-col gap-1 text-sm">
-              Scan or type a SKU / barcode
+              Scan or type a UPC
               <input
                 ref={scanInputRef}
                 name="code"
@@ -271,7 +271,7 @@ export function PriceCategoryClient({
           <thead className="text-left text-[var(--color-text-muted)]">
             <tr>
               <th className="px-4 py-2 font-normal">Product</th>
-              <th className="px-4 py-2 font-normal">SKU</th>
+              <th className="px-4 py-2 font-normal">UPC</th>
               <th className="px-4 py-2 font-normal">Price</th>
               <th className="px-4 py-2 font-normal"></th>
             </tr>

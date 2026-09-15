@@ -38,7 +38,7 @@ export function NeedsAttentionSection({ attention }: { attention: NeedsAttention
       blurb: "The register refuses these — they can't be rung up at all.",
       group: attention.unpriced,
       href: (item: AttentionItem) => `/catalog/${item.product_id}`,
-      detail: (item: AttentionItem) => `SKU ${item.sku}`,
+      detail: (item: AttentionItem) => `UPC ${item.sku}`,
     },
     {
       key: "low_stock",

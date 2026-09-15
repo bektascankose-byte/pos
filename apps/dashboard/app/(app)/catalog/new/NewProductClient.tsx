@@ -72,7 +72,7 @@ export function NewProductClient({
       <h1 className="text-xl font-semibold">Add product</h1>
       <p className="text-sm text-[var(--color-text-muted)]">
         This creates a single-variant product. Adding more flavors or sizes to an existing product
-        isn&apos;t supported here yet — create one product per SKU for now.
+        isn&apos;t supported here yet — create one product per UPC for now.
       </p>
 
       {error ? <p className="text-sm text-[var(--color-error)]">{error}</p> : null}
@@ -84,8 +84,9 @@ export function NewProductClient({
       >
         <input type="hidden" name="store_id" value={storeId ?? ""} />
         <Field label="Name" name="name" ref={nameRef} required />
-        <Field label="SKU" name="sku" required />
-        <Field label="Barcode (UPC)" name="barcode" />
+        {/* One box, not two: the UPC is the item's code and its scannable
+            barcode, and asking for both got the same digits typed twice. */}
+        <Field label="UPC / Barcode" name="sku" required />
         <div className="grid grid-cols-2 gap-4">
           <Field label="Cost" name="cost" placeholder="9.85" />
           <Field label="Price" name="price" placeholder="24.99" />

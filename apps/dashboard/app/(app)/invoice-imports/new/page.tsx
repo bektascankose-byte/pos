@@ -50,7 +50,7 @@ export default async function NewInvoiceImportPage({
             ))}
           </select>
           <span className="text-xs text-[var(--color-text-muted)]">
-            Picking the vendor lets matching remember this vendor&apos;s own SKUs across invoices, and
+            Picking the vendor lets matching remember this vendor&apos;s own item codes across invoices, and
             is required before this import can be committed.
           </span>
         </label>

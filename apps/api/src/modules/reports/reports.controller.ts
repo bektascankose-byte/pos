@@ -53,4 +53,21 @@ export class ReportsController {
   byPaymentMethod(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string>) {
     return this.reports.byPaymentMethod(user.orgId, reportRangeQuerySchema.parse(query));
   }
+
+  /**
+   * Money in against money out. Under `report.sales` rather than a purchasing
+   * permission because the sales half is the sensitive half -- anyone allowed
+   * to see the day's takings can see what the stock cost.
+   */
+  @Get('money-flow')
+  @RequirePermissions('report.sales')
+  moneyFlow(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string>) {
+    return this.reports.moneyFlow(user.orgId, reportRangeQuerySchema.parse(query));
+  }
+
+  @Get('vendor-spend')
+  @RequirePermissions('report.sales')
+  vendorSpend(@CurrentUser() user: AuthenticatedUser, @Query() query: Record<string, string>) {
+    return this.reports.vendorSpend(user.orgId, reportRangeQuerySchema.parse(query));
+  }
 }

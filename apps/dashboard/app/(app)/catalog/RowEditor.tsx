@@ -105,7 +105,7 @@ export function RowEditor({
         <Field label="Product name" name="product_name" defaultValue={row.product_name} />
         <div className="grid grid-cols-2 gap-3">
           <Field label="Variant" name="variant_name" defaultValue={row.variant_name ?? ""} />
-          <Field label="SKU" name="sku" defaultValue={row.sku} />
+          <Field label="UPC" name="sku" defaultValue={row.sku} />
         </div>
         <div className="grid grid-cols-2 gap-3">
           <Field label="PLU" name="plu" defaultValue={row.plu ?? ""} />

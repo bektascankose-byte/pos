@@ -26,6 +26,8 @@ export const invoiceImportLineSchema = z.object({
   parsed_quantity: quantity.nullable(),
   parsed_unit_cost: costDecimal.nullable(),
   parsed_description: z.string().nullable(),
+  /** The product UPC the invoice printed, when it printed one. */
+  parsed_barcode: z.string().nullable(),
   parsed_vendor_sku: z.string().nullable(),
   ai_suggested_variant_id: uuid.nullable(),
   /** Denormalized for display only -- set whenever `ai_suggested_variant_id` is, never sent by a client. */
@@ -57,6 +59,19 @@ export const invoiceImportSchema = z.object({
   source_format: invoiceSourceFormat,
   invoice_total_minor: z.string().nullable(),
   vendor_invoice_no: z.string().nullable(),
+  /**
+   * What the document says about money and dates. Extracted for reporting,
+   * never an accounts-payable ledger -- a payment shown on a vendor's PDF is
+   * that vendor's word for it, so anything built on these says "per the
+   * invoice", not "paid".
+   */
+  invoice_date: z.string().nullable(),
+  due_date: z.string().nullable(),
+  amount_paid_minor: z.string().nullable(),
+  shipping_minor: z.string().nullable(),
+  discount_minor: z.string().nullable(),
+  payment_method: z.string().nullable(),
+  payment_terms: z.string().nullable(),
   status: invoiceImportStatus,
   parse_error: z.string().nullable(),
   created_at: timestamp,
@@ -186,6 +201,15 @@ export type AssignInvoiceVendor = z.infer<typeof assignInvoiceVendorSchema>;
  */
 export const aiExtractedLineSchema = z.object({
   raw_text: z.string(),
+  /**
+   * The product's own UPC/EAN, when the invoice prints one. Separate from
+   * `vendor_sku` because they are not the same fact: a barcode identifies the
+   * product to the whole world and matches this catalog exactly, while a
+   * vendor SKU only means something to that one vendor. Without a field of
+   * its own the model had nowhere to put a "Barcode" column and returned
+   * nothing for invoices whose strongest identifier was the only one printed.
+   */
+  barcode: z.string().nullable(),
   vendor_sku: z.string().nullable(),
   description: z.string().nullable(),
   quantity: z.number().nullable(),
@@ -195,6 +219,15 @@ export const aiExtractedLineSchema = z.object({
 export const aiExtractedInvoiceSchema = z.object({
   vendor_invoice_no: z.string().nullable(),
   invoice_total: z.number().nullable(),
+  /** `YYYY-MM-DD`. Validated by the caller, not here -- strict mode has no date type and a model will occasionally return prose. */
+  invoice_date: z.string().nullable(),
+  due_date: z.string().nullable(),
+  /** What the document says has been paid against it, and how. The vendor's word for it, never an accounting fact. */
+  amount_paid: z.number().nullable(),
+  shipping_cost: z.number().nullable(),
+  discount: z.number().nullable(),
+  payment_method: z.string().nullable(),
+  payment_terms: z.string().nullable(),
   lines: z.array(aiExtractedLineSchema),
 });
 

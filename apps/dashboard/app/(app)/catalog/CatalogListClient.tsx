@@ -147,7 +147,7 @@ export function CatalogListClient({
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search by name, SKU, or brand"
+          placeholder="Search by name, UPC, or brand"
           className="w-72 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
         />
         <button
@@ -180,7 +180,7 @@ export function CatalogListClient({
                 <th className="px-3 py-2 font-normal">Product</th>
                 <th className="px-3 py-2 font-normal">Brand</th>
                 <th className="px-3 py-2 font-normal">Category</th>
-                <th className="px-3 py-2 font-normal">SKU</th>
+                <th className="px-3 py-2 font-normal">UPC</th>
                 <th className="px-3 py-2 text-right font-normal">Cost</th>
                 <th className="px-3 py-2 text-right font-normal">Price</th>
                 <th className="px-3 py-2 text-right font-normal">Margin</th>

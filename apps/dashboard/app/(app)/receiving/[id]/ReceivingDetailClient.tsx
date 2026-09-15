@@ -199,7 +199,7 @@ export function ReceivingDetailClient({
           <h2 className="text-sm font-medium">Check against the invoice</h2>
           <p className="text-xs text-[var(--color-text-muted)]">
             Upload and parse the invoice under Invoices first, then match it here. Comparison is by
-            SKU against the items each invoice line was resolved to.
+            UPC against the items each invoice line was resolved to.
           </p>
         </div>
 

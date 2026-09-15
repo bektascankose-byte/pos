@@ -12,6 +12,7 @@ import {
   addSecondaryBarcodeAction,
 } from "../actions";
 import { suggestVariantsAction } from "../../catalog/actions";
+import { formatMinor } from "@/lib/money";
 import { InvoiceVendorPanel } from "./InvoiceVendorPanel";
 import type { InvoiceImport, InvoiceImportLine, Category, Vendor } from "@snappos/contracts";
 import type { ActionResult } from "@/lib/action-result";
@@ -98,6 +99,8 @@ export function InvoiceImportClient({
         </p>
       </div>
 
+      <InvoiceTerms invoiceImport={invoiceImport} />
+
       {message ? (
         <p className={`text-sm ${message.kind === "error" ? "text-[var(--color-error)]" : "text-[var(--color-success)]"}`}>
           {message.text}
@@ -128,6 +131,21 @@ export function InvoiceImportClient({
             className="self-start rounded-md bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-[var(--color-accent-contrast)] disabled:opacity-60"
           >
             Parse this invoice
+          </button>
+        ) : null}
+        {/* Re-reading is for an invoice parsed before extraction knew how to
+            find something — a barcode column, the payment terms. Offered only
+            while every line is still untouched, because it replaces them all;
+            the API refuses it otherwise rather than trusting this check. */}
+        {editable && invoiceImport.status === "parsed" && lines.every((l) => l.status === "pending") ? (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => runPageAction(() => parseInvoiceAction(importId))}
+            title="Read the document again and replace every line with what it finds now"
+            className="self-start rounded-md border border-[var(--color-border)] px-4 py-2 text-sm disabled:opacity-60"
+          >
+            Re-read document
           </button>
         ) : null}
         {editable && lines.length > 0 ? (
@@ -169,7 +187,7 @@ export function InvoiceImportClient({
       ) : null}
       {lines.length > 0 ? (
         <p className="text-xs text-[var(--color-text-muted)]">
-          Matching checks an exact barcode, then this vendor&apos;s own SKU mapping, then a fuzzy
+          Matching checks the barcode the invoice printed, then this vendor&apos;s own item codes, then a fuzzy
           match against your catalog, then AI for whatever is still unmatched (if configured on
           this server). A suggestion is never applied automatically — resolve each line below, then
           commit to create the purchase order and receive the stock.
@@ -183,6 +201,7 @@ export function InvoiceImportClient({
             <thead className="text-left text-[var(--color-text-muted)]">
               <tr>
                 <th className="px-4 py-2 font-normal">Raw text</th>
+                <th className="px-4 py-2 font-normal">UPC</th>
                 <th className="px-4 py-2 font-normal">Qty</th>
                 <th className="px-4 py-2 font-normal">Unit cost</th>
                 <th className="px-4 py-2 font-normal">Suggested match</th>
@@ -207,6 +226,102 @@ export function InvoiceImportClient({
           </table>
         </section>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * What the document says about money and dates.
+ *
+ * Hidden entirely when nothing was extracted, rather than showing a row of
+ * dashes: a CSV of line items genuinely has no invoice header, and an empty
+ * panel reads as "the app lost it" instead of "the file never had it".
+ *
+ * The wording is deliberately "per this invoice" throughout. These figures
+ * are the vendor's own statement as of the day they printed it — a payment
+ * made afterwards is invisible here, and calling this an account balance
+ * would be a lie the numbers can't back.
+ */
+function InvoiceTerms({ invoiceImport }: { invoiceImport: InvoiceImport }) {
+  const {
+    invoice_date,
+    due_date,
+    invoice_total_minor,
+    amount_paid_minor,
+    shipping_minor,
+    discount_minor,
+    payment_method,
+    payment_terms,
+    vendor_invoice_no,
+  } = invoiceImport;
+
+  const hasAnything =
+    invoice_date ??
+    due_date ??
+    invoice_total_minor ??
+    amount_paid_minor ??
+    payment_method ??
+    payment_terms;
+  if (!hasAnything) return null;
+
+  const total = invoice_total_minor ? BigInt(invoice_total_minor) : null;
+  const paid = amount_paid_minor ? BigInt(amount_paid_minor) : null;
+  // Only shown when the document gave us both halves to subtract.
+  const outstanding = total !== null && paid !== null ? total - paid : null;
+
+  return (
+    <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+      <div className="mb-3 text-sm font-medium">Per this invoice</div>
+      <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
+        <Term label="Invoice no." value={vendor_invoice_no} />
+        <Term label="Invoice date" value={invoice_date} />
+        <Term label="Due" value={due_date} />
+        <Term label="Terms" value={payment_terms} />
+        <Term label="Total" value={total !== null ? formatMinor(total.toString()) : null} />
+        <Term label="Paid" value={paid !== null ? formatMinor(paid.toString()) : null} />
+        <Term
+          label="Outstanding"
+          value={outstanding !== null ? formatMinor(outstanding.toString()) : null}
+          emphasis={outstanding !== null && outstanding > 0n}
+        />
+        <Term label="Method" value={payment_method} />
+        <Term
+          label="Shipping"
+          value={shipping_minor ? formatMinor(shipping_minor) : null}
+          hideWhenEmpty
+        />
+        <Term
+          label="Discount"
+          value={discount_minor ? formatMinor(discount_minor) : null}
+          hideWhenEmpty
+        />
+      </dl>
+      <p className="mt-3 text-xs text-[var(--color-text-muted)]">
+        Read off the document itself. It is the vendor&apos;s statement as of the day they issued it —
+        anything paid since then won&apos;t show here.
+      </p>
+    </section>
+  );
+}
+
+function Term({
+  label,
+  value,
+  emphasis,
+  hideWhenEmpty,
+}: {
+  label: string;
+  value: string | null;
+  emphasis?: boolean;
+  hideWhenEmpty?: boolean;
+}) {
+  if (!value && hideWhenEmpty) return null;
+  return (
+    <div>
+      <dt className="text-xs text-[var(--color-text-muted)]">{label}</dt>
+      <dd className={`tabular-nums ${emphasis ? "font-medium text-[var(--color-error)]" : ""}`}>
+        {value ?? <span className="text-[var(--color-text-muted)]">—</span>}
+      </dd>
     </div>
   );
 }
@@ -290,6 +405,17 @@ function LineRow({
           <span className="mb-1 block text-[var(--color-accent)]">↳ split from another line</span>
         ) : null}
         {line.raw_text}
+      </td>
+      <td className="px-4 py-2 font-mono text-xs">
+        {/* The vendor's own code is shown underneath rather than in a column
+            of its own: it is only ever a fallback for matching, and giving it
+            equal weight invites reading it as this item's UPC. */}
+        {line.parsed_barcode ?? <span className="text-[var(--color-text-muted)]">—</span>}
+        {line.parsed_vendor_sku && line.parsed_vendor_sku !== line.parsed_barcode ? (
+          <span className="mt-0.5 block font-sans text-[0.7rem] text-[var(--color-text-muted)]">
+            vendor code {line.parsed_vendor_sku}
+          </span>
+        ) : null}
       </td>
       <td className="px-4 py-2 tabular-nums">{line.parsed_quantity ?? "—"}</td>
       <td className="px-4 py-2 tabular-nums">{line.parsed_unit_cost ?? "—"}</td>
@@ -516,7 +642,7 @@ function LineRow({
                           className="flex flex-wrap items-end gap-2 border-l-2 border-[var(--color-border)] pl-3"
                         >
                           <div className="w-32">
-                            <MiniField label="SKU / UPC" name={`sku_${i}`} required={i === 0} />
+                            <MiniField label="UPC" name={`sku_${i}`} required={i === 0} />
                           </div>
                           <div className="w-32">
                             <MiniField
@@ -599,7 +725,7 @@ function LineRow({
               >
                 {ignorePending ? "Ignoring..." : "Ignore"}
               </button>
-              {line.ai_suggested_variant_id && line.parsed_vendor_sku ? (
+              {line.ai_suggested_variant_id && (line.parsed_barcode ?? line.parsed_vendor_sku) ? (
                 <button
                   type="button"
                   disabled={barcodePending}
@@ -611,7 +737,7 @@ function LineRow({
                       else setRowError(result.error);
                     });
                   }}
-                  title={`Record ${line.parsed_vendor_sku} as another valid code for ${line.ai_suggested_product_name ?? "this variant"}`}
+                  title={`Record ${line.parsed_barcode ?? line.parsed_vendor_sku} as another valid code for ${line.ai_suggested_product_name ?? "this variant"}`}
                   className="rounded-md border border-[var(--color-border)] px-3 py-1 text-xs disabled:opacity-60"
                 >
                   {barcodePending ? "Adding..." : "Also known by this code"}

@@ -55,7 +55,7 @@ export default async function NewImportPage({
         <div className="rounded-lg border border-[var(--color-border)] p-4 text-sm text-[var(--color-text-muted)]">
           <p className="mb-2 font-medium text-[var(--color-text)]">What an item import does</p>
           <ul className="list-disc space-y-1 pl-5">
-            <li>Rows are matched on SKU. A SKU already in the catalog is updated; a new one is created.</li>
+            <li>Rows are matched on UPC. A UPC already in the catalog is updated; a new one is created.</li>
             <li>Only columns you map are touched — a price list with just costs won&apos;t blank anything else.</li>
             <li>A price change is recorded in the item&apos;s price history, the same as typing it in.</li>
             <li>Stock counts are not imported here. Bring those in through an inventory count.</li>

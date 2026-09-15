@@ -27,12 +27,26 @@ const EXTRACTION_INSTRUCTIONS = `You are extracting line items from a vendor inv
 
 Return every distinct billed line item as its own entry, with:
 - raw_text: the original line text for this item, as close to verbatim as you can reconstruct it
-- vendor_sku: the vendor's own item code/SKU for this line, if shown, else null
+- barcode: the product's own barcode for this line -- a UPC, EAN or GTIN, 8 to 14 digits with no letters. It may be under a column headed Barcode, UPC, UPC-A, EAN, GTIN or Scan Code, but PDF text extraction often loses the column headers or glues this value onto the end of the previous column, so also treat a bare 12-or-13-digit number sitting at the end of a line as the barcode. Do not put a price, quantity, invoice number or date here, and do not pad or reformat the digits -- copy them exactly. Null if the line genuinely has none.
+- vendor_sku: the vendor's own item code/SKU for this line, if shown, else null. This is the vendor's internal code, usually short and often containing letters or dashes -- it is NOT the barcode. If the only code on the line is a long run of digits, that is the barcode, not the vendor SKU.
 - description: the item's name/description as the invoice states it, else null
 - quantity: the number of units/cases invoiced for this line, as a plain number, else null
 - unit_cost: the per-unit cost for this line (not the extended/line-total price), as a plain number with no currency symbol or thousands separator, else null
 
-Do not return invoice-level rows like subtotals, tax, shipping, or the grand total as line items. If you can find the vendor's own invoice number, return it in vendor_invoice_no; if you can find a printed grand total for the whole invoice, return it in invoice_total as a plain number. Use null for anything not actually present rather than guessing.`;
+Do not return invoice-level rows like subtotals, tax, shipping, or the grand total as line items.
+
+Then, for the invoice as a whole, return whatever of these the document actually prints, as plain numbers with no currency symbol or thousands separator:
+- vendor_invoice_no: the vendor's own invoice number
+- invoice_total: the grand total for the whole invoice (often labelled "Invoice Total", "Total Due", "Total")
+- amount_paid: how much has already been paid against this invoice ("Total Paid", "Amount Paid", "Payments", "Less Payments"). If the document lists individual payments but no total, add them up. Null if it shows nothing about payment.
+- shipping_cost: freight/delivery/shipping charged on this invoice
+- discount: any invoice-level discount
+- payment_method: how it was or is to be paid, copied roughly as printed ("Credit Note on Account", "ACH", "Visa ending 4412"), else null
+- payment_terms: the stated terms ("Net 30", "Due on receipt"), else null
+- invoice_date: the date the vendor put on the invoice, as YYYY-MM-DD
+- due_date: the payment due date, as YYYY-MM-DD
+
+Dates must be YYYY-MM-DD with a four-digit year -- "10 Sep 2026" is "2026-09-10". If a date is ambiguous or you cannot tell the year, return null rather than guessing one. Use null for anything not actually present, and never compute a figure the document does not print: if it shows a total and a paid amount but no outstanding balance, return the two it shows and nothing else.`;
 
 const MATCHING_INSTRUCTIONS = `You are matching vendor invoice line items against an existing product catalog for a retail point-of-sale system, and suggesting catalog metadata when the invoice implies it.
 

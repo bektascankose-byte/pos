@@ -24,10 +24,14 @@ import { ApiException } from '../../platform/errors/api-exception.js';
 const IMPORT_COLUMNS = `ii.id, ii.store_id, ii.vendor_id, v.name AS vendor_name, ii.purchase_order_id,
        ii.source_filename, ii.source_content_type, ii.source_format,
        ii.invoice_total_minor::text, ii.vendor_invoice_no, ii.status, ii.parse_error,
+       to_char(ii.invoice_date, 'YYYY-MM-DD') AS invoice_date,
+       to_char(ii.due_date, 'YYYY-MM-DD') AS due_date,
+       ii.amount_paid_minor::text, ii.shipping_minor::text, ii.discount_minor::text,
+       ii.payment_method, ii.payment_terms,
        ii.created_at, ii.committed_at`;
 
 const LINE_COLUMNS = `l.id, l.invoice_import_id, l.line_no, l.split_from_line_id, l.raw_text,
-       l.parsed_quantity::text, l.parsed_unit_cost::text, l.parsed_description, l.parsed_vendor_sku,
+       l.parsed_quantity::text, l.parsed_unit_cost::text, l.parsed_description, l.parsed_barcode, l.parsed_vendor_sku,
        l.ai_suggested_variant_id, sp.name AS ai_suggested_product_name, sv.variant_name AS ai_suggested_variant_name,
        l.ai_confidence::float8 AS ai_confidence, l.ai_suggested_brand,
        l.ai_suggested_category, l.ai_suggested_product_description, l.is_ambiguous_multi_item,
@@ -46,12 +50,65 @@ interface ParsedCsvLine {
   unitCost: string | null;
   description: string | null;
   vendorSku: string | null;
+  barcode: string | null;
+}
+
+/** Everything a parse run learned: the line items, plus what the document says about money and dates. */
+interface ParsedDocument {
+  lines: ParsedCsvLine[];
+  vendorInvoiceNo: string | null;
+  invoiceTotalMinor: string | null;
+  invoiceDate: string | null;
+  dueDate: string | null;
+  amountPaidMinor: string | null;
+  shippingMinor: string | null;
+  discountMinor: string | null;
+  paymentMethod: string | null;
+  paymentTerms: string | null;
+  truncated: boolean;
+}
+
+function toMinorOrNull(value: number | null): string | null {
+  if (value === null || !Number.isFinite(value)) return null;
+  return costToMinor(value.toFixed(2)).toString();
+}
+
+function trimmedOrNull(value: string | null): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+/**
+ * A date only if it really is one.
+ *
+ * The extraction schema types these as plain strings -- OpenAI strict mode has
+ * no date type -- so a model is free to hand back "Net 30", "10 Sep" with no
+ * year, or a month and day the calendar doesn't have. Postgres would reject
+ * the first and, worse, silently accept a plausible-looking wrong one, so the
+ * shape is checked here and anything else becomes null. A missing invoice date
+ * costs a row on a chart; a wrong one misstates a month's spend.
+ */
+function isoDateOrNull(value: string | null): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed || !/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return null;
+  const [year, month, day] = trimmed.split('-').map(Number) as [number, number, number];
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  const roundTrips =
+    parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
+  if (!roundTrips) return null;
+  // A vendor invoice dated in the 1900s or decades out is an extraction
+  // artifact, not a document -- most often a total or an order number read as
+  // a year.
+  const thisYear = new Date().getUTCFullYear();
+  if (year < thisYear - 20 || year > thisYear + 5) return null;
+  return trimmed;
 }
 
 const HEADER_ALIASES = {
   quantity: ['qty', 'quantity'],
   unit_cost: ['cost', 'unit_cost', 'price', 'unit_price'],
   description: ['description', 'item', 'name', 'product'],
+  barcode: ['barcode', 'upc', 'upc_a', 'upca', 'ean', 'gtin', 'scan_code', 'scancode'],
   vendor_sku: ['sku', 'vendor_sku', 'item_code', 'code'],
 } as const;
 
@@ -121,6 +178,9 @@ function parseCsvLines(buffer: Buffer): ParsedCsvLine[] {
     // column a more specific field already recognized (see findColumnKey).
     const quantityKey = findColumnKey(row, HEADER_ALIASES.quantity, claimed);
     const costKey = findColumnKey(row, HEADER_ALIASES.unit_cost, claimed);
+    // Barcode claims its column before vendor_sku: 'code' is an alias of the
+    // latter and would otherwise swallow a 'scan_code' column whole.
+    const barcodeKey = findColumnKey(row, HEADER_ALIASES.barcode, claimed);
     const skuKey = findColumnKey(row, HEADER_ALIASES.vendor_sku, claimed);
     const descriptionKey = findColumnKey(row, HEADER_ALIASES.description, claimed);
 
@@ -132,6 +192,7 @@ function parseCsvLines(buffer: Buffer): ParsedCsvLine[] {
       unitCost: costKey ? toNumericStringOrNull(row[costKey]) : null,
       description: descriptionKey ? (row[descriptionKey] || null) : null,
       vendorSku: skuKey ? (row[skuKey] || null) : null,
+      barcode: barcodeKey ? (row[barcodeKey] || null) : null,
     };
   });
 }
@@ -263,13 +324,46 @@ export class InvoicingService {
         );
       }
 
+      // Re-reading a document must replace what the last read produced, not
+      // add to it. Without this, parsing twice silently doubled every line
+      // and with it the stock the commit would receive -- the reason to
+      // re-read at all is usually that extraction has since improved, so
+      // this path is the expected one, not an edge case.
+      //
+      // Review work is never thrown away to do it: once a human has resolved,
+      // split or ignored a line, re-parsing would discard a decision the
+      // machine cannot make again, so it is refused outright.
+      const { rows: reviewed } = await tx.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM invoice_import_lines
+         WHERE invoice_import_id = $1 AND status <> 'pending'`,
+        [id],
+      );
+      if (Number(reviewed[0]?.n ?? '0') > 0) {
+        throw new ApiException(
+          'conflict',
+          'some lines on this invoice have already been reviewed -- re-reading it would discard that work. Upload the file again as a new invoice instead.',
+          { retryable: false },
+        );
+      }
+      await tx.query(`DELETE FROM invoice_import_lines WHERE invoice_import_id = $1`, [id]);
+
       try {
-        const parsed =
+        // A CSV of line items carries no invoice-level header at all -- no
+        // total, no dates, no payment -- so those stay null rather than being
+        // inferred from the rows.
+        const parsed: ParsedDocument =
           format === 'csv'
             ? {
                 lines: parseCsvLines(await this.storage.get(invoiceImport.source_object_key)),
                 vendorInvoiceNo: null,
                 invoiceTotalMinor: null,
+                invoiceDate: null,
+                dueDate: null,
+                amountPaidMinor: null,
+                shippingMinor: null,
+                discountMinor: null,
+                paymentMethod: null,
+                paymentTerms: null,
                 truncated: false,
               }
             : await this.parseWithAi(
@@ -280,9 +374,18 @@ export class InvoicingService {
           await tx.query(
             `INSERT INTO invoice_import_lines
                (org_id, invoice_import_id, line_no, raw_text, parsed_quantity, parsed_unit_cost,
-                parsed_description, parsed_vendor_sku)
-             VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, $4, $5, $6, $7)`,
-            [id, index + 1, line.rawText, line.quantity, line.unitCost, line.description, line.vendorSku],
+                parsed_description, parsed_vendor_sku, parsed_barcode)
+             VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, $4, $5, $6, $7, $8)`,
+            [
+              id,
+              index + 1,
+              line.rawText,
+              line.quantity,
+              line.unitCost,
+              line.description,
+              line.vendorSku,
+              line.barcode,
+            ],
           );
         }
 
@@ -294,14 +397,36 @@ export class InvoicingService {
           ? `this document is long enough that only its first ${MAX_DOCUMENT_CHARS.toLocaleString()} characters were read -- line items past that point were not extracted`
           : null;
 
+        // COALESCE throughout: re-parsing must never blank a field a human
+        // has since corrected, and a model that finds nothing this time
+        // returns null rather than a contradiction.
         await tx.query(
           `UPDATE invoice_imports
              SET status = 'parsed',
-                 vendor_invoice_no = COALESCE($2, vendor_invoice_no),
+                 vendor_invoice_no   = COALESCE($2, vendor_invoice_no),
                  invoice_total_minor = COALESCE($3, invoice_total_minor),
+                 invoice_date        = COALESCE($5::date, invoice_date),
+                 due_date            = COALESCE($6::date, due_date),
+                 amount_paid_minor   = COALESCE($7, amount_paid_minor),
+                 shipping_minor      = COALESCE($8, shipping_minor),
+                 discount_minor      = COALESCE($9, discount_minor),
+                 payment_method      = COALESCE($10, payment_method),
+                 payment_terms       = COALESCE($11, payment_terms),
                  parse_error = $4
            WHERE id = $1`,
-          [id, parsed.vendorInvoiceNo, parsed.invoiceTotalMinor, warning],
+          [
+            id,
+            parsed.vendorInvoiceNo,
+            parsed.invoiceTotalMinor,
+            warning,
+            parsed.invoiceDate,
+            parsed.dueDate,
+            parsed.amountPaidMinor,
+            parsed.shippingMinor,
+            parsed.discountMinor,
+            parsed.paymentMethod,
+            parsed.paymentTerms,
+          ],
         );
       } catch (e) {
         const message = e instanceof Error ? e.message : 'unknown parse error';
@@ -334,14 +459,7 @@ export class InvoicingService {
   }
 
   /** Text-based PDF and EDI both reduce to "extract text, hand it to the model" -- not parallel pipelines. */
-  private async parseWithAi(
-    text: string,
-  ): Promise<{
-    lines: ParsedCsvLine[];
-    vendorInvoiceNo: string | null;
-    invoiceTotalMinor: string | null;
-    truncated: boolean;
-  }> {
+  private async parseWithAi(text: string): Promise<ParsedDocument> {
     const extracted = await this.ai.extractInvoiceLines(text);
     return {
       lines: extracted.lines.map((line) => ({
@@ -350,9 +468,17 @@ export class InvoicingService {
         unitCost: line.unit_cost !== null ? String(line.unit_cost) : null,
         description: line.description,
         vendorSku: line.vendor_sku,
+        barcode: line.barcode,
       })),
       vendorInvoiceNo: extracted.vendor_invoice_no,
-      invoiceTotalMinor: extracted.invoice_total !== null ? costToMinor(extracted.invoice_total.toFixed(2)).toString() : null,
+      invoiceTotalMinor: toMinorOrNull(extracted.invoice_total),
+      invoiceDate: isoDateOrNull(extracted.invoice_date),
+      dueDate: isoDateOrNull(extracted.due_date),
+      amountPaidMinor: toMinorOrNull(extracted.amount_paid),
+      shippingMinor: toMinorOrNull(extracted.shipping_cost),
+      discountMinor: toMinorOrNull(extracted.discount),
+      paymentMethod: trimmedOrNull(extracted.payment_method),
+      paymentTerms: trimmedOrNull(extracted.payment_terms),
       truncated: text.length > MAX_DOCUMENT_CHARS,
     };
   }
@@ -476,11 +602,12 @@ export class InvoicingService {
 
   /**
    * The matching cascade. Every `pending` line with nothing suggested yet is
-   * tried, in order, against: an exact barcode (in case the invoice's own
-   * "code" column is actually a UPC), then this vendor's own SKU mapping
+   * tried, in order, against: the barcode the invoice actually printed, then
+   * an exact barcode match on whatever its "code" column held (which is often
+   * a UPC under another name), then this vendor's own SKU mapping
    * (`vendor_variants`, populated by an earlier receipt against this same
    * vendor), then a fuzzy trigram match on the description against the
-   * catalog's own product/variant names -- all three free and deterministic.
+   * catalog's own product/variant names -- all free and deterministic.
    * Only lines still unmatched after that go to AI (tier 4, skipped
    * entirely when no key is configured -- the first three tiers must keep
    * working with zero OpenAI dependency), which also predicts brand/
@@ -505,11 +632,12 @@ export class InvoicingService {
         id: string;
         raw_text: string;
         parsed_vendor_sku: string | null;
+        parsed_barcode: string | null;
         parsed_description: string | null;
         parsed_quantity: string | null;
         parsed_unit_cost: string | null;
       }>(
-        `SELECT id, raw_text, parsed_vendor_sku, parsed_description,
+        `SELECT id, raw_text, parsed_vendor_sku, parsed_barcode, parsed_description,
                 parsed_quantity::text, parsed_unit_cost::text
          FROM invoice_import_lines
          WHERE invoice_import_id = $1 AND status = 'pending' AND ai_suggested_variant_id IS NULL`,
@@ -519,7 +647,13 @@ export class InvoicingService {
       let matched = 0;
       const stillUnmatched: typeof lines = [];
       for (const line of lines) {
-        const found = await this.findMatch(tx, vendorId, line.parsed_vendor_sku, line.parsed_description);
+        const found = await this.findMatch(
+          tx,
+          vendorId,
+          line.parsed_barcode,
+          line.parsed_vendor_sku,
+          line.parsed_description,
+        );
         if (found) {
           await tx.query(
             `UPDATE invoice_import_lines SET ai_suggested_variant_id = $2, ai_confidence = $3 WHERE id = $1`,
@@ -667,25 +801,58 @@ export class InvoicingService {
     return suggested;
   }
 
+  /**
+   * An exact barcode hit, matching both the variant's own code and any extra
+   * code recorded against it (a carton code among them). Certain enough to
+   * return confidence 1: `barcodes_org_code_key` guarantees one barcode
+   * resolves to at most one variant in an org.
+   */
+  private async matchByBarcode(
+    tx: PoolClient,
+    code: string,
+  ): Promise<{ variantId: string; confidence: number } | null> {
+    const trimmed = code.trim();
+    if (!trimmed) return null;
+
+    const { rows } = await tx.query<{ id: string }>(
+      `SELECT v.id FROM variant_barcodes b
+       JOIN product_variants v ON v.id = b.variant_id
+       WHERE upper(trim(b.barcode)) = upper(trim($1)) AND v.status = 'active'
+       UNION
+       SELECT v.id FROM product_variants v
+       WHERE upper(trim(v.sku)) = upper(trim($1)) AND v.status = 'active'
+       LIMIT 1`,
+      [trimmed],
+    );
+    return rows[0] ? { variantId: rows[0].id, confidence: 1 } : null;
+  }
+
   private async findMatch(
     tx: PoolClient,
     vendorId: string | null,
+    barcode: string | null,
     vendorSku: string | null,
     description: string | null,
   ): Promise<{ variantId: string; confidence: number } | null> {
+    // The barcode the invoice actually printed, first. A UPC identifies the
+    // product to the whole world, so it is the one identifier on an invoice
+    // that cannot mean a different item here than it did there.
+    if (barcode) {
+      const found = await this.matchByBarcode(tx, barcode);
+      if (found) return found;
+    }
+
     if (vendorSku) {
+      // Tried as a barcode too: plenty of invoices print a UPC under a column
+      // headed "Item Code" or "SKU", and an exact hit on the barcode table is
+      // as certain there as it is above.
+      //
       // upper(trim(...)) on both sides -- a vendor resending the same SKU
       // with different case or a trailing space would otherwise silently
       // miss an exact-match tier, the same normalization the catalog's own
       // SKU uniqueness index already applies.
-      const { rows: barcodeRows } = await tx.query<{ id: string }>(
-        `SELECT v.id FROM variant_barcodes b
-         JOIN product_variants v ON v.id = b.variant_id
-         WHERE upper(trim(b.barcode)) = upper(trim($1)) AND v.status = 'active'
-         LIMIT 1`,
-        [vendorSku],
-      );
-      if (barcodeRows[0]) return { variantId: barcodeRows[0].id, confidence: 1 };
+      const found = await this.matchByBarcode(tx, vendorSku);
+      if (found) return found;
 
       if (vendorId) {
         const { rows: vendorSkuRows } = await tx.query<{ variant_id: string }>(
@@ -1018,11 +1185,15 @@ export class InvoicingService {
 
   /**
    * "This is the same item under a different code" -- for a line the AI
-   * matched by name but whose own vendor SKU didn't hit anything on file.
-   * Records that code as an additional, non-primary barcode on the
-   * suggested variant and resolves the line to it. Needs no request body:
-   * everything it acts on (`parsed_vendor_sku`, `ai_suggested_variant_id`)
+   * matched by name but whose own code didn't hit anything on file. Records
+   * that code as an additional, non-primary barcode on the suggested variant
+   * and resolves the line to it. Needs no request body: everything it acts on
    * is already sitting on the line.
+   *
+   * Prefers the barcode the invoice printed over the vendor's own code. A UPC
+   * is a code the whole world agrees on, so recording it is what makes the
+   * item scannable; a vendor SKU is only ever meaningful to that one vendor,
+   * and is used here just because it is better than nothing.
    */
   async addSecondaryBarcode(orgId: string, actorUserId: string, importId: string, lineId: string) {
     return this.db.withOrg(orgId, async (tx) => {
@@ -1032,16 +1203,17 @@ export class InvoicingService {
       if (!line.ai_suggested_variant_id) {
         throw new ApiException(
           'validation_failed',
-          'this line has no suggested match to attach a secondary SKU to',
+          'this line has no suggested match to attach another code to',
           { retryable: false },
         );
       }
-      if (!line.parsed_vendor_sku) {
-        throw new ApiException('validation_failed', 'this line has no vendor SKU to add', { retryable: false });
+      const code = line.parsed_barcode ?? line.parsed_vendor_sku;
+      if (!code) {
+        throw new ApiException('validation_failed', 'this line has no code on it to add', { retryable: false });
       }
 
       await this.catalog.addBarcodeToVariantTx(tx, actorUserId, line.ai_suggested_variant_id, {
-        barcode: line.parsed_vendor_sku,
+        barcode: code,
       });
 
       await tx.query(
@@ -1265,11 +1437,12 @@ export class InvoicingService {
       parsed_quantity: string | null;
       parsed_unit_cost: string | null;
       parsed_description: string | null;
+      parsed_barcode: string | null;
       parsed_vendor_sku: string | null;
       ai_suggested_variant_id: string | null;
     }>(
       `SELECT id, status, raw_text, parsed_quantity::text, parsed_unit_cost::text, parsed_description,
-              parsed_vendor_sku, ai_suggested_variant_id
+              parsed_barcode, parsed_vendor_sku, ai_suggested_variant_id
        FROM invoice_import_lines WHERE id = $1 AND invoice_import_id = $2 FOR UPDATE`,
       [lineId, importId],
     );

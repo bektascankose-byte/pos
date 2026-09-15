@@ -438,7 +438,7 @@ function VariantRow({
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
       <div className="mb-3 flex items-center justify-between">
         <div className="font-medium">{variant.variant_name ?? variant.sku}</div>
-        <div className="text-sm text-[var(--color-text-muted)]">SKU {variant.sku}</div>
+        <div className="text-sm text-[var(--color-text-muted)]">UPC {variant.sku}</div>
       </div>
 
       <div className="grid grid-cols-2 gap-6">
@@ -599,12 +599,14 @@ function AddVariantForm({
       {error ? <p className="text-xs text-[var(--color-error)]">{error}</p> : null}
       <div className="grid grid-cols-2 gap-3">
         <Field label="Variant name" name="variant_name" placeholder="e.g. Cherry" required />
-        <Field label="SKU" name="sku" required />
+        {/* One box: the UPC is both this variant's code and what a scanner
+            reads. Carton codes are added on the item's own page, where they
+            can carry the units-per-scan they need. */}
+        <Field label="UPC / Barcode" name="sku" required />
       </div>
       <div className="grid grid-cols-3 gap-3">
         <Field label={`Attribute (${defaultAxis})`} name="attribute_value" placeholder="e.g. Cherry" />
         <Field label="Cost" name="cost" defaultValue="0" />
-        <Field label="Barcode" name="barcode" placeholder="optional" />
       </div>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Case quantity" name="case_quantity" defaultValue="1" />

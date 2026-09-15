@@ -234,7 +234,7 @@ export function ImportReviewClient({ importId, initialJob }: { importId: string;
               disabled={pending || !mapping.sku && job.entity === "item"}
               onClick={check}
               className="rounded-md border border-[var(--color-border)] px-3 py-2 text-sm disabled:opacity-40"
-              title={job.entity === "item" && !mapping.sku ? "Map the SKU column first" : undefined}
+              title={job.entity === "item" && !mapping.sku ? "Map the UPC column first" : undefined}
             >
               {pending ? "Checking..." : dryRun ? "Check again" : "Check this file"}
             </button>

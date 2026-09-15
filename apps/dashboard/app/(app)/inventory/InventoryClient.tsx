@@ -116,7 +116,7 @@ export function InventoryClient({
       <input
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder="Filter by name or SKU"
+        placeholder="Filter by name or UPC"
         className="w-72 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
       />
 
@@ -126,7 +126,7 @@ export function InventoryClient({
             <tr>
               <th className="px-4 py-2 font-normal">Product</th>
               <th className="px-4 py-2 font-normal">Category</th>
-              <th className="px-4 py-2 font-normal">SKU</th>
+              <th className="px-4 py-2 font-normal">UPC</th>
               <th className="px-4 py-2 text-right font-normal">On hand</th>
               <th className="px-4 py-2 text-right font-normal">Reserved</th>
               <th className="px-4 py-2 text-right font-normal">Available</th>

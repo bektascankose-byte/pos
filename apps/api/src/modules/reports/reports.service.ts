@@ -12,6 +12,8 @@ import type {
   AttentionGroup,
   NeedsAttention,
   OpenInvoiceRow,
+  MoneyFlow,
+  VendorSpendRow,
 } from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
 
@@ -80,6 +82,181 @@ export class ReportsService {
         date: row.date,
         sale_count: Number(row.sale_count),
         gross_minor: row.gross_minor,
+      }));
+    });
+  }
+
+  /**
+   * Money out against money in, day by day.
+   *
+   * Two things are being compared that are not measured alike, and the query
+   * is built to make that visible rather than to smooth it over:
+   *
+   * - Sales come from completed sales, with the cost of goods snapshotted on
+   *   each line at the time of sale. That is the honest basis for margin --
+   *   today's `average_cost` would restate what last month's margin was every
+   *   time a vendor changes a price.
+   * - Purchases come from uploaded vendor invoices, dated by the date the
+   *   VENDOR put on them, not the day they were uploaded. An invoice typed in
+   *   November for a September delivery is September's cost.
+   *
+   * A full calendar series is generated so a day with sales but no invoices
+   * (the common case) still plots at zero instead of being skipped, which
+   * would otherwise draw a line implying purchases happened between two
+   * distant deliveries.
+   *
+   * Invoices with no date at all cannot be placed on any day; they are
+   * counted separately rather than silently dropped or dumped on day one.
+   */
+  async moneyFlow(orgId: string, params: ReportRangeQuery): Promise<MoneyFlow> {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query<{
+        date: string;
+        sales_minor: string;
+        cogs_minor: string;
+        purchases_minor: string;
+      }>(
+        `WITH days AS (
+           SELECT generate_series(date_trunc('day', $2::timestamptz),
+                                  date_trunc('day', $3::timestamptz - interval '1 microsecond'),
+                                  interval '1 day')::date AS day
+         ),
+         sold AS (
+           SELECT date_trunc('day', completed_at)::date AS day,
+                  sum(total_minor) AS sales_minor,
+                  -- cost_total is numeric(16,6) dollars; minor units for the
+                  -- wire, rounded once at the end rather than per line.
+                  round(sum(cost_total) * 100) AS cogs_minor
+           FROM sales
+           WHERE status = 'completed'
+             AND completed_at >= $2 AND completed_at < $3
+             AND ($1::uuid IS NULL OR store_id = $1)
+           GROUP BY 1
+         ),
+         bought AS (
+           SELECT invoice_date AS day, sum(invoice_total_minor) AS purchases_minor
+           FROM invoice_imports
+           WHERE invoice_date IS NOT NULL
+             AND invoice_date >= date_trunc('day', $2::timestamptz)::date
+             AND invoice_date <  date_trunc('day', $3::timestamptz)::date
+             AND invoice_total_minor IS NOT NULL
+             AND status <> 'failed'
+             AND ($1::uuid IS NULL OR store_id = $1)
+           GROUP BY 1
+         )
+         SELECT to_char(d.day, 'YYYY-MM-DD') AS date,
+                COALESCE(s.sales_minor, 0)::text     AS sales_minor,
+                COALESCE(s.cogs_minor, 0)::text      AS cogs_minor,
+                COALESCE(b.purchases_minor, 0)::text AS purchases_minor
+         FROM days d
+         LEFT JOIN sold s   ON s.day = d.day
+         LEFT JOIN bought b ON b.day = d.day
+         ORDER BY d.day`,
+        [params.store_id ?? null, params.from, params.to],
+      );
+
+      const { rows: undated } = await tx.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM invoice_imports
+         WHERE invoice_date IS NULL AND status <> 'failed'
+           AND created_at >= $2 AND created_at < $3
+           AND ($1::uuid IS NULL OR store_id = $1)`,
+        [params.store_id ?? null, params.from, params.to],
+      );
+
+      const { rows: counted } = await tx.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM invoice_imports
+         WHERE invoice_date IS NOT NULL
+           AND invoice_date >= date_trunc('day', $2::timestamptz)::date
+           AND invoice_date <  date_trunc('day', $3::timestamptz)::date
+           AND invoice_total_minor IS NOT NULL AND status <> 'failed'
+           AND ($1::uuid IS NULL OR store_id = $1)`,
+        [params.store_id ?? null, params.from, params.to],
+      );
+
+      const points = rows.map((row) => ({
+        date: row.date,
+        sales_minor: row.sales_minor,
+        cogs_minor: row.cogs_minor,
+        purchases_minor: row.purchases_minor,
+      }));
+
+      // Summed as BigInt, never as floats: these are money.
+      const total = (pick: (p: (typeof points)[number]) => string) =>
+        points.reduce((sum, point) => sum + BigInt(pick(point)), 0n);
+
+      const sales = total((p) => p.sales_minor);
+      const cogs = total((p) => p.cogs_minor);
+      const grossProfit = sales - cogs;
+
+      return {
+        points,
+        summary: {
+          sales_minor: sales.toString(),
+          cogs_minor: cogs.toString(),
+          gross_profit_minor: grossProfit.toString(),
+          // Rounded to four places so a rate is comparable across ranges
+          // without pretending to more precision than it has.
+          margin_rate:
+            sales > 0n ? Math.round((Number(grossProfit) / Number(sales)) * 10_000) / 10_000 : null,
+          purchases_minor: total((p) => p.purchases_minor).toString(),
+          invoice_count: Number(counted[0]?.n ?? '0'),
+          undated_invoice_count: Number(undated[0]?.n ?? '0'),
+        },
+      };
+    });
+  }
+
+  /**
+   * Who the money went to, and what the paperwork still says is owed.
+   *
+   * Explicitly not accounts payable: `amount_paid_minor` is whatever the
+   * vendor's own document claimed had been paid when it was extracted, so
+   * "outstanding" here means "this invoice said so", not "the bank agrees".
+   * Payments made after the invoice was issued are invisible to it.
+   *
+   * Outstanding is floored at zero -- an invoice showing an overpayment is a
+   * credit on account, and letting it subtract from what other invoices owe
+   * would understate the real exposure.
+   */
+  async vendorSpend(orgId: string, params: ReportRangeQuery): Promise<VendorSpendRow[]> {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query<{
+        vendor_id: string | null;
+        vendor_name: string | null;
+        invoice_count: string;
+        invoiced_minor: string;
+        paid_minor: string;
+        outstanding_minor: string;
+        last_invoice_date: string | null;
+      }>(
+        `SELECT ii.vendor_id,
+                v.name AS vendor_name,
+                count(*)::text AS invoice_count,
+                COALESCE(sum(ii.invoice_total_minor), 0)::text AS invoiced_minor,
+                COALESCE(sum(ii.amount_paid_minor), 0)::text AS paid_minor,
+                COALESCE(sum(GREATEST(ii.invoice_total_minor - COALESCE(ii.amount_paid_minor, 0), 0)), 0)::text
+                  AS outstanding_minor,
+                to_char(max(ii.invoice_date), 'YYYY-MM-DD') AS last_invoice_date
+         FROM invoice_imports ii
+         LEFT JOIN vendors v ON v.id = ii.vendor_id
+         WHERE ii.status <> 'failed'
+           AND ii.invoice_total_minor IS NOT NULL
+           AND ii.invoice_date >= date_trunc('day', $2::timestamptz)::date
+           AND ii.invoice_date <  date_trunc('day', $3::timestamptz)::date
+           AND ($1::uuid IS NULL OR ii.store_id = $1)
+         GROUP BY ii.vendor_id, v.name
+         ORDER BY sum(ii.invoice_total_minor) DESC`,
+        [params.store_id ?? null, params.from, params.to],
+      );
+
+      return rows.map((row) => ({
+        vendor_id: row.vendor_id,
+        vendor_name: row.vendor_name,
+        invoice_count: Number(row.invoice_count),
+        invoiced_minor: row.invoiced_minor,
+        paid_minor: row.paid_minor,
+        outstanding_minor: row.outstanding_minor,
+        last_invoice_date: row.last_invoice_date,
       }));
     });
   }
