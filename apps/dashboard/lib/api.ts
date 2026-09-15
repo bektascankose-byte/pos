@@ -76,3 +76,25 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
+
+/**
+ * The same call, but handing back the raw `Response`.
+ *
+ * `apiFetch` parses JSON, which a file download is not: an export is bytes
+ * plus a `Content-Disposition` naming the file, and both have to reach the
+ * browser untouched. Sharing the base URL and the token attachment with
+ * `apiFetch` rather than re-implementing them is the whole point of it being
+ * here instead of inline in the route handler.
+ */
+export async function apiFetchRaw(path: string, init: RequestInit = {}): Promise<Response> {
+  const token = await getAccessToken();
+  return fetch(`${API_BASE_URL}${path}`, {
+    ...init,
+    headers: {
+      ...(init.body && !(init.body instanceof FormData) ? { "Content-Type": "application/json" } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...init.headers,
+    },
+    cache: "no-store",
+  });
+}

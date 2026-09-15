@@ -6,11 +6,13 @@ import {
   aiMatchPredictionsSchema,
   aiComplianceSuggestionSchema,
   aiVendorSuggestionSchema,
+  aiColumnMappingSchema,
   type AiExtractedInvoice,
   type AiLineMatchPrediction,
   type AiMatchLineInput,
   type AiComplianceSuggestion,
   type AiVendorSuggestion,
+  type AiColumnGuess,
 } from '@snappos/contracts';
 import { z } from 'zod';
 import { ApiException } from '../errors/api-exception.js';
@@ -71,6 +73,17 @@ Return:
 - confidence: how confident you are in the name specifically, from 0 to 1
 
 Use null for anything not actually present in the text rather than inferring it.`;
+
+const COLUMN_MAPPING_INSTRUCTIONS = `You are matching the columns of a spreadsheet a retail store uploaded against the fields of their point-of-sale system. A first pass already matched every column whose name was recognizable; you are being asked only about the fields it could not place, and offered only the columns nothing has claimed.
+
+You are given: the fields still needing a column (each with a key, a label and a description of what belongs in it), the unclaimed column names, and a few example rows so you can judge a column by what is actually in it rather than only by its name. Example values matter most when a header is unhelpful -- a column named "F4" holding 24.99, 12.50, 8.75 is a price, and one holding 812345678901 is a barcode, whatever it is called.
+
+For each field you were asked about, return:
+- field: the field's key, copied back exactly as given
+- column: the name of the ONE unclaimed column that holds that field, copied exactly as given, or null if none of them does
+- confidence: 0 to 1
+
+Rules. Never name a column that was not in the list you were given. Never use the same column for two different fields -- if two fields could plausibly take one column, give it to the better fit and answer null for the other. A field with no good column is null, not the closest leftover: a wrong mapping writes wrong data into a live catalog, while a null simply leaves that field empty for a human to fill in.`;
 
 const VARIANT_SUGGESTION_INSTRUCTIONS = `You are helping a retail store stock every real flavor/size/color variant of a specific product. Search the web to find the actual, real variants this specific product is sold in -- not generic guesses.
 
@@ -201,6 +214,41 @@ export class AiService {
       throw new Error('the model returned no parsed output');
     }
     return response.output_parsed.predictions;
+  }
+
+  /**
+   * Which spreadsheet column holds which field, for the fields a
+   * deterministic alias pass could not place.
+   *
+   * Only the leftovers are asked about, and only the unclaimed columns are
+   * offered, so a recognizable header never costs a model call and the model
+   * can never take a column something else already owns. Sample rows go with
+   * the question because a header is often useless ("F4", "Column7") while
+   * the values in it are obvious.
+   *
+   * A suggestion only. The caller shows the whole mapping for confirmation
+   * before a single row is written, and validates every column name here
+   * against the real header row -- a model naming a column that doesn't exist
+   * would otherwise read as `undefined` on every row of the file.
+   */
+  async mapColumns(input: {
+    entity: string;
+    fields: { key: string; label: string; hint: string }[];
+    columns: string[];
+    sample_rows: Record<string, string>[];
+  }): Promise<AiColumnGuess[]> {
+    if (input.fields.length === 0 || input.columns.length === 0) return [];
+    const { client, model } = this.getClient();
+    const response = await client.responses.parse({
+      model,
+      instructions: COLUMN_MAPPING_INSTRUCTIONS,
+      input: JSON.stringify(input),
+      text: { format: zodTextFormat(aiColumnMappingSchema, 'column_mapping') },
+    });
+    if (!response.output_parsed) {
+      throw new Error('the model returned no parsed output');
+    }
+    return response.output_parsed.guesses;
   }
 
   /**

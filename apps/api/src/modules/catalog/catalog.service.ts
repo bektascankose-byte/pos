@@ -1234,7 +1234,19 @@ export class CatalogService {
    * Closing before inserting, in that order, is what keeps the unique index
    * from ever seeing two open rows at once.
    */
-  private async closeAndOpenPrice(
+  /**
+   * A price change, effective-dated: close the open row and insert a new one,
+   * so `variant_prices` *is* the history rather than needing one kept
+   * alongside it. Never an UPDATE of `price_minor` in place -- that would
+   * destroy what the item used to cost, which is the one question a margin
+   * report and a pricing dispute both start from.
+   *
+   * Public (and transactional) so the spreadsheet importer changes a price
+   * the same way the item page does, inside its own single transaction. A
+   * second implementation of this rule is how a bulk path quietly stops
+   * recording history.
+   */
+  async closeAndOpenPrice(
     tx: PoolClient,
     actorUserId: string,
     variantId: string,

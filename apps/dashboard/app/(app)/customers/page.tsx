@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { apiFetch, ApiError } from "@/lib/api";
+import { ImportExportBar } from "../_components/ImportExportBar";
 import type { Customer } from "@snappos/contracts";
 
 export default async function CustomersPage({
@@ -25,14 +26,17 @@ export default async function CustomersPage({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-semibold">Customers</h1>
-        <Link
-          href="/customers/new"
-          className="rounded-md bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-[var(--color-accent-contrast)]"
-        >
-          Add customer
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <ImportExportBar entity="customer" query={q} status={showingArchived ? "archived" : undefined} />
+          <Link
+            href="/customers/new"
+            className="rounded-md bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-[var(--color-accent-contrast)]"
+          >
+            Add customer
+          </Link>
+        </div>
       </div>
 
       <form className="flex items-center gap-2">

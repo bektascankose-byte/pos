@@ -2,6 +2,72 @@
 
 Notable changes. Newest first.
 
+## Import and export, with AI working out the columns
+
+Third of four passes. Items and customers can now be imported from a CSV or an Excel file and exported
+back out, with the column mapping worked out automatically and always shown for confirmation first.
+
+**Nothing is written until a dry run has been reviewed.** Importing is three calls — upload, dry run,
+commit — and commit carries no mapping of its own, so what runs is always what was reviewed. A single
+"import this file" call would be shorter and is exactly the shape that lets a wrong column mapping
+corrupt a whole catalog in one click, which is the realistic failure for the Modisoft migration this is
+mostly built for. The dry run reports "3 will create, 1 will update, 2 will skip" with a reason for every
+skipped row and a preview of what the first few rows actually become.
+
+- **Three mapping tiers, cheapest first**: a layout someone already confirmed, then deterministic
+  header-alias matching, then AI for whatever is left. AI is only asked about the fields the first two
+  couldn't place and only offered the columns nothing claimed, so a recognizable header never costs a
+  model call — a Modisoft-shaped file and a customer file with `Customer Name`/`Mobile`/`E-Mail`/`DOB`
+  columns both map with **zero AI calls**. AI answers are marked "AI guess" on the review screen, and
+  every column it names is validated against the real header row.
+- **Remembered layouts.** `import_mappings` stores a confirmed mapping keyed by a hash of the normalized
+  header row, so a vendor's monthly price list maps itself the second time. Keyed by header shape alone,
+  deliberately not by vendor — two vendors whose sheets carry the same columns *are* the same sheet to a
+  row parser.
+- **Export round-trips.** CSV and XLSX for items and customers, honouring the current search and archived
+  filter, with column names the importer's own aliases recognize. Exporting the catalog and re-importing
+  the file produces 4 updates, 0 creates and **no spurious writes** — verified, including that the price
+  history gained no rows.
+- Items match on SKU; only mapped columns are touched, so a price list carrying just costs can't blank a
+  name. A price change goes through `CatalogService.closeAndOpenPrice`, so a bulk change is
+  effective-dated and appears in the item's history exactly like one typed on its own page — and an
+  unchanged price writes no row at all.
+- **An imported item gets a barcode from its SKU.** `scan` reads `variant_barcodes`, so without one every
+  migrated item would be in the catalog and unscannable at the register.
+- Customers match on phone, then email. `Maria Jo Van Der Berg` in one name column splits on the last
+  space; `2001-11-30` keeps the month and day and discards the year; tags are **added** to a matched
+  customer rather than replacing what they had.
+- **Imported customers are not opted in to marketing**, and the review screen says so before the import
+  runs. `customer_consents.source` includes `'import'`, which makes it look like a spreadsheet could
+  establish consent — it can't. CAN-SPAM and the TCPA need express opt-in, and treating an inherited list
+  as opted-in is how shops get fined. Verified: importing four customers created zero consent rows.
+- `product.export` is a new permission (migration 0017), granted to whoever can already bulk-edit the
+  catalog. The long-seeded, never-used `customer.export` finally gates something. Both exports are
+  audited with a row count — who walked out with the customer list, and when, is now answerable.
+- `exceljs` for `.xlsx`, not SheetJS, which has a history of prototype-pollution advisories.
+
+Five bugs found by using it:
+
+- **"Pack Size" mapped to Variant** instead of Units per case, because a single-word alias (`size`) was
+  declared above a two-word one (`pack size`). Alias matching now resolves exact keys, then multi-word
+  aliases, then single words — specificity rather than declaration order, which fixes the class rather
+  than the case.
+- **The mapping dropdowns vanished after a dry run.** `getImport` returned the field list while
+  `setMapping` and `dryRun` returned the bare row, and the client replaced its state with whatever came
+  back. Every endpoint the review screen calls now returns one shape.
+- The dry run's preview columns came back in arbitrary order — `jsonb` doesn't preserve key order, which
+  put `action`, the column a reviewer reads first, in the middle.
+- "Remember this layout" couldn't be ticked when the proposed mapping was already right, because the Save
+  button was disabled on "nothing changed" — and a proposal that was right first time is the one most
+  worth saving.
+- A category named in a file but not in the catalog imported silently as no category. The dry run now
+  says which ones, since a migration whose departments don't line up otherwise produces four thousand
+  uncategorized items and no error to explain it.
+
+**Not included:** stock quantities. An item import creates and prices items but does not post inventory;
+opening counts belong in an inventory count, which has its own ledger discipline, and the import screen
+says so rather than dropping the column silently.
+
 ## Vendors, and AI reading the vendor off an invoice
 
 Second of four passes. Vendors existed as a table with ~25 columns, an API that returned nine of them,

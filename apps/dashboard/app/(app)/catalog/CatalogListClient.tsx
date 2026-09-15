@@ -5,6 +5,7 @@ import Link from "next/link";
 import { formatMinor } from "@/lib/money";
 import { formatPercent, marginPercent, retailDollars } from "@/lib/margin";
 import { bulkUpdateProductsAction, bulkSetPriceAction, addToPriceCategoryAction } from "./actions";
+import { ImportExportBar } from "../_components/ImportExportBar";
 import type { Brand, Category, TaxCategory, PriceCategory } from "@snappos/contracts";
 
 interface SearchRow {
@@ -80,7 +81,8 @@ export function CatalogListClient({
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Catalog</h1>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <ImportExportBar entity="item" query={query} />
           <Link
             href="/catalog/price-categories"
             className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-2 text-sm"

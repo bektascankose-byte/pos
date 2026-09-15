@@ -95,6 +95,25 @@ export const NAV_ENTRIES: NavEntry[] = [
     keywords: ["new product", "create item"],
     isAction: true,
   },
+  {
+    id: "imports",
+    label: "Imports",
+    href: "/imports",
+    group: "Catalog",
+    surfaces: ["setup"],
+    icon: "📥",
+    keywords: ["spreadsheet", "csv", "excel", "xlsx", "price list", "migrate", "modisoft", "bulk", "upload"],
+  },
+  {
+    id: "import-items",
+    label: "Import items",
+    href: "/imports/new?entity=item",
+    group: "Catalog",
+    surfaces: ["setup"],
+    icon: "📥",
+    keywords: ["spreadsheet", "csv", "excel", "xlsx", "price list", "migrate", "modisoft", "bulk"],
+    isAction: true,
+  },
 
   {
     id: "inventory",
@@ -172,6 +191,16 @@ export const NAV_ENTRIES: NavEntry[] = [
     surfaces: ["work"],
     icon: "👤",
     keywords: ["shopper", "phone", "account"],
+  },
+  {
+    id: "import-customers",
+    label: "Import customers",
+    href: "/imports/new?entity=customer",
+    group: "People",
+    surfaces: ["setup"],
+    icon: "📥",
+    keywords: ["spreadsheet", "csv", "excel", "xlsx", "migrate", "modisoft", "mailing list"],
+    isAction: true,
   },
   {
     id: "employees",
