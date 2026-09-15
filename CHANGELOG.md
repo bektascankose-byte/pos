@@ -2,6 +2,39 @@
 
 Notable changes. Newest first.
 
+## The catalog list, worked on rather than read
+
+Everything here is about not having to leave the row you're looking at.
+
+- **The bulk-action bar is pinned to the bottom of the screen.** It's what the checkboxes are *for*, and
+  having to scroll past a few hundred rows to reach it — then back up to see what was ticked — was the
+  complaint. `sticky` rather than `fixed`, so it still settles at the end of the page instead of covering
+  the last row forever. It also now shows how many rows are selected and disables its buttons at zero,
+  since "Apply to selected" with nothing selected did nothing and said nothing.
+- **Category, Brand and Price group dropdowns can create their own options.** Picking "+ Add new" opens a
+  dialog, and the new one is added to every dropdown and selected, without a reload — so realizing
+  halfway through tagging twenty items that the category doesn't exist yet no longer costs you the twenty
+  checkboxes.
+- **Cost, Category and Price group are now columns**, alongside the existing price and margin.
+- **Every row has Edit and Archive.** Edit opens the fields people actually correct — name, variant, SKU,
+  PLU, cost, price, category, brand — and a price change goes through the effective-dated price endpoint,
+  so it lands in the item's history exactly like one typed on its own page. Archive hides the item from
+  the catalog, search and the register while leaving its sales history intact.
+
+Three bugs found building it, two of them real:
+
+- **Creating a category never worked.** `createCategorySchema` requires a URL-safe `slug` as well as a
+  name, and the action only sent the name — so the API rejected it. The slug is now derived from the name,
+  because nobody typing "Disposable Vapes" into a dropdown should be asked to invent one.
+- **The dialog's form was nested inside the bulk-action form.** Nested forms are invalid HTML, and the
+  effect was quiet and baffling: clicking "Create" submitted the *outer* form, navigated the page, and
+  looked exactly like "the dialog closed and nothing saved". Modals now render through a portal into
+  `document.body`.
+- **One wide table made the whole document scroll sideways**, sidebar and all, because the main column is
+  a flex item and `min-width: auto` refuses to shrink below its content. `min-w-0` on that column lets
+  wide content scroll inside its own box, which is what the box was already there for. That one was
+  pre-existing; the extra columns just made it visible.
+
 ## Segments, campaigns, and a send that can't skip consent
 
 The rest of the marketing pass. Migration 0018 adds segments, campaigns, recipients and a suppression

@@ -104,9 +104,15 @@ export class CatalogService {
   async search(orgId: string, params: ProductSearch) {
     return this.db.withOrg(orgId, async (tx) => {
       const { rows } = await tx.query(
-        `SELECT v.id AS variant_id, v.sku, v.variant_name,
+        // Brand, category and price group come back as both id and name: the
+        // name is what the list shows, the id is what an edit form has to
+        // preselect in a dropdown. Fetching the row twice to get the other
+        // half is the alternative.
+        `SELECT v.id AS variant_id, v.sku, v.variant_name, v.plu,
                 p.id AS product_id, p.name AS product_name,
-                br.name AS brand_name,
+                p.brand_id, br.name AS brand_name,
+                p.category_id, cat.name AS category_name,
+                v.price_group_id, pg.name AS price_group_name,
                 v.cost::text,
                 pr.price_minor::text,
                 COALESCE(il.on_hand, 0)::text   AS on_hand,
@@ -114,6 +120,8 @@ export class CatalogService {
          FROM product_variants v
          JOIN products p ON p.id = v.product_id
          LEFT JOIN brands br ON br.id = p.brand_id
+         LEFT JOIN categories cat ON cat.id = p.category_id
+         LEFT JOIN price_groups pg ON pg.id = v.price_group_id
          LEFT JOIN inventory_levels il ON il.variant_id = v.id AND il.store_id = $2
          LEFT JOIN LATERAL (
            SELECT price_minor FROM variant_prices

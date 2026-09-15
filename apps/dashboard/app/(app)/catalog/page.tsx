@@ -2,19 +2,7 @@ import { apiFetch, ApiError } from "@/lib/api";
 import { primaryStoreId } from "@/lib/store";
 import type { Brand, Category, TaxCategory, PriceCategory } from "@snappos/contracts";
 import { CatalogListClient } from "./CatalogListClient";
-
-interface SearchRow {
-  variant_id: string;
-  sku: string;
-  variant_name: string | null;
-  product_id: string;
-  product_name: string;
-  brand_name: string | null;
-  price_minor: string | null;
-  cost: string | null;
-  on_hand: string;
-  available: string;
-}
+import type { SearchRow } from "./types";
 
 export default async function CatalogPage({
   searchParams,

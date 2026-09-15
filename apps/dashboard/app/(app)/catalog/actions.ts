@@ -520,3 +520,151 @@ export async function scanAddToPriceCategoryAction(id: string, code: string): Pr
     return { ok: false, error: e instanceof ApiError ? e.message : "Could not add that item." };
   }
 }
+
+/**
+ * Create a category, brand or price group from wherever someone happens to be
+ * standing.
+ *
+ * The three collapse into one action because they are the same shape from the
+ * caller's side — a name in, a `{ id, name }` back to drop into a dropdown —
+ * and because the alternative is three near-identical functions and three
+ * near-identical modals. The API endpoints stay separate, as they should.
+ */
+export async function createLookupAction(
+  kind: "category" | "brand" | "price_group",
+  name: string,
+): Promise<ActionResult<{ id: string; name: string }>> {
+  const trimmed = name.trim();
+  if (!trimmed) return { ok: false, error: "Give it a name first." };
+
+  const path =
+    kind === "category"
+      ? "/api/v1/catalog/categories"
+      : kind === "brand"
+        ? "/api/v1/catalog/brands"
+        : "/api/v1/catalog/price-categories";
+
+  // A category needs a URL-safe slug as well as a name, and nobody creating
+  // "Disposable Vapes" from a dropdown should be asked to invent one. Derived
+  // to match the contract's own rule: lowercase, digits and hyphens, starting
+  // with an alphanumeric. A name with nothing usable in it at all (say, all
+  // punctuation) falls back to a timestamp rather than sending an empty slug
+  // the API would reject with a message about a field the form never showed.
+  const body: Record<string, unknown> =
+    kind === "category" ? { name: trimmed, slug: slugify(trimmed) } : { name: trimmed };
+
+  try {
+    const data = await apiFetch<{ id: string; name?: string | null }>(path, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    // A price group's own `name` is nullable in the contract, so the name
+    // that was just typed is the reliable label for the new option.
+    return { ok: true, data: { id: data.id, name: data.name ?? trimmed } };
+  } catch (e) {
+    return { ok: false, error: e instanceof ApiError ? e.message : `Could not create that ${kind.replace("_", " ")}.` };
+  }
+}
+
+/**
+ * Edit one row of the catalog list, in place.
+ *
+ * Deliberately orchestrates three endpoints rather than adding a fourth that
+ * does all of it: the name and category live on the product, the SKU and cost
+ * on the variant, and a price change has to go through the effective-dated
+ * price endpoint so it lands in the item's history like any other. A combined
+ * endpoint would be a second way to change a price, which is exactly how one
+ * of them stops recording history.
+ *
+ * Each call is attempted regardless of whether the previous failed, and every
+ * failure is collected — telling someone "the price saved but the SKU didn't"
+ * is worth more than stopping at the first problem and leaving them guessing
+ * which half applied.
+ */
+export async function quickEditRowAction(
+  productId: string,
+  variantId: string,
+  formData: FormData,
+): Promise<ActionResult> {
+  const value = (key: string): string => String(formData.get(key) ?? "").trim();
+  const problems: string[] = [];
+
+  const productBody: Record<string, unknown> = {};
+  if (value("product_name")) productBody.name = value("product_name");
+  if (value("category_id")) productBody.category_id = value("category_id");
+  if (value("brand_id")) productBody.brand_id = value("brand_id");
+
+  if (Object.keys(productBody).length > 0) {
+    try {
+      await apiFetch(`/api/v1/catalog/products/${productId}`, {
+        method: "PATCH",
+        body: JSON.stringify(productBody),
+      });
+    } catch (e) {
+      problems.push(e instanceof ApiError ? e.message : "the product details");
+    }
+  }
+
+  const variantBody: Record<string, unknown> = {};
+  for (const field of ["sku", "variant_name", "plu", "cost"] as const) {
+    if (value(field)) variantBody[field] = value(field);
+  }
+  if (Object.keys(variantBody).length > 0) {
+    try {
+      await apiFetch(`/api/v1/catalog/variants/${variantId}`, {
+        method: "PATCH",
+        body: JSON.stringify(variantBody),
+      });
+    } catch (e) {
+      problems.push(e instanceof ApiError ? e.message : "the item details");
+    }
+  }
+
+  const price = parseMajorToMinor(value("price"));
+  if (value("price") && price === null) {
+    problems.push(`"${value("price")}" isn't a price`);
+  } else if (price !== null) {
+    try {
+      await apiFetch(`/api/v1/catalog/variants/${variantId}/price`, {
+        method: "POST",
+        body: JSON.stringify({ price_minor: price, store_id: await primaryStoreId() }),
+      });
+    } catch (e) {
+      problems.push(e instanceof ApiError ? e.message : "the price");
+    }
+  }
+
+  if (problems.length > 0) return { ok: false, error: problems.join("; ") };
+  return { ok: true, data: undefined };
+}
+
+/**
+ * Archive one item from the list.
+ *
+ * The variant, not the product: a list row is one sellable thing, and
+ * archiving a whole product because somebody retired one flavour of it would
+ * take the other flavours with it. Archiving never deletes — sale lines,
+ * purchase orders and invoice lines all point at this row.
+ */
+export async function archiveVariantAction(variantId: string): Promise<ActionResult> {
+  try {
+    await apiFetch(`/api/v1/catalog/variants/${variantId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status: "archived" }),
+    });
+    return { ok: true, data: undefined };
+  } catch (e) {
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not archive that item." };
+  }
+}
+
+/** A display name to the URL-safe slug `createCategorySchema` requires: lowercase, digits, hyphens, alphanumeric first. */
+function slugify(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64)
+    .replace(/-+$/, "");
+  return slug || `category-${Date.now()}`;
+}

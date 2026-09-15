@@ -4,31 +4,26 @@ import { useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { formatMinor } from "@/lib/money";
 import { formatPercent, marginPercent, retailDollars } from "@/lib/margin";
-import { bulkUpdateProductsAction, bulkSetPriceAction, addToPriceCategoryAction } from "./actions";
+import {
+  bulkUpdateProductsAction,
+  bulkSetPriceAction,
+  addToPriceCategoryAction,
+  archiveVariantAction,
+} from "./actions";
 import { ImportExportBar } from "../_components/ImportExportBar";
+import { LookupSelect, type LookupOption } from "./LookupSelect";
+import { RowEditor } from "./RowEditor";
+import type { SearchRow } from "./types";
 import type { Brand, Category, TaxCategory, PriceCategory } from "@snappos/contracts";
-
-interface SearchRow {
-  variant_id: string;
-  sku: string;
-  variant_name: string | null;
-  product_id: string;
-  product_name: string;
-  brand_name: string | null;
-  price_minor: string | null;
-  cost: string | null;
-  on_hand: string;
-  available: string;
-}
 
 export function CatalogListClient({
   initialRows,
   initialQuery,
   storeId,
-  brands,
-  categories,
+  brands: initialBrands,
+  categories: initialCategories,
   taxCategories,
-  priceCategories,
+  priceCategories: initialPriceCategories,
 }: {
   initialRows: SearchRow[];
   initialQuery: string;
@@ -41,9 +36,22 @@ export function CatalogListClient({
   const [rows, setRows] = useState(initialRows);
   const [query, setQuery] = useState(initialQuery);
   const [message, setMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null);
+  const [editing, setEditing] = useState<SearchRow | null>(null);
+  const [selectedCount, setSelectedCount] = useState(0);
   const [searchPending, startSearchTransition] = useTransition();
   const [actionPending, startActionTransition] = useTransition();
   const formRef = useRef<HTMLFormElement>(null);
+
+  // Lookups live in state so a "+ Add new" from a dropdown can put the new
+  // option into every dropdown at once, without a page reload that would
+  // throw away whatever rows are ticked.
+  const [categories, setCategories] = useState<LookupOption[]>(
+    initialCategories.map((c) => ({ id: c.id, name: c.name })),
+  );
+  const [brands, setBrands] = useState<LookupOption[]>(initialBrands.map((b) => ({ id: b.id, name: b.name })));
+  const [priceGroups, setPriceGroups] = useState<LookupOption[]>(
+    initialPriceCategories.map((c) => ({ id: c.id, name: c.name ?? "(unnamed)" })),
+  );
 
   const refreshRows = async (q: string) => {
     const params = new URLSearchParams();
@@ -56,6 +64,7 @@ export function CatalogListClient({
       return;
     }
     setRows(json.data);
+    setSelectedCount(0);
   };
 
   const handleSearch = (e: React.FormEvent) => {
@@ -77,6 +86,35 @@ export function CatalogListClient({
     });
   };
 
+  const archive = (row: SearchRow) => {
+    setMessage(null);
+    startActionTransition(async () => {
+      const result = await archiveVariantAction(row.variant_id);
+      if (result.ok) {
+        setMessage({
+          kind: "success",
+          text: `${row.product_name} archived. Past sales and receipts are untouched.`,
+        });
+        await refreshRows(query);
+      } else {
+        setMessage({ kind: "error", text: result.error });
+      }
+    });
+  };
+
+  const recountSelected = () => {
+    if (!formRef.current) return;
+    setSelectedCount(new FormData(formRef.current).getAll("row_key").length);
+  };
+
+  const toggleAll = (checked: boolean) => {
+    if (!formRef.current) return;
+    for (const box of formRef.current.querySelectorAll<HTMLInputElement>('input[name="row_key"]')) {
+      box.checked = checked;
+    }
+    recountSelected();
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
@@ -87,7 +125,7 @@ export function CatalogListClient({
             href="/catalog/price-categories"
             className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-2 text-sm"
           >
-            Price categories
+            Price groups
           </Link>
           <Link
             href="/catalog/new"
@@ -121,43 +159,86 @@ export function CatalogListClient({
       ) : null}
 
       <form ref={formRef} className="flex flex-col gap-3">
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
+        <div className="overflow-x-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
           <table className="w-full text-sm">
             <thead className="text-left text-[var(--color-text-muted)]">
               <tr>
-                <th className="w-8 px-4 py-2"></th>
-                <th className="px-4 py-2 font-normal">Product</th>
-                <th className="px-4 py-2 font-normal">Brand</th>
-                <th className="px-4 py-2 font-normal">SKU</th>
-                <th className="px-4 py-2 font-normal">Price</th>
-                <th className="px-4 py-2 font-normal">Margin</th>
-                <th className="px-4 py-2 font-normal">Available</th>
+                <th className="w-8 px-3 py-2">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all"
+                    onChange={(e) => toggleAll(e.target.checked)}
+                  />
+                </th>
+                <th className="px-3 py-2 font-normal">Product</th>
+                <th className="px-3 py-2 font-normal">Brand</th>
+                <th className="px-3 py-2 font-normal">Category</th>
+                <th className="px-3 py-2 font-normal">SKU</th>
+                <th className="px-3 py-2 text-right font-normal">Cost</th>
+                <th className="px-3 py-2 text-right font-normal">Price</th>
+                <th className="px-3 py-2 text-right font-normal">Margin</th>
+                <th className="px-3 py-2 font-normal">Price group</th>
+                <th className="px-3 py-2 text-right font-normal">Available</th>
+                <th className="px-3 py-2 font-normal"></th>
               </tr>
             </thead>
             <tbody>
               {rows.map((row) => (
                 <tr key={row.variant_id} className="border-t border-[var(--color-border)]">
-                  <td className="px-4 py-2">
-                    <input type="checkbox" name="row_key" value={`${row.product_id}:${row.variant_id}`} />
+                  <td className="px-3 py-2">
+                    <input
+                      type="checkbox"
+                      name="row_key"
+                      value={`${row.product_id}:${row.variant_id}`}
+                      onChange={recountSelected}
+                    />
                   </td>
-                  <td className="px-4 py-2">
+                  <td className="px-3 py-2">
                     <Link href={`/catalog/${row.product_id}`} className="text-[var(--color-accent)]">
                       {row.product_name}
                       {row.variant_name ? ` — ${row.variant_name}` : ""}
                     </Link>
                   </td>
-                  <td className="px-4 py-2">{row.brand_name ?? "—"}</td>
-                  <td className="px-4 py-2">{row.sku}</td>
-                  <td className="px-4 py-2">{row.price_minor !== null ? formatMinor(row.price_minor) : "—"}</td>
-                  <td className="px-4 py-2">
+                  <td className="px-3 py-2">{row.brand_name ?? "—"}</td>
+                  <td className="px-3 py-2">{row.category_name ?? "—"}</td>
+                  <td className="px-3 py-2 font-mono text-xs">{row.sku}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {row.cost && Number(row.cost) > 0 ? `$${trimDecimal(row.cost)}` : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {row.price_minor !== null ? formatMinor(row.price_minor) : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
                     <MarginCell priceMinor={row.price_minor} cost={row.cost} />
                   </td>
-                  <td className="px-4 py-2">{row.available}</td>
+                  <td className="px-3 py-2 text-[var(--color-text-muted)]">{row.price_group_name ?? "—"}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{Number(row.available)}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex justify-end gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setEditing(row)}
+                        title="Edit this item"
+                        className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        disabled={actionPending}
+                        onClick={() => archive(row)}
+                        title="Hide from the catalog, the register and search. Past sales are kept, and it can be restored."
+                        className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-error)] disabled:opacity-40"
+                      >
+                        Archive
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-6 text-center text-[var(--color-text-muted)]">
+                  <td colSpan={11} className="px-4 py-6 text-center text-[var(--color-text-muted)]">
                     {query ? `No match for "${query}".` : "No products yet."}
                   </td>
                 </tr>
@@ -166,44 +247,41 @@ export function CatalogListClient({
           </table>
         </div>
 
-        <div className="flex flex-wrap items-end gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
-          <span className="text-xs text-[var(--color-text-muted)]">Check rows above, then apply a bulk change:</span>
-          <label className="flex flex-col gap-1 text-sm">
-            Category
-            <select
-              name="bulk_category_id"
-              defaultValue=""
-              className="rounded-md border border-[var(--color-border)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
-            >
-              <option value="">Unchanged</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            Brand
-            <select
-              name="bulk_brand_id"
-              defaultValue=""
-              className="rounded-md border border-[var(--color-border)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
-            >
-              <option value="">Unchanged</option>
-              {brands.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
-          </label>
+        {/*
+          Pinned to the bottom of the screen while the list scrolls past it.
+          The bar is what the checkboxes are *for*, and having to scroll to the
+          end of a few hundred rows to reach it — then back up to see what was
+          ticked — was the complaint. `sticky` rather than `fixed` so it still
+          sits in the layout and settles at the end of the page instead of
+          covering the last row forever.
+        */}
+        <div className="sticky bottom-0 z-10 flex flex-wrap items-end gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-[0_-4px_12px_rgba(0,0,0,0.08)]">
+          <span className="text-xs text-[var(--color-text-muted)]">
+            {selectedCount > 0
+              ? `${selectedCount} selected — apply a bulk change:`
+              : "Check rows above, then apply a bulk change:"}
+          </span>
+
+          <LookupSelect
+            kind="category"
+            label="Category"
+            name="bulk_category_id"
+            options={categories}
+            onCreated={(option) => setCategories((prev) => [...prev, option])}
+          />
+          <LookupSelect
+            kind="brand"
+            label="Brand"
+            name="bulk_brand_id"
+            options={brands}
+            onCreated={(option) => setBrands((prev) => [...prev, option])}
+          />
           <label className="flex flex-col gap-1 text-sm">
             Tax category
             <select
               name="bulk_tax_category_id"
               defaultValue=""
-              className="rounded-md border border-[var(--color-border)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
+              className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
             >
               <option value="">Unchanged</option>
               {taxCategories.map((t) => (
@@ -218,7 +296,7 @@ export function CatalogListClient({
             <select
               name="bulk_status"
               defaultValue=""
-              className="rounded-md border border-[var(--color-border)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
+              className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
             >
               <option value="">Unchanged</option>
               <option value="active">Active</option>
@@ -228,9 +306,9 @@ export function CatalogListClient({
           </label>
           <button
             type="button"
-            disabled={actionPending}
+            disabled={actionPending || selectedCount === 0}
             onClick={() => runBulkAction(bulkUpdateProductsAction)}
-            className="rounded-md border border-[var(--color-border)] px-4 py-2 text-sm disabled:opacity-60"
+            className="rounded-md border border-[var(--color-border)] px-4 py-2 text-sm disabled:opacity-40"
           >
             Apply to selected
           </button>
@@ -247,40 +325,48 @@ export function CatalogListClient({
           </label>
           <button
             type="button"
-            disabled={actionPending}
+            disabled={actionPending || selectedCount === 0}
             onClick={() => runBulkAction(bulkSetPriceAction)}
-            className="rounded-md bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-[var(--color-accent-contrast)] disabled:opacity-60"
+            className="rounded-md bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-[var(--color-accent-contrast)] disabled:opacity-40"
           >
             Price selected together
           </button>
 
           <span className="mx-2 h-8 w-px bg-[var(--color-border)]" />
 
-          <label className="flex flex-col gap-1 text-sm">
-            Price category
-            <select
-              name="target_price_category_id"
-              defaultValue=""
-              className="rounded-md border border-[var(--color-border)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
-            >
-              <option value="">Choose one</option>
-              {priceCategories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name ?? "(unnamed)"}
-                </option>
-              ))}
-            </select>
-          </label>
+          <LookupSelect
+            kind="price_group"
+            label="Price group"
+            name="target_price_category_id"
+            options={priceGroups}
+            placeholder="Choose one"
+            onCreated={(option) => setPriceGroups((prev) => [...prev, option])}
+          />
           <button
             type="button"
-            disabled={actionPending}
+            disabled={actionPending || selectedCount === 0}
             onClick={() => runBulkAction(addToPriceCategoryAction)}
-            className="rounded-md border border-[var(--color-border)] px-4 py-2 text-sm disabled:opacity-60"
+            className="rounded-md border border-[var(--color-border)] px-4 py-2 text-sm disabled:opacity-40"
           >
-            Add selected to category
+            Add selected to group
           </button>
         </div>
       </form>
+
+      {editing ? (
+        <RowEditor
+          row={editing}
+          categories={initialCategories}
+          brands={initialBrands}
+          storeLabel={storeId ? "this store" : "all stores"}
+          onClose={() => setEditing(null)}
+          onSaved={async () => {
+            setEditing(null);
+            setMessage({ kind: "success", text: "Saved." });
+            await refreshRows(query);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -296,4 +382,9 @@ function MarginCell({ priceMinor, cost }: { priceMinor: string | null; cost: str
     return <span className="font-medium text-[var(--color-error)]">{formatPercent(margin)} ⚠</span>;
   }
   return <span>{formatPercent(margin)}</span>;
+}
+
+/** `numeric(14,6)` arrives as "9.850000"; four trailing zeros in a table column are noise. */
+function trimDecimal(value: string): string {
+  return value.includes(".") ? value.replace(/0+$/, "").replace(/\.$/, "") : value;
 }
