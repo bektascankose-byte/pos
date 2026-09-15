@@ -2,6 +2,47 @@
 
 Notable changes. Newest first.
 
+## Navigation shell: grouped sidebar, launcher grid, Ctrl+K palette
+
+First of four passes prompted by screenshots of Modisoft, the back office this shop uses today, with the
+direction "make menus, functions, UI/UX similar to this but more useful, smart and user friendly." Asked
+which piece to start with, the answer was all of them; asked whether to keep our sidebar or adopt their
+launcher grid, the answer was both. The remaining three passes -- deeper item page, case-cost/margin math,
+an actionable dashboard -- are sequenced behind this one.
+
+Until now the back office had a flat ten-link sidebar with no search, no recents, no favorites, and not
+even an active-page highlight.
+
+- **One registry, three surfaces** (`lib/navigation.ts`). Every destination declares its label, href,
+  sidebar group, launcher surface(s), icon and search keywords in one place. Shipping two navigation
+  systems invites exactly one failure -- a page added to one and missed by the others -- and a single
+  source is what prevents it. `activeEntry()` resolves the current page by longest matching href, so
+  `/catalog/<id>` highlights Items and `/inventory/purchase-orders` highlights Purchase Orders rather
+  than Stock on hand.
+- **Sidebar** (`_components/AppNav.tsx`): grouped into Overview / Catalog / Inventory / Purchasing /
+  People / Marketing, with the active page highlighted, a ☆ per row that pins it to a Pinned section at
+  the top (and removes it from its group, rather than showing it twice), and Recent at the bottom
+  excluding the page being looked at.
+- **Launcher** (`_components/Launcher.tsx`): the 9-dot button opens their tile-grid pattern with
+  All / Reports / Setup tabs, a filter box and Recent View.
+- **Command palette** (`_components/CommandPalette.tsx`): ⌘K/Ctrl+K, arrow keys, Enter, Esc. This is the
+  part that goes past the original -- Modisoft's search filters menu tiles, this searches the menu *and*
+  real records: items via the existing `/catalog/products?q=` and customers via `/customers?q=`, fanned
+  out by a `searchEverythingAction` Server Action so tokens stay in their httpOnly cookies. Menu matches
+  are computed locally so they appear on the first keystroke instead of after a round trip; record search
+  is debounced 180ms. One endpoint failing (a permission the signed-in role lacks) returns that half
+  empty rather than blanking the results.
+- **Pins and recents** (`_components/nav-state.ts`): `localStorage`, read only after mount so there's no
+  hydration mismatch, every accessor guarded since a private window throws rather than returning null.
+  Per-browser rather than per-user is deliberate for one shop on a couple of machines; moving to a
+  per-user endpoint later touches only that file.
+
+Verified live: the whole palette flow keyboard-only (Ctrl+K, type `geek`, arrow, Enter → the product
+page); `invoice` returning the Invoices page plus the Upload-an-invoice action; the launcher's Setup tab
+narrowing to the five setup pages; pinning surviving a full reload; recents filling in across navigation.
+A fresh tab loads with zero console output -- no hydration warnings. The 9-dot button was enlarged after
+its original hit area proved too small to click reliably.
+
 ## Item Lookup page, and the missing half of carton→item mapping
 
 Two asks: a menu option to add or check a single item, and "something like carton-item mapping" --

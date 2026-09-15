@@ -1,47 +1,13 @@
-import Link from "next/link";
 import { getSession } from "@/lib/session";
 import { logoutAction } from "../login/actions";
+import { AppNav } from "./_components/AppNav";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
 
   return (
     <div className="flex min-h-screen">
-      <aside className="w-56 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface)] p-4">
-        <div className="mb-6 text-lg font-semibold">SnapPOS</div>
-        <nav className="flex flex-col gap-1 text-sm">
-          <Link href="/" className="rounded-md px-3 py-2 hover:bg-[var(--color-bg)]">
-            Dashboard
-          </Link>
-          <Link href="/reports" className="rounded-md px-3 py-2 hover:bg-[var(--color-bg)]">
-            Reports
-          </Link>
-          <Link href="/customers" className="rounded-md px-3 py-2 hover:bg-[var(--color-bg)]">
-            Customers
-          </Link>
-          <Link href="/catalog" className="rounded-md px-3 py-2 hover:bg-[var(--color-bg)]">
-            Catalog
-          </Link>
-          <Link href="/items" className="rounded-md px-3 py-2 hover:bg-[var(--color-bg)]">
-            Item Lookup
-          </Link>
-          <Link href="/inventory" className="rounded-md px-3 py-2 hover:bg-[var(--color-bg)]">
-            Inventory
-          </Link>
-          <Link href="/invoice-imports" className="rounded-md px-3 py-2 hover:bg-[var(--color-bg)]">
-            Invoices
-          </Link>
-          <Link href="/employees" className="rounded-md px-3 py-2 hover:bg-[var(--color-bg)]">
-            Employees
-          </Link>
-          <Link href="/scheduling" className="rounded-md px-3 py-2 hover:bg-[var(--color-bg)]">
-            Scheduling
-          </Link>
-          <Link href="/loyalty" className="rounded-md px-3 py-2 hover:bg-[var(--color-bg)]">
-            Loyalty
-          </Link>
-        </nav>
-      </aside>
+      <AppNav />
       <div className="flex flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface)] px-6 py-3">
           <div className="text-sm text-[var(--color-text-muted)]">
