@@ -2,7 +2,7 @@
 
 import { useRef, useState, useTransition } from "react";
 import Link from "next/link";
-import { formatMinor } from "@/lib/money";
+import { formatMinor, minorToMajor } from "@/lib/money";
 import { createProductAction } from "../catalog/actions";
 import {
   lookupItemAction,
@@ -14,7 +14,7 @@ import {
   type SearchHit,
   type StockByVariant,
 } from "./actions";
-import type { Brand, Category, Variant } from "@snappos/contracts";
+import type { Brand, Category, ReferenceProduct, Variant } from "@snappos/contracts";
 
 export function ItemLookupClient({
   brands,
@@ -88,7 +88,7 @@ export function ItemLookupClient({
       <div>
         <h1 className="text-xl font-semibold">Item lookup</h1>
         <p className="text-sm text-[var(--color-text-muted)]">
-          Scan anything — a unit barcode, a carton code, or a SKU — to see what it is. Nothing on file
+          Scan anything — a unit barcode or a carton code — to see what it is. Nothing on file
           for it? Add it right here.
         </p>
       </div>
@@ -156,7 +156,7 @@ export function ItemLookupClient({
                     {hit.product_name}
                     {hit.variant_name ? ` | ${hit.variant_name}` : ""}
                     <span className="block text-xs text-[var(--color-text-muted)]">
-                      {hit.brand_name ? `${hit.brand_name} · ` : ""}SKU {hit.sku}
+                      {hit.brand_name ? `${hit.brand_name} · ` : ""}UPC {hit.sku}
                     </span>
                   </span>
                   <span className="text-xs text-[var(--color-text-muted)]">
@@ -172,6 +172,7 @@ export function ItemLookupClient({
       {result?.kind === "none" ? (
         <CreateItemForm
           code={searchedFor}
+          reference={result.reference}
           brands={brands}
           categories={categories}
           storeId={storeId}
@@ -261,7 +262,7 @@ function VariantPanel({
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <div className="text-sm font-medium">
           {variant.variant_name ?? "Single item"}
-          <span className="ml-2 text-xs font-normal text-[var(--color-text-muted)]">SKU {variant.sku}</span>
+          <span className="ml-2 text-xs font-normal text-[var(--color-text-muted)]">UPC {variant.sku}</span>
         </div>
         <div className="text-xs text-[var(--color-text-muted)]">
           {variant.price_minor !== undefined && variant.price_minor !== null
@@ -394,12 +395,14 @@ function VariantPanel({
 
 function CreateItemForm({
   code,
+  reference,
   brands,
   categories,
   storeId,
   onCreated,
 }: {
   code: string;
+  reference: ReferenceProduct | null;
   brands: Brand[];
   categories: Category[];
   storeId: string | null;
@@ -408,11 +411,31 @@ function CreateItemForm({
   const [pending, startTransition] = useTransition();
   const [formError, setFormError] = useState<string | null>(null);
 
+  // The old system's department is matched to a category by name. Only an
+  // exact name match counts: a near miss silently filing an item under the
+  // wrong category is worse than leaving the field blank for a human.
+  const matchedCategory = reference?.department
+    ? categories.find((c) => c.name.toLowerCase() === reference.department!.toLowerCase())
+    : undefined;
+
   return (
     <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
       <h2 className="text-sm font-medium">
-        Nothing on file for <span className="font-mono">{code}</span> — add it
+        {reference ? "Not in your catalog yet" : "Nothing on file for"}{" "}
+        <span className="font-mono">{code}</span> — add it
       </h2>
+
+      {reference ? (
+        <p className="mt-2 rounded-md bg-[var(--color-bg)] px-3 py-2 text-xs text-[var(--color-text-muted)]">
+          Filled in from your Modisoft item file
+          {reference.department ? ` (${reference.department})` : ""}
+          {reference.source_quantity && Number(reference.source_quantity) !== 0
+            ? ` — it last showed ${Number(reference.source_quantity)} on hand there`
+            : ""}
+          . Check it before saving; nothing has been created yet.
+        </p>
+      ) : null}
+
       {formError ? <p className="mt-2 text-xs text-[var(--color-error)]">{formError}</p> : null}
       <form
         className="mt-3 flex flex-wrap items-end gap-3"
@@ -432,9 +455,27 @@ function CreateItemForm({
             that just missed becomes both -- scanning it again finds this item. */}
         <input type="hidden" name="sku" value={code} />
         <input type="hidden" name="barcode" value={code} />
-        <Field label="Name" name="name" required className="w-64" />
-        <Field label="Price" name="price" placeholder="9.99" className="w-24" />
-        <Field label="Cost" name="cost" placeholder="0" className="w-24" />
+        <Field
+          label="Name"
+          name="name"
+          required
+          className="w-64"
+          defaultValue={reference?.description ?? ""}
+        />
+        <Field
+          label="Price"
+          name="price"
+          placeholder="9.99"
+          className="w-24"
+          defaultValue={reference?.retail_minor ? minorToMajor(String(reference.retail_minor)) : ""}
+        />
+        <Field
+          label="Cost"
+          name="cost"
+          placeholder="0"
+          className="w-24"
+          defaultValue={reference?.cost ? trimCost(reference.cost) : ""}
+        />
         <label className="flex w-40 flex-col gap-1 text-xs text-[var(--color-text-muted)]">
           Brand
           <select
@@ -454,7 +495,8 @@ function CreateItemForm({
           Category
           <select
             name="category_id"
-            defaultValue=""
+            key={matchedCategory?.id ?? ""}
+            defaultValue={matchedCategory?.id ?? ""}
             className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
           >
             <option value="">None</option>
@@ -483,12 +525,14 @@ function Field({
   placeholder,
   required,
   className,
+  defaultValue,
 }: {
   label: string;
   name: string;
   placeholder?: string;
   required?: boolean;
   className?: string;
+  defaultValue?: string;
 }) {
   return (
     <label className={`flex flex-col gap-1 text-xs text-[var(--color-text-muted)] ${className ?? ""}`}>
@@ -497,8 +541,22 @@ function Field({
         name={name}
         placeholder={placeholder}
         required={required}
+        // Keyed on the value so a second scan re-fills the box: `defaultValue`
+        // is only read when the input first mounts, and without this the form
+        // would keep showing the first item's details for every later scan.
+        key={defaultValue ?? ""}
+        defaultValue={defaultValue ?? ""}
         className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
       />
     </label>
   );
+}
+
+/**
+ * Cost is `numeric(14,6)`, so it arrives as "3.500000". Trailing zeroes are
+ * exact but unreadable in a form field; the value is trimmed as text, never
+ * by parsing it as a float.
+ */
+function trimCost(cost: string): string {
+  return cost.includes(".") ? cost.replace(/0+$/, "").replace(/\.$/, "") : cost;
 }

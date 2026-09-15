@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { createProductForLineAction } from "../actions";
+import { useEffect, useState, useTransition } from "react";
+import { createProductForLineAction, referenceForCodeAction } from "../actions";
 import { Modal } from "../../_components/Modal";
 import { LookupSelect, type LookupOption } from "../../catalog/LookupSelect";
 import type { ReceivingLine, ReceivingSession } from "@snappos/contracts";
@@ -51,8 +51,26 @@ export function IdentifyLine({
   const [price, setPrice] = useState("");
   const [cost, setCost] = useState("");
   const [priceFromGroup, setPriceFromGroup] = useState<string | null>(null);
+  const [fromReference, setFromReference] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+
+  // Ask the reference catalog what this code is, once, when the form opens.
+  // Only ever fills blanks: `cancelled` guards the case where someone starts
+  // typing before the lookup returns, which would otherwise overwrite them.
+  useEffect(() => {
+    let cancelled = false;
+    void referenceForCodeAction(line.scanned_code).then((known) => {
+      if (cancelled || !known) return;
+      setFromReference(true);
+      setName((current) => current || known.name);
+      setPrice((current) => current || known.price);
+      setCost((current) => current || known.cost);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [line.scanned_code]);
 
   /**
    * Picking a group fills the price box from it, visibly, rather than leaving
@@ -108,6 +126,12 @@ export function IdentifyLine({
         }}
       >
         {error ? <p className="text-sm text-[var(--color-error)]">{error}</p> : null}
+
+        {fromReference ? (
+          <p className="rounded-md bg-[var(--color-bg)] px-3 py-2 text-xs text-[var(--color-text-muted)]">
+            Filled in from your old system&apos;s item file — check it before saving.
+          </p>
+        ) : null}
 
         <label className="flex flex-col gap-1 text-sm">
           Name
@@ -188,7 +212,7 @@ export function IdentifyLine({
         </div>
 
         <p className="text-xs text-[var(--color-text-muted)]">
-          <span className="font-mono">{line.scanned_code}</span> becomes its SKU and its scannable
+          <span className="font-mono">{line.scanned_code}</span> becomes its UPC and its scannable
           barcode.
         </p>
 

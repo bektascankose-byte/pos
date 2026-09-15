@@ -3,9 +3,9 @@
 import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/api";
-import { parseMajorToMinor } from "@/lib/money";
+import { minorToMajor, parseMajorToMinor } from "@/lib/money";
 import type { ActionResult } from "@/lib/action-result";
-import type { ReceivingSession, ReceivingMatch } from "@snappos/contracts";
+import type { ReceivingSession, ReceivingMatch, ReferenceProduct } from "@snappos/contracts";
 
 export async function createSessionAction(formData: FormData): Promise<void> {
   const body: Record<string, unknown> = { store_id: String(formData.get("store_id") ?? "") };
@@ -108,6 +108,37 @@ export async function removeLineAction(id: string, lineId: string): Promise<Acti
     return { ok: true, data };
   } catch (e) {
     return { ok: false, error: e instanceof ApiError ? e.message : "Could not remove that line." };
+  }
+}
+
+/**
+ * What the old system knew about a code the catalog doesn't.
+ *
+ * Standing over a box is exactly where retyping a name off packaging is most
+ * annoying and most error-prone, so a code that turns up in the reference
+ * file arrives with its name, price and cost already filled in. Never allowed
+ * to fail the thing it decorates -- a shop that never imported a reference
+ * file simply gets an empty form, which is the normal case.
+ */
+export async function referenceForCodeAction(
+  code: string,
+): Promise<{ name: string; price: string; cost: string } | null> {
+  const trimmed = code.trim();
+  if (!trimmed) return null;
+
+  try {
+    const found = await apiFetch<{ match: ReferenceProduct | null }>(
+      `/api/v1/reference/lookup/${encodeURIComponent(trimmed)}`,
+    );
+    if (!found.match) return null;
+    return {
+      name: found.match.description ?? "",
+      price: found.match.retail_minor ? minorToMajor(String(found.match.retail_minor)) : "",
+      // Cost is numeric(14,6), so "3.500000" needs trimming as text.
+      cost: found.match.cost ? found.match.cost.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "") : "",
+    };
+  } catch {
+    return null;
   }
 }
 

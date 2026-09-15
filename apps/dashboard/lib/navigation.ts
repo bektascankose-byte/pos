@@ -96,6 +96,15 @@ export const NAV_ENTRIES: NavEntry[] = [
     isAction: true,
   },
   {
+    id: "reference",
+    label: "Known Products",
+    href: "/catalog/reference",
+    group: "Catalog",
+    surfaces: ["setup"],
+    icon: "📚",
+    keywords: ["reference", "modisoft", "lookup", "old system", "not stocked", "legacy", "barcode"],
+  },
+  {
     id: "imports",
     label: "Imports",
     href: "/imports",

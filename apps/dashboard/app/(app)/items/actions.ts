@@ -2,7 +2,7 @@
 
 import { apiFetch, ApiError } from "@/lib/api";
 import type { ActionResult } from "@/lib/action-result";
-import type { Product } from "@snappos/contracts";
+import type { Product, ReferenceProduct } from "@snappos/contracts";
 
 export interface SearchHit {
   variant_id: string;
@@ -39,11 +39,16 @@ export interface ItemDetail {
  * barcode, a carton code, or its SKU -- `GET catalog/resolve/:code` checks all
  * of them), or it doesn't and the text is worth searching by name, or nothing
  * matches at all and the page offers to create it.
+ *
+ * The last case carries whatever the reference catalog knows about the code.
+ * That is the whole reason the old system's item file was kept: a code this
+ * catalog has never seen is usually not a new product in the world, only new
+ * *here*, and its name, price and cost are already on record.
  */
 export type LookupResult =
   | { kind: "item"; item: ItemDetail; matchedVariantId: string; matchedKind: string | null; matchedUnits: string | null }
   | { kind: "matches"; hits: SearchHit[] }
-  | { kind: "none" };
+  | { kind: "none"; reference: ReferenceProduct | null };
 
 export async function lookupItemAction(code: string, storeId: string | null): Promise<ActionResult<LookupResult>> {
   const trimmed = code.trim();
@@ -76,9 +81,29 @@ export async function lookupItemAction(code: string, storeId: string | null): Pr
     if (search.data.length > 0) {
       return { ok: true, data: { kind: "matches", hits: search.data } };
     }
-    return { ok: true, data: { kind: "none" } };
+
+    return { ok: true, data: { kind: "none", reference: await lookupReference(trimmed) } };
   } catch (e) {
     return { ok: false, error: e instanceof ApiError ? e.message : "Could not look that code up." };
+  }
+}
+
+/**
+ * What the old system knew about a code this catalog doesn't.
+ *
+ * Never allowed to fail the lookup it decorates: a reference miss, or the
+ * whole reference catalog being empty, is the normal case for a shop that
+ * never imported one. The scan still has to end in "nothing on file — add
+ * it", which is a perfectly good answer.
+ */
+async function lookupReference(code: string): Promise<ReferenceProduct | null> {
+  try {
+    const found = await apiFetch<{ match: ReferenceProduct | null }>(
+      `/api/v1/reference/lookup/${encodeURIComponent(code)}`,
+    );
+    return found.match;
+  } catch {
+    return null;
   }
 }
 

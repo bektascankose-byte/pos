@@ -81,7 +81,20 @@ export function Modal({
         e.stopPropagation();
         if (e.target === ref.current) onClose();
       }}
-      onKeyDown={(e) => e.stopPropagation()}
+      /*
+       * Escape is handled here rather than left to `onCancel` above, because
+       * the `stopPropagation` that follows suppresses it: the browser's own
+       * "Escape closes a dialog" is driven by this very keydown, so stopping
+       * it stopped that too, and the dialog could only be dismissed by mouse.
+       * Closing explicitly restores it without reopening the boundary.
+       */
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onClose();
+        }
+        e.stopPropagation();
+      }}
       className="w-[min(32rem,calc(100vw-2rem))] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-0 text-[var(--color-text)] backdrop:bg-black/40"
     >
       <div className="flex flex-col gap-4 p-5">
