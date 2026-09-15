@@ -11,6 +11,7 @@ import {
   createProductForLineAction,
   addSecondaryBarcodeAction,
 } from "../actions";
+import { suggestVariantsAction } from "../../catalog/actions";
 import type { InvoiceImport, InvoiceImportLine, Category } from "@snappos/contracts";
 import type { ActionResult } from "@/lib/action-result";
 
@@ -207,11 +208,54 @@ function LineRow({
   const [ignorePending, startIgnoreTransition] = useTransition();
   const [barcodePending, startBarcodeTransition] = useTransition();
   const [createPending, startCreateTransition] = useTransition();
+  const [suggestPending, startSuggestTransition] = useTransition();
   const [rowError, setRowError] = useState<string | null>(null);
-  const [extraRows, setExtraRows] = useState(0);
+  const [existingProductId, setExistingProductId] = useState("");
+  const [startingPrice, setStartingPrice] = useState("");
+  const [variantRows, setVariantRows] = useState<{ id: number; prefillVariantName: string }[]>([
+    { id: 0, prefillVariantName: "" },
+  ]);
+  const nextRowId = useRef(1);
+  const [suggestions, setSuggestions] = useState<string[] | null>(null);
+  const [checkedSuggestions, setCheckedSuggestions] = useState<Set<string>>(new Set());
+  const [suggestError, setSuggestError] = useState<string | null>(null);
+  const productNameRef = useRef<HTMLInputElement>(null);
+  const brandRef = useRef<HTMLInputElement>(null);
 
   const defaultVariantId = line.resolved_variant_id ?? line.ai_suggested_variant_id ?? "";
   const suggestedName = line.ai_suggested_product_description ?? line.parsed_description ?? "";
+
+  const addVariantRow = (prefillVariantName = "") => {
+    setVariantRows((prev) => [...prev, { id: nextRowId.current++, prefillVariantName }]);
+  };
+  const removeVariantRow = (id: number) => {
+    setVariantRows((prev) => (prev.length > 1 ? prev.filter((r) => r.id !== id) : prev));
+  };
+
+  const handleSuggestVariants = () => {
+    setSuggestError(null);
+    const productName = existingProductId
+      ? (products.find((p) => p.product_id === existingProductId)?.product_name ?? "")
+      : (productNameRef.current?.value.trim() ?? "");
+    startSuggestTransition(async () => {
+      const result = await suggestVariantsAction(productName, brandRef.current?.value);
+      if (result.ok) {
+        setSuggestions(result.data.variants);
+        setCheckedSuggestions(new Set());
+      } else {
+        setSuggestError(result.error);
+      }
+    });
+  };
+
+  const handleAddCheckedSuggestions = () => {
+    setVariantRows((prev) => [
+      ...prev,
+      ...Array.from(checkedSuggestions, (name) => ({ id: nextRowId.current++, prefillVariantName: name })),
+    ]);
+    setSuggestions((prev) => prev?.filter((s) => !checkedSuggestions.has(s)) ?? null);
+    setCheckedSuggestions(new Set());
+  };
 
   return (
     <tr className="border-t border-[var(--color-border)] align-top">
@@ -227,7 +271,7 @@ function LineRow({
         {line.ai_suggested_product_name ? (
           <>
             {line.ai_suggested_product_name}
-            {line.ai_suggested_variant_name ? ` — ${line.ai_suggested_variant_name}` : ""}
+            {line.ai_suggested_variant_name ? ` | ${line.ai_suggested_variant_name}` : ""}
             <span className="block text-xs text-[var(--color-text-muted)]">
               {line.ai_confidence !== null ? `${Math.round(line.ai_confidence * 100)}% confidence` : ""}
             </span>
@@ -254,7 +298,7 @@ function LineRow({
           {(line.status === "matched" || line.status === "new_product") && line.resolved_product_name ? (
             <span className="block text-[var(--color-text-muted)]">
               → {line.resolved_product_name}
-              {line.resolved_variant_name ? ` — ${line.resolved_variant_name}` : ""}
+              {line.resolved_variant_name ? ` | ${line.resolved_variant_name}` : ""}
             </span>
           ) : null}
           {line.status === "split" ? (
@@ -265,46 +309,254 @@ function LineRow({
         {rowError ? <p className="mb-2 text-xs text-[var(--color-error)]">{rowError}</p> : null}
 
         {editable && line.status !== "split" ? (
-          <div className="flex flex-col gap-3">
-            <form
-              className="flex flex-col gap-1"
-              onSubmit={(e) => {
-                e.preventDefault();
-                setRowError(null);
-                const formData = new FormData(e.currentTarget);
-                startResolveTransition(async () => {
-                  const result = await resolveLineAction(importId, line.id, formData);
-                  if (result.ok) await onChanged();
-                  else setRowError(result.error);
-                });
-              }}
-            >
-              <select
-                key={defaultVariantId}
-                name="variant_id"
-                defaultValue={defaultVariantId}
-                className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs outline-none focus:border-[var(--color-accent)]"
-              >
-                <option value="">— pick a variant —</option>
-                {variants.map((v) => (
-                  <option key={v.variant_id} value={v.variant_id}>
-                    {v.product_name}
-                    {v.variant_name ? ` — ${v.variant_name}` : ""} ({v.sku})
-                  </option>
-                ))}
-              </select>
-              <label className="flex items-center gap-1 text-xs text-[var(--color-text-muted)]">
-                <input type="checkbox" name="is_new_product" />
-                just created this variant for this line
-              </label>
-              <button
-                type="submit"
-                disabled={resolvePending}
-                className="self-start rounded-md bg-[var(--color-accent)] px-3 py-1 text-xs font-medium text-[var(--color-accent-contrast)] disabled:opacity-60"
-              >
-                {resolvePending ? "Resolving..." : "Resolve"}
-              </button>
-            </form>
+          <div className="flex w-[30rem] max-w-full flex-col gap-3">
+            {line.ai_suggested_variant_id ? (
+              <ResolveForm
+                importId={importId}
+                line={line}
+                variants={variants}
+                defaultVariantId={defaultVariantId}
+                pending={resolvePending}
+                startTransition={startResolveTransition}
+                setRowError={setRowError}
+                onChanged={onChanged}
+              />
+            ) : (
+              <>
+                <div className="rounded-md border border-[var(--color-border)] p-3">
+                  <p className="mb-2 text-xs font-medium text-[var(--color-text-muted)]">
+                    Create or attach a product
+                  </p>
+                  <form
+                    // Remounts (re-baselining every defaultValue below)
+                    // whenever THIS line's own AI suggestion changes -- e.g.
+                    // right after "Find matches" fills in a description/brand
+                    // that wasn't there when this form first mounted.
+                    // `defaultValue` only applies at mount time, so without
+                    // this key an already-mounted input would keep showing
+                    // its stale initial value forever. State declared on
+                    // `LineRow` itself (existingProductId, variantRows,
+                    // startingPrice) lives outside this remount boundary and
+                    // survives it -- only the uncontrolled field values reset.
+                    key={`${suggestedName}|${line.ai_suggested_brand ?? ""}`}
+                    className="flex flex-col gap-3"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      setRowError(null);
+                      const formData = new FormData(e.currentTarget);
+                      const rowCount = variantRows.length;
+                      startCreateTransition(async () => {
+                        const result = await createProductForLineAction(importId, line.id, formData, rowCount);
+                        if (result.ok) {
+                          setVariantRows([{ id: 0, prefillVariantName: "" }]);
+                          nextRowId.current = 1;
+                          setSuggestions(null);
+                          setExistingProductId("");
+                          setStartingPrice("");
+                          await onChanged();
+                        } else {
+                          setRowError(result.error);
+                        }
+                      });
+                    }}
+                  >
+                    <label className="flex flex-col gap-1 text-xs">
+                      Attach to an existing product instead (optional)
+                      <select
+                        name="existing_product_id"
+                        value={existingProductId}
+                        onChange={(e) => setExistingProductId(e.target.value)}
+                        className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs outline-none focus:border-[var(--color-accent)]"
+                      >
+                        <option value="">— new product —</option>
+                        {products.map((p) => (
+                          <option key={p.product_id} value={p.product_id}>
+                            {p.product_name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    {!existingProductId ? (
+                      <div className="flex flex-wrap items-end gap-2">
+                        <div className="w-40">
+                          <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+                            Product name
+                            <input
+                              ref={productNameRef}
+                              name="product_name"
+                              defaultValue={suggestedName}
+                              className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
+                            />
+                          </label>
+                        </div>
+                        <div className="w-32">
+                          <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+                            Brand
+                            <input
+                              ref={brandRef}
+                              name="brand_name"
+                              defaultValue={line.ai_suggested_brand ?? ""}
+                              className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
+                            />
+                          </label>
+                        </div>
+                        <div className="w-32">
+                          <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+                            Category
+                            <select
+                              name="category_id"
+                              defaultValue=""
+                              className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
+                            >
+                              <option value="">None</option>
+                              {categories.map((c) => (
+                                <option key={c.id} value={c.id}>
+                                  {c.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                        <div className="w-28">
+                          <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+                            Starting price
+                            <input
+                              name="starting_price"
+                              placeholder="24.99"
+                              value={startingPrice}
+                              onChange={(e) => setStartingPrice(e.target.value)}
+                              className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div>
+                      <button
+                        type="button"
+                        disabled={suggestPending}
+                        onClick={handleSuggestVariants}
+                        className="text-xs text-[var(--color-accent)] underline disabled:opacity-60"
+                      >
+                        {suggestPending ? "Searching..." : "✨ Suggest variants with AI"}
+                      </button>
+                      {suggestError ? <p className="mt-1 text-xs text-[var(--color-error)]">{suggestError}</p> : null}
+                      {suggestions && suggestions.length > 0 ? (
+                        <div className="mt-2 flex flex-col gap-2 rounded-md border border-dashed border-[var(--color-border)] p-2">
+                          <div className="flex flex-wrap gap-2">
+                            {suggestions.map((name) => (
+                              <label
+                                key={name}
+                                className="flex items-center gap-1 rounded-full border border-[var(--color-border)] px-2 py-1 text-xs"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checkedSuggestions.has(name)}
+                                  onChange={(e) => {
+                                    setCheckedSuggestions((prev) => {
+                                      const next = new Set(prev);
+                                      if (e.target.checked) next.add(name);
+                                      else next.delete(name);
+                                      return next;
+                                    });
+                                  }}
+                                />
+                                {name}
+                              </label>
+                            ))}
+                          </div>
+                          <button
+                            type="button"
+                            disabled={checkedSuggestions.size === 0}
+                            onClick={handleAddCheckedSuggestions}
+                            className="self-start rounded-md border border-[var(--color-border)] px-2 py-1 text-xs disabled:opacity-40"
+                          >
+                            Add checked as variants
+                          </button>
+                        </div>
+                      ) : suggestions ? (
+                        <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+                          No known variants found — add rows manually below.
+                        </p>
+                      ) : null}
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                      {variantRows.map((row, i) => (
+                        <div
+                          key={row.id}
+                          className="flex flex-wrap items-end gap-2 border-l-2 border-[var(--color-border)] pl-3"
+                        >
+                          <div className="w-32">
+                            <MiniField label="SKU / UPC" name={`sku_${i}`} required={i === 0} />
+                          </div>
+                          <div className="w-32">
+                            <MiniField
+                              label={i === 0 ? "Variant name (blank if none)" : "Variant name"}
+                              name={`variant_name_${i}`}
+                              defaultValue={row.prefillVariantName}
+                            />
+                          </div>
+                          <div className="w-24">
+                            <MiniField
+                              label="Price"
+                              name={`price_${i}`}
+                              placeholder={startingPrice || "same as above"}
+                            />
+                          </div>
+                          {variantRows.length > 1 ? (
+                            <button
+                              type="button"
+                              onClick={() => removeVariantRow(row.id)}
+                              title="Remove this variant"
+                              className="mb-1.5 text-xs text-[var(--color-text-muted)]"
+                            >
+                              ✕
+                            </button>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => addVariantRow()}
+                      className="self-start text-xs text-[var(--color-accent)] underline"
+                    >
+                      + Add another variant
+                    </button>
+
+                    <button
+                      type="submit"
+                      disabled={createPending}
+                      className="mt-1 self-start rounded-md bg-[var(--color-accent)] px-3 py-1 text-xs font-medium text-[var(--color-accent-contrast)] disabled:opacity-60"
+                    >
+                      {createPending ? "Saving..." : "Create / attach product"}
+                    </button>
+                  </form>
+                </div>
+
+                <details className="rounded-md border border-[var(--color-border)] p-2 text-xs">
+                  <summary className="cursor-pointer text-[var(--color-text-muted)]">
+                    Already have this in your catalog? Link it directly
+                  </summary>
+                  <div className="mt-2">
+                    <ResolveForm
+                      importId={importId}
+                      line={line}
+                      variants={variants}
+                      defaultVariantId={defaultVariantId}
+                      pending={resolvePending}
+                      startTransition={startResolveTransition}
+                      setRowError={setRowError}
+                      onChanged={onChanged}
+                    />
+                  </div>
+                </details>
+              </>
+            )}
+
             <div className="flex gap-2">
               <button
                 type="button"
@@ -340,122 +592,72 @@ function LineRow({
                 </button>
               ) : null}
             </div>
-
-            {!line.ai_suggested_variant_id ? (
-              <div className="rounded-md border border-[var(--color-border)] p-3">
-                <p className="mb-2 text-xs font-medium text-[var(--color-text-muted)]">
-                  Create or attach a product
-                </p>
-                <form
-                  // Remounts (re-baselining every defaultValue below, including
-                  // the extra-variant rows) whenever THIS line's own AI
-                  // suggestion changes -- e.g. right after "Find matches" fills
-                  // in a description/brand that wasn't there when this form
-                  // first mounted. `defaultValue` only applies at mount time,
-                  // so without this key an already-mounted input would keep
-                  // showing its stale initial value forever. Unrelated
-                  // refreshes (resolving a different line) don't change this
-                  // line's own suggestion fields, so the key stays put and
-                  // in-progress typing here survives them.
-                  key={`${suggestedName}|${line.ai_suggested_brand ?? ""}`}
-                  className="flex flex-col gap-2"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    setRowError(null);
-                    const formData = new FormData(e.currentTarget);
-                    startCreateTransition(async () => {
-                      const result = await createProductForLineAction(importId, line.id, formData, extraRows);
-                      if (result.ok) {
-                        setExtraRows(0);
-                        await onChanged();
-                      } else {
-                        setRowError(result.error);
-                      }
-                    });
-                  }}
-                >
-                  <label className="flex flex-col gap-1 text-xs">
-                    Attach to an existing product instead (optional)
-                    <select
-                      name="existing_product_id"
-                      defaultValue=""
-                      className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs outline-none focus:border-[var(--color-accent)]"
-                    >
-                      <option value="">— new product —</option>
-                      {products.map((p) => (
-                        <option key={p.product_id} value={p.product_id}>
-                          {p.product_name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <MiniField label="SKU / UPC" name="sku" required />
-                    <MiniField label="Retail price" name="price" placeholder="24.99" />
-                  </div>
-                  <MiniField
-                    label="Product name (ignored if attaching to an existing product above)"
-                    name="product_name"
-                    defaultValue={suggestedName}
-                  />
-                  <div className="grid grid-cols-2 gap-2">
-                    <MiniField label="Variant name (e.g. flavor — blank if none)" name="variant_name" />
-                    <MiniField
-                      label="Brand (ignored if attaching above)"
-                      name="brand_name"
-                      defaultValue={line.ai_suggested_brand ?? ""}
-                    />
-                  </div>
-                  <label className="flex flex-col gap-1 text-xs">
-                    Category (ignored if attaching above)
-                    <select
-                      name="category_id"
-                      defaultValue=""
-                      className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs outline-none focus:border-[var(--color-accent)]"
-                    >
-                      <option value="">None</option>
-                      {categories.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  {extraRows > 0 ? (
-                    <p className="mt-1 text-xs text-[var(--color-text-muted)]">
-                      More flavors/sizes of the same product:
-                    </p>
-                  ) : null}
-                  {Array.from({ length: extraRows }, (_, i) => (
-                    <div key={i} className="grid grid-cols-3 gap-2">
-                      <MiniField label="SKU / UPC" name={`extra_sku_${i}`} />
-                      <MiniField label="Variant name" name={`extra_variant_name_${i}`} />
-                      <MiniField label="Price (blank = same as above)" name={`extra_price_${i}`} />
-                    </div>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() => setExtraRows((n) => n + 1)}
-                    className="self-start text-xs text-[var(--color-accent)] underline"
-                  >
-                    + Add another variant
-                  </button>
-
-                  <button
-                    type="submit"
-                    disabled={createPending}
-                    className="mt-1 self-start rounded-md bg-[var(--color-accent)] px-3 py-1 text-xs font-medium text-[var(--color-accent-contrast)] disabled:opacity-60"
-                  >
-                    {createPending ? "Saving..." : "Create / attach product"}
-                  </button>
-                </form>
-              </div>
-            ) : null}
           </div>
         ) : null}
       </td>
     </tr>
+  );
+}
+
+function ResolveForm({
+  importId,
+  line,
+  variants,
+  defaultVariantId,
+  pending,
+  startTransition,
+  setRowError,
+  onChanged,
+}: {
+  importId: string;
+  line: InvoiceImportLine;
+  variants: VariantOption[];
+  defaultVariantId: string;
+  pending: boolean;
+  startTransition: (callback: () => Promise<void>) => void;
+  setRowError: (error: string | null) => void;
+  onChanged: () => Promise<void>;
+}) {
+  return (
+    <form
+      className="flex flex-col gap-1"
+      onSubmit={(e) => {
+        e.preventDefault();
+        setRowError(null);
+        const formData = new FormData(e.currentTarget);
+        startTransition(async () => {
+          const result = await resolveLineAction(importId, line.id, formData);
+          if (result.ok) await onChanged();
+          else setRowError(result.error);
+        });
+      }}
+    >
+      <select
+        key={defaultVariantId}
+        name="variant_id"
+        defaultValue={defaultVariantId}
+        className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs outline-none focus:border-[var(--color-accent)]"
+      >
+        <option value="">— pick a variant —</option>
+        {variants.map((v) => (
+          <option key={v.variant_id} value={v.variant_id}>
+            {v.product_name}
+            {v.variant_name ? ` | ${v.variant_name}` : ""} ({v.sku})
+          </option>
+        ))}
+      </select>
+      <label className="flex items-center gap-1 text-xs text-[var(--color-text-muted)]">
+        <input type="checkbox" name="is_new_product" />
+        just created this variant for this line
+      </label>
+      <button
+        type="submit"
+        disabled={pending}
+        className="self-start rounded-md bg-[var(--color-accent)] px-3 py-1 text-xs font-medium text-[var(--color-accent-contrast)] disabled:opacity-60"
+      >
+        {pending ? "Resolving..." : "Resolve"}
+      </button>
+    </form>
   );
 }
 

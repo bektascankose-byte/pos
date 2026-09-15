@@ -11,6 +11,7 @@ import type {
   SetVariantPrice,
   BulkPriceVariants,
   SuggestCompliance,
+  SuggestVariants,
 } from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
 import { AuditService } from '../../platform/audit/audit.service.js';
@@ -504,6 +505,14 @@ export class CatalogService {
    */
   async suggestCompliance(input: SuggestCompliance) {
     return this.ai.classifyCompliance(input);
+  }
+
+  /**
+   * A suggestion only -- nothing here creates a variant. The dashboard shows
+   * these as a checklist on the create-product form for a human to pick from.
+   */
+  async suggestVariants(input: SuggestVariants) {
+    return this.ai.suggestProductVariants(input);
   }
 
   async listTaxCategories(orgId: string) {

@@ -10,6 +10,7 @@ import {
   type AiMatchLineInput,
   type AiComplianceSuggestion,
 } from '@snappos/contracts';
+import { z } from 'zod';
 import { ApiException } from '../errors/api-exception.js';
 
 /** Exported so callers with the raw text in hand (see `InvoicingService.parseWithAi`) can tell ahead of time whether this same limit is about to silently drop the tail of a document. */
@@ -51,6 +52,13 @@ Return:
 - confidence: your confidence from 0 to 1
 
 Concrete cues: "THC", "delta-8", "delta-9", "delta-10", "THCP", "seltzer/soda/gummies... THC/MG" implies an infused drink or edible; "vape", "ENDS", "disposable", "e-liquid", "pod" implies a vape; "cigar", "cigarette", "pouch", "chew", "nicotine" implies tobacco; "kratom" is its own class. An ordinary grocery, snack, drink, or household item with none of these cues is not age-restricted -- set is_age_restricted to false and every other flag to false/null rather than guessing a restriction that isn't there.`;
+
+const VARIANT_SUGGESTION_INSTRUCTIONS = `You are helping a retail store stock every real flavor/size/color variant of a specific product. Search the web to find the actual, real variants this specific product is sold in -- not generic guesses.
+
+Answer with ONLY a JSON array of short variant name strings (e.g. ["Blueberry", "Watermelon Ice", "Mango"]) and nothing else -- no prose, no markdown code fences, no explanation. Use the product's own naming (flavor, size, color -- whatever axis it actually varies on). If you can't find reliable information on real variants for this product, answer with an empty array [] rather than guessing generic flavors.`;
+
+/** Loosely -- and defensively -- validates the model's free-text answer to `suggestProductVariants` against the shape the caller actually needs. */
+const variantSuggestionListSchema = z.array(z.string());
 
 /**
  * The only place this API talks to OpenAI. Every method here only ever
@@ -139,5 +147,65 @@ export class AiService {
       throw new Error('the model returned no parsed output');
     }
     return response.output_parsed;
+  }
+
+  /**
+   * A suggestion only, same rule as every other method here -- the caller
+   * shows these as a checklist on the create-product form; nothing here
+   * creates a variant on its own. Uses the Responses API's hosted web search
+   * tool rather than the model's own training data, since a product's real
+   * flavor/size lineup changes over time and isn't something to guess from
+   * memory. Deliberately does NOT use `.parse()`/`zodTextFormat` like every
+   * other method here -- combining a hosted tool with strict Structured
+   * Outputs isn't something to assume works, so this reads the model's plain
+   * text answer and parses it defensively instead.
+   */
+  async suggestProductVariants(input: {
+    product_name: string;
+    brand_name?: string | null | undefined;
+  }): Promise<{ variants: string[] }> {
+    const { client, model } = this.getClient();
+    const response = await client.responses.create({
+      model,
+      instructions: VARIANT_SUGGESTION_INSTRUCTIONS,
+      tools: [{ type: 'web_search' }],
+      input: JSON.stringify({ product_name: input.product_name, brand_name: input.brand_name ?? null }),
+    });
+
+    const text = response.output_text?.trim();
+    if (!text) {
+      throw new Error('the model returned no output');
+    }
+
+    const jsonText = text
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/, '')
+      .trim();
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(jsonText);
+    } catch {
+      this.logger.warn(`suggestProductVariants: could not parse model output as JSON: ${text.slice(0, 200)}`);
+      throw new Error('the model did not return a parseable list of variants');
+    }
+
+    const result = variantSuggestionListSchema.safeParse(parsed);
+    if (!result.success) {
+      this.logger.warn(`suggestProductVariants: model output was not a string array: ${text.slice(0, 200)}`);
+      throw new Error('the model did not return a valid list of variants');
+    }
+
+    const seen = new Set<string>();
+    const variants: string[] = [];
+    for (const raw of result.data) {
+      const name = raw.trim();
+      const key = name.toLowerCase();
+      if (!name || seen.has(key)) continue;
+      seen.add(key);
+      variants.push(name);
+      if (variants.length >= 12) break;
+    }
+    return { variants };
   }
 }

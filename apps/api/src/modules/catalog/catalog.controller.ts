@@ -12,6 +12,7 @@ import {
   setVariantPriceSchema,
   bulkPriceVariantsSchema,
   suggestComplianceSchema,
+  suggestVariantsSchema,
   createPriceCategorySchema,
   addPriceCategoryMembersSchema,
   scanPriceCategoryMemberSchema,
@@ -166,6 +167,13 @@ export class CatalogController {
     @Body(zodBody(suggestComplianceSchema)) body: ReturnType<typeof suggestComplianceSchema.parse>,
   ) {
     return this.catalog.suggestCompliance(body);
+  }
+
+  /** A suggestion only -- see `AiService.suggestProductVariants`. Nothing here persists anything. */
+  @Post('variants/suggest')
+  @RequirePermissions('product.create')
+  suggestVariants(@Body(zodBody(suggestVariantsSchema)) body: ReturnType<typeof suggestVariantsSchema.parse>) {
+    return this.catalog.suggestVariants(body);
   }
 
   @Get('price-categories')

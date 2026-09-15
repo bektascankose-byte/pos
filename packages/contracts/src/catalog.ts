@@ -172,6 +172,20 @@ export const suggestComplianceSchema = z.object({
   description: z.string().max(4096).optional(),
 });
 
+/**
+ * A suggestion only -- see `AiService.suggestProductVariants`. Real-world
+ * flavor/size names for a product, found via web search, offered as a
+ * checklist a human picks from; nothing here creates a variant by itself.
+ */
+export const productVariantSuggestionSchema = z.object({
+  variants: z.array(z.string()),
+});
+
+export const suggestVariantsSchema = z.object({
+  product_name: z.string().min(1).max(256),
+  brand_name: z.string().max(128).optional(),
+});
+
 export const productSchema = z.object({
   id: uuid,
   name: z.string().min(1).max(256),
@@ -379,6 +393,8 @@ export type ProductSearch = z.infer<typeof productSearchSchema>;
 export type ProductCompliance = z.infer<typeof productComplianceSchema>;
 export type AiComplianceSuggestion = z.infer<typeof aiComplianceSuggestionSchema>;
 export type SuggestCompliance = z.infer<typeof suggestComplianceSchema>;
+export type ProductVariantSuggestion = z.infer<typeof productVariantSuggestionSchema>;
+export type SuggestVariants = z.infer<typeof suggestVariantsSchema>;
 export type CreatePriceCategory = z.infer<typeof createPriceCategorySchema>;
 export type AddPriceCategoryMembers = z.infer<typeof addPriceCategoryMembersSchema>;
 export type ScanPriceCategoryMember = z.infer<typeof scanPriceCategoryMemberSchema>;

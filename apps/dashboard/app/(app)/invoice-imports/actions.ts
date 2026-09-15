@@ -141,31 +141,45 @@ export async function addSecondaryBarcodeAction(id: string, lineId: string): Pro
  * given -- name/brand/category are ignored server-side, price falls back to
  * the existing product's own). The API does its own SKU-already-exists
  * cross-check regardless of which case this looks like from here.
- */
-/**
- * `extraVariantCount` is however many rows the client actually rendered
- * (its own "Add another variant" click count) -- not the old fixed 7, since
- * that's now decided client-side. Any count works here: a blank row (no sku
- * or no variant name) is simply skipped, same as before.
+ *
+ * The client renders every variant as a uniform row (`sku_i`/`variant_name_i`/
+ * `price_i`, `rowCount` of them, `i` from 0) -- there's no separate "main SKU"
+ * field in the UI. Row 0 is what the wire format's top-level `sku`/
+ * `variant_name`/`price_minor` actually are; rows 1..rowCount-1 map to
+ * `extra_variants[]` exactly as before. This mapping is purely an
+ * action-layer detail -- the API contract and `InvoicingService` logic are
+ * unchanged. A blank added row (rows 1+, missing either its SKU or its name)
+ * is silently skipped, same tolerance as before; row 0 is the one mandatory
+ * variant, since some row has to supply the wire format's required `sku`.
+ * A row 0 with no price of its own falls back to the shared "starting price"
+ * field -- the wire format has no such fallback for its top-level price
+ * (only `extra_variants[]` entries fall back server-side), so that fallback
+ * is resolved here before sending.
  */
 export async function createProductForLineAction(
   id: string,
   lineId: string,
   formData: FormData,
-  extraVariantCount: number,
+  rowCount: number,
 ): Promise<ActionResult> {
   const existingProductId = String(formData.get("existing_product_id") ?? "").trim();
-  const sku = String(formData.get("sku") ?? "").trim();
   const productName = String(formData.get("product_name") ?? "").trim();
-  const variantName = String(formData.get("variant_name") ?? "").trim();
   const brandName = String(formData.get("brand_name") ?? "").trim();
   const categoryId = String(formData.get("category_id") ?? "").trim();
-  const priceMajor = String(formData.get("price") ?? "").trim();
 
-  if (!sku) {
+  const rows = Array.from({ length: Math.max(rowCount, 1) }, (_, i) => ({
+    sku: String(formData.get(`sku_${i}`) ?? "").trim(),
+    variantName: String(formData.get(`variant_name_${i}`) ?? "").trim(),
+    priceMajor: String(formData.get(`price_${i}`) ?? "").trim(),
+  }));
+  // `rows` always has at least one entry (`Math.max(rowCount, 1)` above).
+  const firstRow = rows[0]!;
+  const restRows = rows.slice(1);
+
+  if (!firstRow.sku) {
     return { ok: false, error: "A SKU / UPC is required." };
   }
-  if (existingProductId && !variantName) {
+  if (existingProductId && !firstRow.variantName) {
     return {
       ok: false,
       error: "Give this variant a name (e.g. the flavor) when attaching it to an existing product.",
@@ -176,40 +190,53 @@ export async function createProductForLineAction(
   // here too would wrongly block "type an already-known SKU, expect it to
   // match"; the API enforces this itself once it knows the SKU is genuinely new.
 
-  let priceMinor: string | null = null;
-  if (priceMajor) {
-    priceMinor = parseMajorToMinor(priceMajor);
-    if (priceMinor === null) {
+  let firstPriceMinor: string | undefined;
+  if (firstRow.priceMajor) {
+    const parsed = parseMajorToMinor(firstRow.priceMajor);
+    if (parsed === null) {
       return { ok: false, error: "Enter a valid price, like 24.99" };
+    }
+    firstPriceMinor = parsed;
+  }
+
+  const startingPriceMajor = String(formData.get("starting_price") ?? "").trim();
+  let startingPriceMinor: string | null = null;
+  if (startingPriceMajor) {
+    startingPriceMinor = parseMajorToMinor(startingPriceMajor);
+    if (startingPriceMinor === null) {
+      return { ok: false, error: "Enter a valid starting price, like 24.99" };
     }
   }
 
-  const extraVariants: { sku: string; variant_name: string; price_minor?: string }[] = [];
-  for (let i = 0; i < extraVariantCount; i++) {
-    const extraSku = String(formData.get(`extra_sku_${i}`) ?? "").trim();
-    const extraVariantName = String(formData.get(`extra_variant_name_${i}`) ?? "").trim();
-    const extraPriceMajor = String(formData.get(`extra_price_${i}`) ?? "").trim();
-    if (!extraSku || !extraVariantName) continue;
+  const resolvedFirstPriceMinor = firstPriceMinor ?? startingPriceMinor ?? undefined;
+  if (!existingProductId && !resolvedFirstPriceMinor) {
+    return { ok: false, error: "Enter a starting price, or a price for the first variant." };
+  }
 
-    let extraPriceMinor: string | undefined;
-    if (extraPriceMajor) {
-      const parsed = parseMajorToMinor(extraPriceMajor);
+  const extraVariants: { sku: string; variant_name: string; price_minor?: string }[] = [];
+  for (let i = 0; i < restRows.length; i++) {
+    const row = restRows[i]!;
+    if (!row.sku || !row.variantName) continue;
+
+    let rowPriceMinor: string | undefined;
+    if (row.priceMajor) {
+      const parsed = parseMajorToMinor(row.priceMajor);
       if (parsed === null) {
-        return { ok: false, error: `Row ${i + 1}: enter a valid price, like 24.99` };
+        return { ok: false, error: `Row ${i + 2}: enter a valid price, like 24.99` };
       }
-      extraPriceMinor = parsed ?? undefined;
+      rowPriceMinor = parsed;
     }
-    extraVariants.push({ sku: extraSku, variant_name: extraVariantName, ...(extraPriceMinor ? { price_minor: extraPriceMinor } : {}) });
+    extraVariants.push({ sku: row.sku, variant_name: row.variantName, ...(rowPriceMinor ? { price_minor: rowPriceMinor } : {}) });
   }
 
   const body = {
     ...(existingProductId ? { existing_product_id: existingProductId } : {}),
-    sku,
+    sku: firstRow.sku,
     ...(productName ? { product_name: productName } : {}),
-    ...(variantName ? { variant_name: variantName } : {}),
+    ...(firstRow.variantName ? { variant_name: firstRow.variantName } : {}),
     ...(brandName ? { brand_name: brandName } : {}),
     ...(categoryId ? { category_id: categoryId } : {}),
-    ...(priceMinor ? { price_minor: priceMinor } : {}),
+    ...(resolvedFirstPriceMinor ? { price_minor: resolvedFirstPriceMinor } : {}),
     ...(extraVariants.length ? { extra_variants: extraVariants } : {}),
   };
 

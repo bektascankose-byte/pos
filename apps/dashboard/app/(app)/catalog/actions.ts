@@ -4,7 +4,7 @@ import { apiFetch, ApiError } from "@/lib/api";
 import { parseMajorToMinor } from "@/lib/money";
 import { primaryStoreId } from "@/lib/store";
 import type { ActionResult } from "@/lib/action-result";
-import type { Product, Variant, AiComplianceSuggestion } from "@snappos/contracts";
+import type { Product, Variant, AiComplianceSuggestion, ProductVariantSuggestion } from "@snappos/contracts";
 
 interface CreatedVariant {
   id: string;
@@ -213,6 +213,31 @@ export async function suggestComplianceAction(name: string): Promise<ActionResul
     return { ok: true, data };
   } catch (e) {
     return { ok: false, error: e instanceof ApiError ? e.message : "Could not get an AI suggestion." };
+  }
+}
+
+/**
+ * Web-search-backed suggestions of a real product's known flavor/size
+ * variants -- a checklist the caller renders; nothing is created here.
+ */
+export async function suggestVariantsAction(
+  productName: string,
+  brandName?: string,
+): Promise<ActionResult<ProductVariantSuggestion>> {
+  if (!productName.trim()) {
+    return { ok: false, error: "Type a product name first." };
+  }
+  try {
+    const data = await apiFetch<ProductVariantSuggestion>(`/api/v1/catalog/variants/suggest`, {
+      method: "POST",
+      body: JSON.stringify({
+        product_name: productName.trim(),
+        ...(brandName?.trim() ? { brand_name: brandName.trim() } : {}),
+      }),
+    });
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not get AI variant suggestions." };
   }
 }
 

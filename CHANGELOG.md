@@ -2,6 +2,49 @@
 
 Notable changes. Newest first.
 
+## Redesign invoice-review's create-product panel: uniform horizontal rows, AI-suggested variants
+
+Prompted directly by a screenshot of the invoice-review "create or attach a product" panel with the
+feedback that it was confusing: vertical stacked fields, a required top-level SKU that made no sense once
+a product was meant to have several named variants, and a "pick a variant" resolve dropdown that listed
+every variant in the whole catalog instead of anything relevant to the product being created.
+
+- **One product line, uniform variant rows.** Product name/Brand/Category are now a single horizontal line
+  (hidden entirely when attaching to an existing product instead, since those fields are server-ignored in
+  that case anyway). Every variant below it is an identical row -- SKU, variant name, price, a remove
+  button -- visually indented under the product line. There's no more special "first variant" with a
+  required top-level SKU distinct from "extra" rows; the wire format's top-level `sku`/`variant_name`/
+  `price_minor` vs. `extra_variants[]` split still exists (unchanged, zero API/contract changes), but it's
+  now purely an action-layer mapping detail -- row 0 fills the former, the rest fill the latter.
+- **A shared "starting price"** replaces the old required "retail price," shown live as each blank variant
+  row's own price placeholder. A row's own price still overrides it; leaving it blank still falls back to
+  the starting price server-side (the fallback already existed for `extra_variants[]`; row 0 now gets the
+  same treatment, resolved client-side before sending since the wire format's top-level price has no
+  server-side fallback of its own).
+- **AI-suggested variants via real web search.** New `AiService.suggestProductVariants` uses the OpenAI
+  Responses API's hosted `web_search` tool (deliberately not `.parse()`/Structured Outputs, since combining
+  a hosted tool with strict schema output isn't something to assume works -- it reads the model's plain
+  text answer and parses it defensively instead) to find a product's actual known flavor/size names, mirrored
+  end-to-end through `CatalogService.suggestVariants` / `POST catalog/variants/suggest` /
+  `suggestVariantsAction`, the same shape as the existing compliance-suggestion feature. Suggestions render
+  as a checklist; checking several and clicking "Add checked as variants" appends one pre-filled row per
+  name with SKUs left blank to fill in.
+- **The existing-variant resolver stayed** -- it links a line to something that already exists in the
+  catalog, which AI-suggested names that don't exist yet can't substitute for -- but moved into a collapsed
+  "Already have this in your catalog? Link it directly" section under the (now primary) create-product
+  panel, so the two stop reading as the same control. Resolved/matched lines now display as
+  `Product | Variant` throughout this page.
+
+Verified live against the real invoice the original screenshot came from, plus a disposable test invoice:
+the AI-suggest button returned genuine real-world flavor names for a well-known vape product; checking two
+and adding them produced correctly pre-filled rows; submitting 3 variant rows with only one priced
+explicitly created all 3 under one product with the other two correctly priced from the starting-price
+fallback (confirmed via the API directly, store-scoped price row included); attaching to an existing
+product correctly hid the product-level fields and still required a name per row. Typecheck clean across
+`@snappos/api`, `@snappos/dashboard`, `@snappos/contracts`. Test product archived (no product/invoice
+delete endpoint exists in this app -- archived instead, matching how the catalog already treats retirement
+everywhere else) after verification.
+
 ## Client-side interactivity for the rest of the back office
 
 Continues the previous entry's pattern (Server Actions called from Client Components instead of
