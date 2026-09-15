@@ -20,6 +20,7 @@ export * from './loyalty.js';
 export * from './marketing.js';
 export * from './onboarding.js';
 export * from './purchasing.js';
+export * from './receiving.js';
 export * from './reports.js';
 export * from './sales.js';
 export * from './scheduling.js';

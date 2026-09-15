@@ -20,6 +20,7 @@ import { LoyaltyModule } from './modules/loyalty/loyalty.module.js';
 import { MarketingModule } from './modules/marketing/marketing.module.js';
 import { OnboardingModule } from './modules/onboarding/onboarding.module.js';
 import { PurchasingModule } from './modules/purchasing/purchasing.module.js';
+import { ReceivingModule } from './modules/receiving/receiving.module.js';
 import { ReportsModule } from './modules/reports/reports.module.js';
 import { SchedulingModule } from './modules/scheduling/scheduling.module.js';
 import { AuditModule } from './platform/audit/audit.module.js';
@@ -44,6 +45,7 @@ import { HealthController } from './modules/health/health.controller.js';
     MarketingModule,
     OnboardingModule,
     PurchasingModule,
+    ReceivingModule,
     ReportsModule,
     SchedulingModule,
     SyncModule,

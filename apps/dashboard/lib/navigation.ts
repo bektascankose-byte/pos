@@ -124,11 +124,33 @@ export const NAV_ENTRIES: NavEntry[] = [
     icon: "🧮",
     keywords: ["inventory", "quantity", "count", "on hand"],
   },
+
   {
+    id: "receiving",
+    label: "Receiving",
+    href: "/receiving",
+    group: "Purchasing",
+    surfaces: ["work"],
+    icon: "📥",
+    keywords: ["received", "delivery", "goods in", "scan in", "shipment", "check in stock"],
+  },
+  {
+    id: "receiving-new",
+    label: "Receive a delivery",
+    href: "/receiving/new",
+    group: "Purchasing",
+    surfaces: ["work"],
+    icon: "➕",
+    keywords: ["scan received", "goods in", "new delivery"],
+    isAction: true,
+  },
+  {
+    // Lives under Purchasing rather than Inventory: a purchase order is
+    // something you place with a vendor, not something you count on a shelf.
     id: "purchase-orders",
     label: "Purchase Orders",
     href: "/inventory/purchase-orders",
-    group: "Inventory",
+    group: "Purchasing",
     surfaces: ["work"],
     icon: "🚚",
     keywords: ["po", "receive", "ordering"],
@@ -137,13 +159,12 @@ export const NAV_ENTRIES: NavEntry[] = [
     id: "purchase-order-new",
     label: "New purchase order",
     href: "/inventory/purchase-orders/new",
-    group: "Inventory",
+    group: "Purchasing",
     surfaces: ["work"],
     icon: "➕",
     keywords: ["order stock", "reorder"],
     isAction: true,
   },
-
   {
     id: "vendors",
     label: "Vendors",

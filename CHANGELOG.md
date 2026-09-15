@@ -2,6 +2,45 @@
 
 Notable changes. Newest first.
 
+## Receiving: stock that arrived before its paperwork
+
+The schema knew two ways goods come in, and neither is what happens most days. A purchase order is
+received against what was *ordered* — but plenty of deliveries were never ordered through this system. An
+invoice import is parsed from a *document* — but the invoice is usually in the driver's hand, in an email
+that hasn't arrived, or in a pile by the till a week later. What actually happens in between is somebody
+standing over a box with a scanner. Migration 0019 is that.
+
+**Two ways to get a delivery in.** *Scan the box* takes a whole block at once, one code per line — twenty
+scans in one submit, and the same code four times becomes a quantity of four rather than four rows.
+*One at a time* is for when each item needs its own quantity or cost, and **the quantity and cost boxes
+keep what was last entered**: a pallet is usually cases of the same size at the same price, and retyping
+"12" forty times is how counting stops being done. Only the code clears.
+
+**An unrecognized code is not an error.** Scanning something the catalog has never seen is the most
+common moment for a new product to enter a shop, so the line is kept with whatever was scanned and
+"Identify" turns it into a real item then and there — category, brand and price group all creatable
+inline. **Choosing a price group fills the price in from that group**, visibly, before you commit to it;
+a group whose members disagree says so rather than guessing. The scanned code becomes the SKU and the
+scannable barcode.
+
+**Committing is refused while any code is unnamed** — stock of an unknown thing would land on the wrong
+item. Otherwise it posts ordinary `receiving` movements through the same ledger everything else uses.
+
+**The invoice gets matched later, or never.** Once an invoice is parsed under Invoices, it can be checked
+against what was counted: three lists and plain sentences — billed but never scanned (short shipment, or
+still in the van), counted a different number than billed, and scanned but not on this invoice at all.
+Matching is by SKU only and deliberately so: the invoice has already been through AI extraction and the
+matching cascade, and a second, looser matcher here would manufacture confident agreement between two
+things that are not the same product.
+
+**Purchase Orders moved from Inventory to Purchasing**, where it belongs — a PO is something you place
+with a vendor, not something you count on a shelf.
+
+Verified end to end against real data: five scans (three of them the same code) became three lines with
+the repeat collapsed to a quantity of three; two one-at-a-time entries both inherited qty 12 and $3.25
+from a bare code; an unknown code became a product priced $24.99 straight from its price group; and
+committing moved all five lines into stock with exactly the right deltas. All of it reverted afterwards.
+
 ## Counting stock without touching the mouse
 
 Stock on hand becomes a place you count from, not just a table you read.

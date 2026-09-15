@@ -30,6 +30,7 @@ export function LookupSelect({
   name,
   options,
   onCreated,
+  onChange,
   placeholder = "Unchanged",
   defaultValue = "",
 }: {
@@ -38,6 +39,13 @@ export function LookupSelect({
   name: string;
   options: LookupOption[];
   onCreated: (option: LookupOption) => void;
+  /**
+   * Fired when a real option is picked, including one just created. Lets a
+   * caller react to the choice — the receiving form fills a price in from the
+   * price group this way, rather than the caller having to reach around this
+   * component for the underlying `<select>`.
+   */
+  onChange?: (value: string) => void;
   placeholder?: string;
   defaultValue?: string;
 }) {
@@ -75,7 +83,11 @@ export function LookupSelect({
     if (!exists) return;
     selectRef.current.value = pendingSelection;
     previous.current = pendingSelection;
+    onChange?.(pendingSelection);
     setPendingSelection(null);
+    // `onChange` is intentionally out of the dependency list: callers pass an
+    // inline arrow, so including it would re-run this on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingSelection, options]);
 
   const create = () => {
@@ -104,6 +116,7 @@ export function LookupSelect({
           onChange={(e) => {
             if (e.target.value !== ADD_NEW) {
               previous.current = e.target.value;
+              onChange?.(e.target.value);
               return;
             }
             e.target.value = previous.current;
