@@ -269,6 +269,15 @@ export const NAV_ENTRIES: NavEntry[] = [
     isAction: true,
   },
   {
+    id: "suppressions",
+    label: "Do Not Contact",
+    href: "/marketing/suppressions",
+    group: "Marketing",
+    surfaces: ["setup"],
+    icon: "🚫",
+    keywords: ["unsubscribe", "opt out", "bounce", "blocked", "suppression"],
+  },
+  {
     id: "loyalty",
     label: "Loyalty",
     href: "/loyalty",
