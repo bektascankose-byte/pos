@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import type {
+  CreateBarcode,
   CreateProduct,
   CreateVariant,
   CreateBrand,
@@ -345,14 +346,31 @@ export class CatalogService {
 
   /**
    * An additional, non-primary code for a variant that already has one --
-   * the same physical item turning up under a second vendor's own SKU, or a
-   * relabeled UPC. Never touches the existing primary barcode.
+   * the same physical item turning up under a second vendor's own SKU, a
+   * relabeled UPC, or the carton it ships in. Never touches the existing
+   * primary barcode.
+   *
+   * `units` is what makes a carton code a carton code: the register multiplies
+   * by it (`variant_barcodes.units`, read as `scan_units` by `scan` above), so
+   * a case of 10 scanned at the counter rings up ten of the single item rather
+   * than one of something else. Defaults keep an ordinary alternate UPC to
+   * exactly today's behavior.
    */
-  async addBarcodeToVariant(orgId: string, actorUserId: string, variantId: string, barcode: string) {
-    return this.db.withOrg(orgId, (tx) => this.addBarcodeToVariantTx(tx, actorUserId, variantId, barcode));
+  async addBarcodeToVariant(
+    orgId: string,
+    actorUserId: string,
+    variantId: string,
+    input: CreateBarcode,
+  ) {
+    return this.db.withOrg(orgId, (tx) => this.addBarcodeToVariantTx(tx, actorUserId, variantId, input));
   }
 
-  async addBarcodeToVariantTx(tx: PoolClient, actorUserId: string, variantId: string, barcode: string) {
+  async addBarcodeToVariantTx(
+    tx: PoolClient,
+    actorUserId: string,
+    variantId: string,
+    input: CreateBarcode,
+  ) {
     const { rows: variantRows } = await tx.query(`SELECT id FROM product_variants WHERE id = $1`, [
       variantId,
     ]);
@@ -360,9 +378,15 @@ export class CatalogService {
 
     const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO variant_barcodes (org_id, variant_id, barcode, kind, units, is_primary)
-       VALUES (current_setting('app.org_id')::uuid, $1, $2, 'upc', '1', false)
+       VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, $4, $5)
        RETURNING id`,
-      [variantId, barcode],
+      [
+        variantId,
+        input.barcode,
+        input.kind ?? 'upc',
+        input.units ?? '1',
+        input.is_primary ?? false,
+      ],
     );
 
     await this.audit.record(tx, {
@@ -370,10 +394,75 @@ export class CatalogService {
       entityType: 'product_variant',
       entityId: variantId,
       actorUserId,
-      newValue: { barcode },
+      newValue: { barcode: input.barcode, kind: input.kind ?? 'upc', units: input.units ?? '1' },
     });
 
     return rows[0];
+  }
+
+  /**
+   * Drop an alternate or carton code. The primary is deliberately not
+   * removable here: a variant whose primary code is gone still appears in
+   * search and still fails at the counter, which is the exact state
+   * `createProduct` above refuses to create in the first place. Changing which
+   * code is primary is a different operation than deleting one.
+   */
+  async removeBarcodeFromVariant(orgId: string, actorUserId: string, barcodeId: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query<{ variant_id: string; barcode: string; is_primary: boolean }>(
+        `SELECT variant_id, barcode, is_primary FROM variant_barcodes WHERE id = $1`,
+        [barcodeId],
+      );
+      const existing = rows[0];
+      if (!existing) throw ApiException.notFound('barcode');
+      if (existing.is_primary) {
+        throw new ApiException(
+          'validation_failed',
+          "that is this item's primary code -- it can't be removed",
+          { retryable: false },
+        );
+      }
+
+      await tx.query(`DELETE FROM variant_barcodes WHERE id = $1`, [barcodeId]);
+
+      await this.audit.record(tx, {
+        action: 'product.barcode_remove',
+        entityType: 'product_variant',
+        entityId: existing.variant_id,
+        actorUserId,
+        oldValue: { barcode: existing.barcode },
+      });
+
+      return { id: barcodeId, variant_id: existing.variant_id };
+    });
+  }
+
+  /**
+   * What item is this code? The back office's own lookup, deliberately not
+   * `scan` above: `scan` serves the register, so it refuses an item with no
+   * active price ("selling at a price nobody set is how a shop loses money
+   * quietly") -- but an unpriced item is exactly what someone looking a code
+   * up back here needs to find, in order to go fix it.
+   *
+   * Reports which code actually matched, so the page can tell a carton code
+   * apart from the unit's own: a `units` above 1 is what the register will
+   * multiply by when this same code is scanned at the counter.
+   */
+  async resolveCode(orgId: string, code: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const match = await this.findVariantBySkuOrBarcodeTx(tx, code);
+      if (!match) return { match: null };
+
+      const { rows } = await tx.query(
+        `SELECT v.id AS variant_id, v.product_id, b.kind AS matched_kind, b.units::text AS matched_units
+         FROM product_variants v
+         LEFT JOIN variant_barcodes b ON b.variant_id = v.id AND b.barcode = $2
+         WHERE v.id = $1
+         LIMIT 1`,
+        [match.id, code],
+      );
+      return { match: rows[0] ?? null };
+    });
   }
 
   /**

@@ -22,6 +22,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <Link href="/catalog" className="rounded-md px-3 py-2 hover:bg-[var(--color-bg)]">
             Catalog
           </Link>
+          <Link href="/items" className="rounded-md px-3 py-2 hover:bg-[var(--color-bg)]">
+            Item Lookup
+          </Link>
           <Link href="/inventory" className="rounded-md px-3 py-2 hover:bg-[var(--color-bg)]">
             Inventory
           </Link>

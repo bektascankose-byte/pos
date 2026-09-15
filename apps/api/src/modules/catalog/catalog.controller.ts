@@ -13,6 +13,7 @@ import {
   bulkPriceVariantsSchema,
   suggestComplianceSchema,
   suggestVariantsSchema,
+  createBarcodeSchema,
   createPriceCategorySchema,
   addPriceCategoryMembersSchema,
   scanPriceCategoryMemberSchema,
@@ -37,6 +38,13 @@ export class CatalogController {
   ) {
     const input = scanSchema.parse({ barcode, store_id: storeId });
     return this.catalog.scan(user.orgId, input.barcode, input.store_id);
+  }
+
+  /** The back office's own code lookup -- see `CatalogService.resolveCode` for why this isn't `scan`. */
+  @Get('resolve/:code')
+  @RequirePermissions('product.view')
+  resolveCode(@CurrentUser() user: AuthenticatedUser, @Param('code') code: string) {
+    return this.catalog.resolveCode(user.orgId, code);
   }
 
   @Get('products')
@@ -167,6 +175,26 @@ export class CatalogController {
     @Body(zodBody(suggestComplianceSchema)) body: ReturnType<typeof suggestComplianceSchema.parse>,
   ) {
     return this.catalog.suggestCompliance(body);
+  }
+
+  /**
+   * An alternate or carton code for an item that already exists. A carton code
+   * carries `units` above 1 -- see `CatalogService.addBarcodeToVariant`.
+   */
+  @Post('variants/:variantId/barcodes')
+  @RequirePermissions('product.update')
+  addVariantBarcode(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('variantId') variantId: string,
+    @Body(zodBody(createBarcodeSchema)) body: ReturnType<typeof createBarcodeSchema.parse>,
+  ) {
+    return this.catalog.addBarcodeToVariant(user.orgId, user.userId, variantId, body);
+  }
+
+  @Post('variants/barcodes/:barcodeId/remove')
+  @RequirePermissions('product.update')
+  removeVariantBarcode(@CurrentUser() user: AuthenticatedUser, @Param('barcodeId') barcodeId: string) {
+    return this.catalog.removeBarcodeFromVariant(user.orgId, user.userId, barcodeId);
   }
 
   /** A suggestion only -- see `AiService.suggestProductVariants`. Nothing here persists anything. */

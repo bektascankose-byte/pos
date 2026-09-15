@@ -75,7 +75,13 @@ export const barcodeSchema = z.object({
   id: uuid,
   variant_id: uuid,
   barcode,
-  kind: z.enum(['upc', 'ean', 'plu', 'itf14', 'custom']),
+  /**
+   * `case` is a carton/case code: the same item, scanned by the box it ships
+   * in, which is what makes `units` below more than 1. The rest describe the
+   * code's own symbology. Matches the `variant_barcodes.kind` column's own
+   * documented vocabulary.
+   */
+  kind: z.enum(['upc', 'ean', 'plu', 'itf14', 'case', 'custom']),
   /**
    * How many sellable units one scan represents. A scanned case of 10 adds 10
    * units, which is why this belongs on the barcode and not on the variant.
@@ -376,6 +382,8 @@ export const productSearchSchema = pagination.extend({
 /** Barcode lookup is the single hottest path in the system. */
 export const scanSchema = z.object({ barcode, store_id: uuid });
 
+export type Barcode = z.infer<typeof barcodeSchema>;
+export type CreateBarcode = z.infer<typeof createBarcodeSchema>;
 export type Category = z.infer<typeof categorySchema>;
 export type Brand = z.infer<typeof brandSchema>;
 export type CreateBrand = z.infer<typeof createBrandSchema>;

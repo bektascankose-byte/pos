@@ -114,6 +114,8 @@ function describeCheck(constraint?: string): string {
       return 'the minimum redemption points cannot be negative';
     case 'loyalty_expiry_positive':
       return 'points expiration must be a positive number of days';
+    case 'barcode_units_positive':
+      return 'a barcode must stand for at least one unit';
     default:
       return 'the request violates a rule the database enforces';
   }
@@ -143,6 +145,10 @@ function describeUnique(constraint?: string): string {
       return 'a purchase order with that reference already exists';
     case 'variants_org_sku_key':
       return 'a variant with that SKU already exists';
+    case 'barcodes_org_code_key':
+      return 'that barcode already belongs to another item';
+    case 'barcodes_primary_key':
+      return 'that item already has a primary barcode';
     case 'purchase_order_lines_purchase_order_id_variant_id_key':
       return 'that variant is already on this purchase order';
     default:

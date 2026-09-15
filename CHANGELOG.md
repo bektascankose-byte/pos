@@ -2,6 +2,53 @@
 
 Notable changes. Newest first.
 
+## Item Lookup page, and the missing half of carton→item mapping
+
+Two asks: a menu option to add or check a single item, and "something like carton-item mapping" --
+clarified as a carton scan ringing up N of the single item (a carton of 10 packs = 10 packs at the pack
+price), with the lookup page scan-first and typing as the backup.
+
+**The carton path turned out to be already built end to end, except for the one step that creates it.**
+`variant_barcodes` has carried `kind` and `units` since `0002_catalog.sql`, whose own column comment reads
+*"a case barcode adds 12, not 1"*; `CatalogService.scan` already selects `b.units AS scan_units`;
+`sync.service.ts` already ships `kind`/`units` to devices with `variant_barcode` as a tracked change
+entity; and the Android register already does `units = scanUnits.toDoubleOrNull()?.toInt() ?: 1` under the
+comment *"A case barcode adds a case."* What was missing: nothing could write such a row.
+`addBarcodeToVariantTx` hardcoded `'upc'` and `'1'`, had no controller route at all (only invoicing's
+"Also known by this code" reached it internally), and `barcodeSchema.kind`'s enum didn't even include
+`case`, contradicting the column's own documented vocabulary. So this entry is mostly a write path.
+
+- **Carton mapping**: `'case'` added to `barcodeSchema.kind` (the column is plain `text` with no CHECK and
+  every existing row is `'upc'`, so no migration). `addBarcodeToVariant` now takes the existing
+  `createBarcodeSchema` shape instead of a bare string, keeping today's `'upc'`/`'1'` as defaults so its
+  invoicing caller behaves exactly as before, and gains `POST catalog/variants/:variantId/barcodes`.
+  `removeBarcodeFromVariant` + `POST catalog/variants/barcodes/:barcodeId/remove` deletes an alternate or
+  carton code but refuses the primary -- a variant whose primary code is gone still appears in search and
+  still fails at the counter, the exact state `createProduct` refuses to create in the first place.
+  `postgres-error.ts` learned `barcodes_org_code_key`, `barcodes_primary_key` and `barcode_units_positive`,
+  so a duplicate code or a zero-unit code reads as a sentence instead of "that record already exists".
+- **Item Lookup** (`/items`, new sidebar entry): an autofocused scan box that re-takes focus after every
+  lookup, so a scanner can be fired at it repeatedly. Resolution order is exact code, then name search,
+  then an inline create form prefilled with the code as both SKU and primary barcode (this business treats
+  the two as the same number). Each variant shows SKU, price, stock and its codes, with `= N units` on
+  anything standing for more than one, an add-code row defaulting to `case`, and a ✕ on non-primary codes.
+- Exact-code resolution is a new `GET catalog/resolve/:code` rather than the existing `scan`, deliberately:
+  `scan` serves the register, so it refuses an item with no active price ("selling at a price nobody set is
+  how a shop loses money quietly") -- but an unpriced item is precisely what someone looking a code up in
+  the back office needs to find in order to fix it. It reuses `findVariantBySkuOrBarcodeTx`, which is also
+  what makes typing a SKU work without a second code path. Stock is a second read
+  (`inventory/stock/:variantId`) kept beside the product rather than merged into it, since the catalog's
+  product endpoint carries no stock and pretending otherwise would be a lie in the type.
+
+Verified live: a carton code added to Geek Bar Pulse X | Miami Mint, scanned back, reporting *"That was a
+case code -- scanning it at the register rings up 10 of this item"*; confirmed in Postgres as
+`kind=case, units=10.000` **and** as a `variant_barcode` insert in `change_log`, which is what actually
+carries it to the register on the next delta sync. Duplicate code, zero units, and primary-code removal all
+refused with readable messages. Unknown code → create → card, end to end. Enter is handled explicitly on
+the scan box rather than left to implicit form submission, since which key a scanner sends is configurable
+and that keystroke is the entire interaction on this page. Typecheck clean; test item archived and the test
+carton code removed afterward.
+
 ## Redesign invoice-review's create-product panel: uniform horizontal rows, AI-suggested variants
 
 Prompted directly by a screenshot of the invoice-review "create or attach a product" panel with the

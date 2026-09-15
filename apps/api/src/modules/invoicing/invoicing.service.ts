@@ -906,7 +906,9 @@ export class InvoicingService {
         throw new ApiException('validation_failed', 'this line has no vendor SKU to add', { retryable: false });
       }
 
-      await this.catalog.addBarcodeToVariantTx(tx, actorUserId, line.ai_suggested_variant_id, line.parsed_vendor_sku);
+      await this.catalog.addBarcodeToVariantTx(tx, actorUserId, line.ai_suggested_variant_id, {
+        barcode: line.parsed_vendor_sku,
+      });
 
       await tx.query(
         `UPDATE invoice_import_lines
