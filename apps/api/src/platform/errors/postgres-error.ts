@@ -116,6 +116,16 @@ function describeCheck(constraint?: string): string {
       return 'points expiration must be a positive number of days';
     case 'barcode_units_positive':
       return 'a barcode must stand for at least one unit';
+    case 'case_discount_within_cost':
+      return "a case discount can't be more than the case costs";
+    case 'product_variants_case_cost_check':
+      return 'a case cost cannot be negative';
+    case 'product_variants_case_discount_check':
+      return 'a case discount cannot be negative';
+    case 'product_variants_case_rebate_check':
+      return 'a case rebate cannot be negative';
+    case 'product_variants_default_margin_check':
+      return 'a default margin must be between 0 and 100';
     default:
       return 'the request violates a rule the database enforces';
   }

@@ -66,6 +66,10 @@ export async function updateVariantAction(
   if (reorderQuantity) body.reorder_quantity = reorderQuantity;
   const status = String(formData.get("status") ?? "").trim();
   if (status) body.status = status;
+  for (const field of ["case_cost", "case_discount", "case_rebate", "default_margin"] as const) {
+    const value = String(formData.get(field) ?? "").trim();
+    if (value) body[field] = value;
+  }
 
   try {
     const data = await apiFetch<Variant>(`/api/v1/catalog/variants/${variantId}`, {

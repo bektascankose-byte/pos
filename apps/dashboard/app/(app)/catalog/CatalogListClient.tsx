@@ -3,6 +3,7 @@
 import { useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { formatMinor } from "@/lib/money";
+import { formatPercent, marginPercent, retailDollars } from "@/lib/margin";
 import { bulkUpdateProductsAction, bulkSetPriceAction, addToPriceCategoryAction } from "./actions";
 import type { Brand, Category, TaxCategory, PriceCategory } from "@snappos/contracts";
 
@@ -14,6 +15,7 @@ interface SearchRow {
   product_name: string;
   brand_name: string | null;
   price_minor: string | null;
+  cost: string | null;
   on_hand: string;
   available: string;
 }
@@ -126,6 +128,7 @@ export function CatalogListClient({
                 <th className="px-4 py-2 font-normal">Brand</th>
                 <th className="px-4 py-2 font-normal">SKU</th>
                 <th className="px-4 py-2 font-normal">Price</th>
+                <th className="px-4 py-2 font-normal">Margin</th>
                 <th className="px-4 py-2 font-normal">Available</th>
               </tr>
             </thead>
@@ -144,12 +147,15 @@ export function CatalogListClient({
                   <td className="px-4 py-2">{row.brand_name ?? "—"}</td>
                   <td className="px-4 py-2">{row.sku}</td>
                   <td className="px-4 py-2">{row.price_minor !== null ? formatMinor(row.price_minor) : "—"}</td>
+                  <td className="px-4 py-2">
+                    <MarginCell priceMinor={row.price_minor} cost={row.cost} />
+                  </td>
                   <td className="px-4 py-2">{row.available}</td>
                 </tr>
               ))}
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-6 text-center text-[var(--color-text-muted)]">
+                  <td colSpan={7} className="px-4 py-6 text-center text-[var(--color-text-muted)]">
                     {query ? `No match for "${query}".` : "No products yet."}
                   </td>
                 </tr>
@@ -275,4 +281,17 @@ export function CatalogListClient({
       </form>
     </div>
   );
+}
+
+/** Margin at a glance, and the one number worth interrupting someone over: selling under cost. */
+function MarginCell({ priceMinor, cost }: { priceMinor: string | null; cost: string | null }) {
+  const retail = retailDollars(priceMinor);
+  const unitCost = cost === null || cost.trim() === "" ? null : Number(cost);
+  const margin = marginPercent(retail, unitCost);
+
+  if (margin === null) return <span className="text-[var(--color-text-muted)]">—</span>;
+  if (margin < 0) {
+    return <span className="font-medium text-[var(--color-error)]">{formatPercent(margin)} ⚠</span>;
+  }
+  return <span>{formatPercent(margin)}</span>;
 }

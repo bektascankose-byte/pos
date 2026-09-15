@@ -14,6 +14,7 @@ import {
   CodesPanel,
   MovementsPanel,
   PriceHistoryPanel,
+  PricingPanel,
   VariantPicker,
 } from "./ItemDetailPanels";
 import type { Product, Variant, Brand, Category, TaxCategory } from "@snappos/contracts";
@@ -98,6 +99,30 @@ export function ProductDetailClient({ productId, storeId, initialProduct, brands
               />
             ),
           },
+          variantTab("pricing", "Cost & Margin", (variant) => (
+            <PricingPanel
+              productId={productId}
+              storeId={storeId}
+              variant={variant}
+              onVariantSaved={(updated) =>
+                setVariants((prev) => prev.map((v) => (v.id === updated.id ? { ...v, ...updated } : v)))
+              }
+              onPriceSaved={(priceMinor) =>
+                setVariants((prev) =>
+                  prev.map((v) =>
+                    v.id === variant.id
+                      ? // `price_minor` types as the branded `Money` because
+                        // `variantSchema` is shared with request validation,
+                        // but on the wire it is the plain digit string the API
+                        // sends -- the same gap bridged with `String()`
+                        // wherever this response is displayed.
+                        { ...v, price_minor: priceMinor as unknown as Variant["price_minor"] }
+                      : v,
+                  ),
+                )
+              }
+            />
+          )),
           variantTab("codes", "Item Codes", (variant) => (
             <CodesPanel variant={variant} mode="unit" onChanged={reloadProduct} />
           )),
@@ -405,6 +430,10 @@ function AddVariantForm({
             last_cost: null,
             case_quantity: Number(formData.get("case_quantity") ?? 1),
             pack_quantity: Number(formData.get("pack_quantity") ?? 1),
+            case_cost: null,
+            case_discount: "0",
+            case_rebate: "0",
+            default_margin: null,
             reorder_point: null,
             reorder_quantity: null,
             status: "active",

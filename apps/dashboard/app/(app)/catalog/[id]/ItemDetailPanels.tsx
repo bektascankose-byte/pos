@@ -3,8 +3,20 @@
 import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { formatMinor } from "@/lib/money";
-import { getPriceHistoryAction, getVariantMovementsAction, type PriceHistoryRow } from "../actions";
+import {
+  getPriceHistoryAction,
+  getVariantMovementsAction,
+  setPriceAction,
+  updateVariantAction,
+  type PriceHistoryRow,
+} from "../actions";
 import { addVariantBarcodeAction, removeVariantBarcodeAction } from "../../items/actions";
+import {
+  formatDollars,
+  formatPercent,
+  marginSummary,
+  retailForMargin,
+} from "@/lib/margin";
 import type { LedgerEntry, Variant } from "@snappos/contracts";
 
 /** Reasons that mean stock arrived from a vendor, and reasons that mean it left over the counter. */
@@ -207,6 +219,204 @@ export function CodesPanel({
         </button>
       )}
     </section>
+  );
+}
+
+/**
+ * What a case costs, what a unit therefore costs, and what that leaves as
+ * margin -- recalculated as it's typed, so the arithmetic an owner would
+ * otherwise do on the invoice with a calculator happens on screen instead.
+ *
+ * Cost and price are saved separately on purpose: a price change is its own
+ * event with its own history (`setVariantPrice`), while the case fields are
+ * ordinary columns on the variant.
+ */
+export function PricingPanel({
+  productId,
+  storeId,
+  variant,
+  onVariantSaved,
+  onPriceSaved,
+}: {
+  productId: string;
+  storeId: string | null;
+  variant: Variant;
+  onVariantSaved: (updated: Variant) => void;
+  onPriceSaved: (priceMinor: string) => void;
+}) {
+  const [caseCost, setCaseCost] = useState(variant.case_cost ?? "");
+  const [caseDiscount, setCaseDiscount] = useState(variant.case_discount ?? "0");
+  const [caseRebate, setCaseRebate] = useState(variant.case_rebate ?? "0");
+  const [unitsPerCase, setUnitsPerCase] = useState(String(variant.case_quantity));
+  const [defaultMargin, setDefaultMargin] = useState(variant.default_margin ?? "");
+  const [newPrice, setNewPrice] = useState("");
+  const [costPending, startCostTransition] = useTransition();
+  const [pricePending, startPriceTransition] = useTransition();
+  const [message, setMessage] = useState<string | null>(null);
+
+  const priceMinor =
+    variant.price_minor === undefined || variant.price_minor === null
+      ? null
+      : String(variant.price_minor);
+
+  const summary = marginSummary({
+    caseCost,
+    caseDiscount,
+    caseRebate,
+    unitsPerCase,
+    unitCost: variant.cost,
+    priceMinor,
+  });
+  const suggested = retailForMargin(summary.unitCost, defaultMargin);
+
+  return (
+    <section className="flex flex-col gap-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+      {message ? <p className="text-sm text-[var(--color-text-muted)]">{message}</p> : null}
+
+      <form
+        className="flex flex-col gap-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setMessage(null);
+          const formData = new FormData(e.currentTarget);
+          startCostTransition(async () => {
+            const outcome = await updateVariantAction(productId, variant.id, formData);
+            if (outcome.ok) {
+              onVariantSaved(outcome.data);
+              setMessage("Saved.");
+            } else {
+              setMessage(outcome.error);
+            }
+          });
+        }}
+      >
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <MoneyField label="Units / case" name="case_quantity" value={unitsPerCase} onChange={setUnitsPerCase} />
+          <MoneyField label="Case cost" name="case_cost" value={caseCost} onChange={setCaseCost} placeholder="40.00" />
+          <MoneyField label="Case discount" name="case_discount" value={caseDiscount} onChange={setCaseDiscount} />
+          <MoneyField label="Case rebate" name="case_rebate" value={caseRebate} onChange={setCaseRebate} />
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 rounded-md bg-[var(--color-bg)] p-3 text-sm sm:grid-cols-4">
+          <Readout
+            label="Cost / unit"
+            value={formatDollars(summary.unitCost)}
+            note={summary.isDerived ? "from the case" : "entered directly"}
+          />
+          <Readout label="Unit retail" value={formatDollars(summary.retail)} />
+          <Readout label="Margin" value={formatPercent(summary.margin)} />
+          <Readout label="After rebate" value={formatPercent(summary.marginAfterRebate)} />
+        </div>
+
+        {summary.belowCost ? (
+          <p className="text-sm font-medium text-[var(--color-error)]">
+            ⚠ This is selling below what it costs.
+          </p>
+        ) : null}
+
+        <div className="flex flex-wrap items-end gap-4">
+          <MoneyField
+            label="Default margin %"
+            name="default_margin"
+            value={defaultMargin}
+            onChange={setDefaultMargin}
+            placeholder="32.5"
+          />
+          {suggested !== null ? (
+            <p className="pb-2 text-sm text-[var(--color-text-muted)]">
+              At that margin this would sell for{" "}
+              <button
+                type="button"
+                onClick={() => setNewPrice(suggested.toFixed(2))}
+                className="font-medium text-[var(--color-accent)] underline"
+              >
+                {formatDollars(suggested)}
+              </button>
+            </p>
+          ) : null}
+        </div>
+
+        <button
+          type="submit"
+          disabled={costPending}
+          className="self-start rounded-md bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-[var(--color-accent-contrast)] disabled:opacity-60"
+        >
+          {costPending ? "Saving..." : "Save costs"}
+        </button>
+      </form>
+
+      <form
+        className="flex flex-wrap items-end gap-3 border-t border-[var(--color-border)] pt-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setMessage(null);
+          const form = e.currentTarget;
+          const formData = new FormData(form);
+          startPriceTransition(async () => {
+            const outcome = await setPriceAction(productId, variant.id, storeId, formData);
+            if (outcome.ok) {
+              onPriceSaved(outcome.data.price_minor);
+              setNewPrice("");
+              setMessage("Price updated.");
+            } else {
+              setMessage(outcome.error);
+            }
+          });
+        }}
+      >
+        <MoneyField
+          label="New retail price"
+          name="price"
+          value={newPrice}
+          onChange={setNewPrice}
+          placeholder="24.99"
+        />
+        <button
+          type="submit"
+          disabled={pricePending}
+          className="rounded-md border border-[var(--color-border)] px-4 py-2 text-sm disabled:opacity-60"
+        >
+          {pricePending ? "Updating..." : "Update price"}
+        </button>
+      </form>
+    </section>
+  );
+}
+
+function MoneyField({
+  label,
+  name,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  name: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <label className="flex w-32 flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+      {label}
+      <input
+        name={name}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="rounded-md border border-[var(--color-border)] px-3 py-2 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
+      />
+    </label>
+  );
+}
+
+function Readout({ label, value, note }: { label: string; value: string; note?: string }) {
+  return (
+    <div>
+      <div className="text-xs text-[var(--color-text-muted)]">{label}</div>
+      <div className="text-base font-medium">{value}</div>
+      {note ? <div className="text-xs text-[var(--color-text-muted)]">{note}</div> : null}
+    </div>
   );
 }
 

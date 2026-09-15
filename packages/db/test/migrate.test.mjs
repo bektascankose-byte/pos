@@ -18,12 +18,12 @@ const db = scratch.db;
 const n = async (sql) => Number((await db.query(sql))[0].n);
 
 test(`all ${migrationFiles().length} migrations applied on ${scratch.engine}`, () => {
-  assert.equal(migrationFiles().length, 15);
+  assert.equal(migrationFiles().length, 16);
 });
 
 test('migrations are numbered contiguously from 0001', () => {
   const prefixes = migrationFiles().map((f) => Number(f.name.slice(0, 4)));
-  assert.deepEqual(prefixes, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+  assert.deepEqual(prefixes, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
 });
 
 test('71 base tables exist', async () => {
@@ -45,7 +45,7 @@ test('inventory_ledger and audit_log are range partitioned', async () => {
   assert.deepEqual(rows.map((r) => r.relname), ['audit_log', 'inventory_ledger']);
 });
 
-test('109 foreign keys, 23 enums, 72 table level checks', async () => {
+test('109 foreign keys, 23 enums, 77 table level checks', async () => {
   assert.equal(await n(`select count(*) n from pg_constraint c
                         join pg_namespace ns on ns.oid=c.connamespace
                         where ns.nspname='public' and c.contype='f'`), 109);
@@ -56,7 +56,7 @@ test('109 foreign keys, 23 enums, 72 table level checks', async () => {
                         join pg_class t on t.oid=c.conrelid
                         join pg_namespace ns on ns.oid=c.connamespace
                         where ns.nspname='public' and c.contype='c'
-                          and not t.relispartition`), 72);
+                          and not t.relispartition`), 77);
 });
 
 test('11 functions and 35 user triggers', async () => {

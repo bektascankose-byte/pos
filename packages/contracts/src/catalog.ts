@@ -132,6 +132,18 @@ export const variantSchema = z.object({
   last_cost: costDecimal.nullable(),
   case_quantity: z.number().int().min(1),
   pack_quantity: z.number().int().min(1),
+  /**
+   * What the vendor charges for a case, and what comes off it. `cost` above is
+   * derived from these when `case_cost` is set -- see
+   * `CatalogService.updateVariant`. A rebate deliberately isn't part of that
+   * derivation: it lands after the fact and belongs in "margin after rebate"
+   * rather than in the cost inventory is valued at.
+   */
+  case_cost: costDecimal.nullable(),
+  case_discount: costDecimal,
+  case_rebate: costDecimal,
+  /** Target margin percentage, for suggesting a retail price. */
+  default_margin: z.string().nullable(),
   reorder_point: quantity.nullable(),
   reorder_quantity: quantity.nullable(),
   status: entityStatus,
@@ -296,9 +308,17 @@ export const bulkUpdateProductsSchema = z
  */
 export const updateVariantSchema = z.object({
   variant_name: z.string().max(128).optional(),
+  /** Ignored when this variant has a `case_cost`, which `cost` is derived from instead. */
   cost: costDecimal.optional(),
   case_quantity: z.number().int().min(1).optional(),
   pack_quantity: z.number().int().min(1).optional(),
+  case_cost: costDecimal.optional(),
+  case_discount: costDecimal.optional(),
+  case_rebate: costDecimal.optional(),
+  default_margin: z
+    .string()
+    .regex(/^\d{1,2}(\.\d{1,2})?$/, 'a margin percentage below 100, like 32.5')
+    .optional(),
   reorder_point: quantity.optional(),
   reorder_quantity: quantity.optional(),
   status: entityStatus.optional(),
@@ -368,6 +388,12 @@ export const priceCategorySchema = z.object({
   member_count: z.number().int(),
   /** Null when empty, or when current members don't all share one price. */
   current_price_minor: moneyNonNegative.nullable(),
+  /**
+   * Members that have drifted off the price the rest of the group shares --
+   * the whole reason to group prices in the first place. An unpriced member
+   * counts, being just as wrong at the counter as a differently-priced one.
+   */
+  mismatch_count: z.number().int(),
 });
 
 export const priceCategoryMemberSchema = z.object({

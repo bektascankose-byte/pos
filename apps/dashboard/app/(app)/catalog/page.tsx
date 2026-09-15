@@ -11,6 +11,7 @@ interface SearchRow {
   product_name: string;
   brand_name: string | null;
   price_minor: string | null;
+  cost: string | null;
   on_hand: string;
   available: string;
 }

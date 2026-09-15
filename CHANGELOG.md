@@ -2,6 +2,47 @@
 
 Notable changes. Newest first.
 
+## Case costing and margin
+
+Third back-office pass, and the one that answers "what am I actually making on this." A shop buys a case
+and sells a unit; until now a variant carried only its unit `cost`, so the division happened on a
+calculator next to the invoice and **margin appeared nowhere in the app at all**.
+
+- **Migration `0016_case_costing.sql`** adds `case_cost`, `case_discount`, `case_rebate` and
+  `default_margin` to `product_variants`. The schema was already shaped for this: `cost` has been
+  `numeric(14,6)` since 0002 precisely "because a case of 12 at $5.00 is a unit cost of 0.416667 and
+  truncating that to cents corrupts margin within weeks."
+- **`cost` is now derived, not entered, whenever there's a case cost to derive it from** --
+  `(case_cost - case_discount) / case_quantity`, computed in `updateVariant`'s own UPDATE so that
+  changing only the units-per-case re-divides the case cost already on file. A unit cost that disagrees
+  with the case it came from is the bug the arrangement exists to prevent. Entering cost directly still
+  works for anything bought by the each.
+- A **rebate is deliberately outside that derivation**: it arrives after the fact from the manufacturer,
+  so it belongs in "margin after rebate" rather than in the cost inventory is valued at.
+- **Cost & Margin tab** on the item: units/case, case cost, discount and rebate, with cost-per-unit,
+  margin and margin-after-rebate recalculating as they're typed, a below-cost warning, and a target
+  margin that says what the item would have to sell for -- click the figure to load it into the price
+  box. Cost and price save separately, because a price change is its own event with its own history.
+- **Margin in the catalog list**, with anything selling under cost called out in red.
+- **Price groups gained the signal that makes grouping worth doing**: how many members have drifted off
+  the price the rest share. The group's price is taken as the most common one among members (`mode()`),
+  and an unpriced member counts as mismatched -- it is exactly as wrong at the counter as one priced
+  differently. Shown as "Off the group price", linking into the group.
+- `postgres-error.ts` learned the five new check constraints, so a discount larger than the case cost
+  reads as "a case discount can't be more than the case costs" rather than "the request violates a rule
+  the database enforces".
+
+All margin arithmetic lives in `lib/margin.ts` so the item form, the catalog list and the price groups
+can't disagree about it -- including the distinction the file is emphatic about: margin is taken on the
+retail price, not on cost ($4 bought and $5 sold is a 20% margin and a 25% markup, and confusing the two
+is how a shop thinks it's making more than it is).
+
+Verified against the real dev database: case cost 40 / discount 5 / units 5 deriving a $7.00 unit cost
+through the API, and re-deriving to $3.50 when only the units-per-case changed; the live readout matching
+by hand on screen; a deliberately drifted price group reporting exactly one mismatched member. Schema
+tests updated for the new migration and its five checks (72 table-level checks became 77) and passing
+against real Postgres including RLS. Probe products archived and the probe group removed afterward.
+
 ## Item page: codes, carton mapping, and price/purchase/sales history
 
 Second of the four back-office passes. The item page had Details and Variants; the reference product this

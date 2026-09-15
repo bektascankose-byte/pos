@@ -107,6 +107,7 @@ export class CatalogService {
         `SELECT v.id AS variant_id, v.sku, v.variant_name,
                 p.id AS product_id, p.name AS product_name,
                 br.name AS brand_name,
+                v.cost::text,
                 pr.price_minor::text,
                 COALESCE(il.on_hand, 0)::text   AS on_hand,
                 COALESCE(il.available, 0)::text AS available
@@ -665,6 +666,8 @@ export class CatalogService {
                 v.is_default, v.sort_order, v.cost::text, v.average_cost::text,
                 v.last_cost::text, v.case_quantity, v.pack_quantity,
                 v.reorder_point::text, v.reorder_quantity::text, v.status,
+                v.case_cost::text, v.case_discount::text, v.case_rebate::text,
+                v.default_margin::text,
                 pr.price_minor::text
          FROM product_variants v
          LEFT JOIN LATERAL (
@@ -790,22 +793,41 @@ export class CatalogService {
     });
   }
 
-  /** Edit a variant's own fields -- never its price; see `setVariantPrice`. */
+  /**
+   * Edit a variant's own fields -- never its price; see `setVariantPrice`.
+   *
+   * `cost` is derived rather than accepted whenever this variant has a case
+   * cost to derive it from: a unit cost that disagrees with the case it came
+   * out of is the bug this arrangement exists to prevent. Every reference
+   * below reads the row's existing value (an UPDATE's right-hand side sees the
+   * old row), so changing only the case quantity re-divides the case cost that
+   * was already on file.
+   */
   async updateVariant(orgId: string, actorUserId: string, id: string, input: UpdateVariant) {
     return this.db.withOrg(orgId, async (tx) => {
       const { rows } = await tx.query(
         `UPDATE product_variants SET
            variant_name     = COALESCE($2, variant_name),
-           cost             = COALESCE($3, cost),
+           cost             = CASE
+                                WHEN COALESCE($9, case_cost) IS NOT NULL
+                                  THEN (COALESCE($9, case_cost) - COALESCE($10, case_discount))
+                                       / GREATEST(COALESCE($4, case_quantity), 1)
+                                ELSE COALESCE($3, cost)
+                              END,
            case_quantity    = COALESCE($4, case_quantity),
            pack_quantity    = COALESCE($5, pack_quantity),
            reorder_point    = COALESCE($6, reorder_point),
            reorder_quantity = COALESCE($7, reorder_quantity),
-           status           = COALESCE($8, status)
+           status           = COALESCE($8, status),
+           case_cost        = COALESCE($9, case_cost),
+           case_discount    = COALESCE($10, case_discount),
+           case_rebate      = COALESCE($11, case_rebate),
+           default_margin   = COALESCE($12, default_margin)
          WHERE id = $1
          RETURNING id, product_id, sku, plu, variant_name, attributes, is_default, sort_order,
                    cost::text, average_cost::text, last_cost::text, case_quantity, pack_quantity,
-                   reorder_point::text, reorder_quantity::text, status`,
+                   reorder_point::text, reorder_quantity::text, status,
+                   case_cost::text, case_discount::text, case_rebate::text, default_margin::text`,
         [
           id,
           input.variant_name ?? null,
@@ -815,6 +837,10 @@ export class CatalogService {
           input.reorder_point ?? null,
           input.reorder_quantity ?? null,
           input.status ?? null,
+          input.case_cost ?? null,
+          input.case_discount ?? null,
+          input.case_rebate ?? null,
+          input.default_margin ?? null,
         ],
       );
       const variant = rows[0];
@@ -961,26 +987,47 @@ export class CatalogService {
 
   async listPriceCategories(orgId: string, storeId: string | null) {
     return this.db.withOrg(orgId, async (tx) => {
+      // `mismatch_count` is the point of grouping prices in the first place:
+      // how many members have drifted off the price the rest of the group
+      // shares. The group's own price is taken as the most common one among
+      // its members (`mode()`), and a member with no price at all counts as
+      // mismatched -- it's exactly as wrong at the counter as one priced
+      // differently.
       const { rows } = await tx.query(
-        `SELECT pg.id, pg.name, pg.created_at,
-                count(v.id)::int AS member_count,
-                (CASE WHEN count(DISTINCT pr.price_minor) = 1 THEN min(pr.price_minor) ELSE NULL END)::text
-                  AS current_price_minor
-         FROM price_groups pg
-         LEFT JOIN product_variants v ON v.price_group_id = pg.id
-         LEFT JOIN LATERAL (
-           SELECT price_minor FROM variant_prices
-           WHERE variant_id = v.id
-             AND (store_id = $2 OR store_id IS NULL)
-             AND kind = 'regular'
-             AND effective_from <= now()
-             AND (effective_to IS NULL OR effective_to > now())
-           ORDER BY store_id NULLS LAST, effective_from DESC
-           LIMIT 1
-         ) pr ON true
-         WHERE pg.org_id = $1
-         GROUP BY pg.id
-         ORDER BY pg.created_at DESC`,
+        `WITH member_prices AS (
+           SELECT pg.id AS group_id, pg.name, pg.created_at,
+                  v.id AS variant_id, pr.price_minor
+           FROM price_groups pg
+           LEFT JOIN product_variants v ON v.price_group_id = pg.id
+           LEFT JOIN LATERAL (
+             SELECT price_minor FROM variant_prices
+             WHERE variant_id = v.id
+               AND (store_id = $2 OR store_id IS NULL)
+               AND kind = 'regular'
+               AND effective_from <= now()
+               AND (effective_to IS NULL OR effective_to > now())
+             ORDER BY store_id NULLS LAST, effective_from DESC
+             LIMIT 1
+           ) pr ON true
+           WHERE pg.org_id = $1
+         ),
+         group_mode AS (
+           SELECT group_id, mode() WITHIN GROUP (ORDER BY price_minor) AS common_price
+           FROM member_prices
+           WHERE price_minor IS NOT NULL
+           GROUP BY group_id
+         )
+         SELECT mp.group_id AS id, mp.name, mp.created_at,
+                count(mp.variant_id)::int AS member_count,
+                (CASE WHEN count(DISTINCT mp.price_minor) = 1 THEN min(mp.price_minor) ELSE NULL END)::text
+                  AS current_price_minor,
+                count(mp.variant_id) FILTER (
+                  WHERE mp.price_minor IS DISTINCT FROM gm.common_price
+                )::int AS mismatch_count
+         FROM member_prices mp
+         LEFT JOIN group_mode gm ON gm.group_id = mp.group_id
+         GROUP BY mp.group_id, mp.name, mp.created_at, gm.common_price
+         ORDER BY mp.created_at DESC`,
         [orgId, storeId],
       );
       return rows;

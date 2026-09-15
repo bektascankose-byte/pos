@@ -44,6 +44,7 @@ export default async function PriceCategoriesPage() {
               <th className="px-4 py-2 font-normal">Name</th>
               <th className="px-4 py-2 font-normal">Members</th>
               <th className="px-4 py-2 font-normal">Price</th>
+              <th className="px-4 py-2 font-normal">Off the group price</th>
             </tr>
           </thead>
           <tbody>
@@ -62,11 +63,23 @@ export default async function PriceCategoriesPage() {
                       the API sends. `String()` bridges that gap at the boundary. */}
                   {c.current_price_minor !== null ? formatMinor(String(c.current_price_minor)) : "mixed / —"}
                 </td>
+                <td className="px-4 py-2">
+                  {c.mismatch_count > 0 ? (
+                    <Link
+                      href={`/catalog/price-categories/${c.id}`}
+                      className="font-medium text-[var(--color-error)]"
+                    >
+                      {c.mismatch_count} item{c.mismatch_count === 1 ? "" : "s"}
+                    </Link>
+                  ) : (
+                    <span className="text-[var(--color-text-muted)]">—</span>
+                  )}
+                </td>
               </tr>
             ))}
             {categories.length === 0 && !error ? (
               <tr>
-                <td colSpan={3} className="px-4 py-6 text-center text-[var(--color-text-muted)]">
+                <td colSpan={4} className="px-4 py-6 text-center text-[var(--color-text-muted)]">
                   No price categories yet.
                 </td>
               </tr>
