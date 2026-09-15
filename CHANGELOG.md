@@ -2,6 +2,49 @@
 
 Notable changes. Newest first.
 
+## Verify and unverify a delivery, and let unknown scans name themselves
+
+A counted delivery could be put into stock and then never touched again. Every way of correcting one —
+a miscount, a line scanned twice, an item that turned out to be something else — meant living with it.
+
+**Verify / Unverify, on the Receiving list and on the delivery itself.** Verify puts the count into
+stock. Unverify takes it back out and returns the delivery to Counting, where lines can be added,
+removed or corrected before verifying again.
+
+Unverify does **not** erase what verifying did. The ledger is append-only by design — "corrections are
+new rows, never edits" — so it posts the opposite movement against the same delivery and leaves both
+halves standing: the +6 that went in and the −6 that came back out, because both happened. Deleting the
+original would make a month-end total that was correct when it was taken quietly become a different
+number. The reason stays `receiving` rather than becoming an adjustment, because this is not a count
+correction, it is the undoing of one specific receipt, and the reference columns say which.
+
+Stock is allowed to go negative doing it, as everywhere else in this ledger: if part of a delivery has
+already been sold, refusing to unverify would trap the delivery in a state the shop cannot fix.
+
+**Quantities and unit costs are editable in place.** The rows offered +1 and Remove and no way to simply
+say "nine". Now the number is typed over — Enter or clicking away saves, Escape puts the original back,
+and nothing is posted unless the value actually changed, so tabbing through six lines does not fire six
+updates. Values stay strings the whole way, as every quantity and cost in this system does, so none of
+it passes through a float.
+
+**An unfamiliar scan now names itself.** A code the catalog has never seen used to stop the count until
+somebody opened a dialog and typed a name. With the old system's item file loaded, most of those codes
+are already known, so the scan fills itself in — name, price, cost, case size — and the count keeps
+moving. The catalog is still asked first and always wins; only a code it has never seen goes to the
+reference file, and a miss is still not an error.
+
+That convenience carries an obligation, so it is recorded per line rather than inferred (migration
+0023): a price carried over from another system is the price it had **there**, on the day that file was
+exported. The row says so — *"new item, filled in from your Modisoft file — check its price"* — and
+nothing becomes stock until a person presses Verify.
+
+Verified end to end: scanning three codes the catalog didn't know produced two auto-named lines and one
+genuinely unknown one still asking to be identified; verify put 3 and 1 into stock; unverify returned
+both to 0 and reopened the delivery; a quantity edited 3 → 10 and a line removed; re-verify landed 10.
+The ledger shows all nine movements — every receipt and every reversal — with nothing deleted. Editing
+in the browser persisted across a reload. Test deliveries and the products they created were removed
+afterwards; the two real deliveries and their stock were left exactly as they were.
+
 ## One code, called UPC — and what an invoice says about money
 
 An item had a `sku` and a list of barcodes, and the new-item form asked for both. In this shop they are

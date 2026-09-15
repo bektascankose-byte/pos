@@ -4,7 +4,13 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { ScanPanel } from "./ScanPanel";
 import { IdentifyLine, type PriceGroupOption } from "./IdentifyLine";
-import { removeLineAction, updateLineAction, commitSessionAction, matchInvoiceAction } from "../actions";
+import {
+  removeLineAction,
+  updateLineAction,
+  commitSessionAction,
+  unverifySessionAction,
+  matchInvoiceAction,
+} from "../actions";
 import type { LookupOption } from "../../catalog/LookupSelect";
 import type { ReceivingSession, ReceivingLine, ReceivingMatch, InvoiceImport } from "@snappos/contracts";
 
@@ -60,6 +66,18 @@ export function ReceivingDetailClient({
       },
     );
 
+  const unverify = () =>
+    run(
+      () => unverifySessionAction(session.id),
+      (updated) => {
+        setSession(updated);
+        setMessage({
+          kind: "success",
+          text: "Taken back out of stock — edit what you need, then verify again.",
+        });
+      },
+    );
+
   return (
     <div className="flex max-w-5xl flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -111,15 +129,48 @@ export function ReceivingDetailClient({
                       <>
                         {line.product_name}
                         {line.variant_name ? ` — ${line.variant_name}` : ""}
+                        {/* An item this scan created from the old system's file
+                            carries that file's price. Worth a glance before it
+                            becomes sellable, so the row says so. */}
+                        {line.filled_from_reference ? (
+                          <span className="mt-0.5 block text-[0.7rem] text-[var(--color-text-muted)]">
+                            new item, filled in from your Modisoft file — check its price
+                          </span>
+                        ) : null}
                       </>
                     ) : (
                       <span className="text-[var(--color-error)]">Not in the catalog</span>
                     )}
                   </td>
                   <td className="px-4 py-2 font-mono text-xs">{line.scanned_code}</td>
-                  <td className="px-4 py-2 text-right tabular-nums">{Number(line.quantity)}</td>
                   <td className="px-4 py-2 text-right tabular-nums">
-                    {line.unit_cost ? `$${Number(line.unit_cost)}` : "—"}
+                    {open ? (
+                      <InlineNumber
+                        value={String(Number(line.quantity))}
+                        disabled={pending}
+                        onCommit={(next) =>
+                          run(() => updateLineAction(session.id, line.id, { quantity: next }), setSession)
+                        }
+                      />
+                    ) : (
+                      Number(line.quantity)
+                    )}
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums">
+                    {open ? (
+                      <InlineNumber
+                        value={line.unit_cost ? String(Number(line.unit_cost)) : ""}
+                        placeholder="—"
+                        disabled={pending}
+                        onCommit={(next) =>
+                          run(() => updateLineAction(session.id, line.id, { unit_cost: next }), setSession)
+                        }
+                      />
+                    ) : line.unit_cost ? (
+                      `$${Number(line.unit_cost)}`
+                    ) : (
+                      "—"
+                    )}
                   </td>
                   <td className="px-4 py-2">
                     {open ? (
@@ -175,7 +226,7 @@ export function ReceivingDetailClient({
               ? `${unresolved.length} scanned code${unresolved.length === 1 ? "" : "s"} still need${unresolved.length === 1 ? "s" : ""} naming — an unknown code would put the count on the wrong item.`
               : lines.length === 0
                 ? "Nothing scanned yet."
-                : `${lines.length} line${lines.length === 1 ? "" : "s"} will be received. This posts stock and can't be undone in one click.`}
+                : `${lines.length} line${lines.length === 1 ? "" : "s"} will be received. You can unverify afterwards to change them.`}
           </p>
           <button
             type="button"
@@ -183,7 +234,26 @@ export function ReceivingDetailClient({
             onClick={commit}
             className="self-start rounded-md bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-[var(--color-accent-contrast)] disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {pending ? "Receiving..." : "Receive into stock"}
+            {pending ? "Receiving..." : "Verify — receive into stock"}
+          </button>
+        </section>
+      ) : null}
+
+      {session.status === "committed" ? (
+        <section className="flex flex-col gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+          <h2 className="text-sm font-medium">Need to change something?</h2>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Unverifying takes these {lines.length} line{lines.length === 1 ? "" : "s"} back out of your
+            shelf figures so you can add, remove or correct them, then verify again. Nothing is deleted:
+            the stock going in and coming back out both stay on the record, because both happened.
+          </p>
+          <button
+            type="button"
+            disabled={pending}
+            onClick={unverify}
+            className="self-start rounded-md border border-[var(--color-border)] px-4 py-2 text-sm disabled:opacity-40"
+          >
+            {pending ? "Working..." : "Unverify — take back out of stock"}
           </button>
         </section>
       ) : null}
@@ -336,5 +406,75 @@ function MatchList({
         ))}
       </ul>
     </div>
+  );
+}
+
+/**
+ * A number in a table cell that can be typed over.
+ *
+ * Saves on Enter or on leaving the box, and only when the value actually
+ * changed — a tab through a row of six lines should not post six updates.
+ * Escape puts the original back, so a half-typed number can be abandoned
+ * without having to remember what was there.
+ *
+ * Kept as a string the whole way. Quantities and costs are strings throughout
+ * this system so they never pass through a float, and a cell that parses to a
+ * number to display it would undo that at the last step.
+ */
+function InlineNumber({
+  value,
+  placeholder,
+  disabled,
+  onCommit,
+}: {
+  value: string;
+  placeholder?: string;
+  disabled?: boolean;
+  onCommit: (next: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+
+  // The row re-renders with the saved value after a commit, and with someone
+  // else's value if the session is reloaded; either way the box should follow
+  // unless it is being typed in right now.
+  const [lastValue, setLastValue] = useState(value);
+  if (value !== lastValue) {
+    setLastValue(value);
+    setDraft(value);
+  }
+
+  const commit = () => {
+    const next = draft.trim();
+    if (next === value.trim()) return;
+    if (next === "") {
+      setDraft(value);
+      return;
+    }
+    if (!/^\d+(\.\d+)?$/.test(next)) {
+      setDraft(value);
+      return;
+    }
+    onCommit(next);
+  };
+
+  return (
+    <input
+      value={draft}
+      disabled={disabled}
+      placeholder={placeholder}
+      inputMode="decimal"
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.currentTarget.blur();
+        } else if (e.key === "Escape") {
+          setDraft(value);
+          e.currentTarget.blur();
+        }
+      }}
+      className="w-20 rounded-md border border-transparent bg-transparent px-2 py-1 text-right tabular-nums outline-none hover:border-[var(--color-border)] focus:border-[var(--color-accent)] disabled:opacity-40"
+    />
   );
 }

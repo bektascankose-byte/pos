@@ -29,6 +29,8 @@ export const receivingLineSchema = z.object({
   quantity,
   unit_cost: costDecimal.nullable(),
   note: z.string().nullable(),
+  /** This line named itself from the old system's item file rather than from a person -- so its price is that file's price, and is worth a look. */
+  filled_from_reference: z.boolean(),
   created_at: timestamp,
 });
 

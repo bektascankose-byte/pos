@@ -188,7 +188,24 @@ export class ReferenceService {
     referenceId: string,
     overrides: { name?: string; category_id?: string; brand_id?: string; price_minor?: string; cost?: string } = {},
   ) {
-    return this.db.withOrg(orgId, async (tx) => {
+    return this.db.withOrg(orgId, (tx) =>
+      this.createFromReferenceRowTx(tx, actorUserId, storeId, referenceId, overrides),
+    );
+  }
+
+  /**
+   * The body of `promote`, callable inside a transaction someone else owns --
+   * which is what a scanner mid-count needs, since the line it is about to
+   * write has to land in the same transaction as the product it names.
+   */
+  private async createFromReferenceRowTx(
+    tx: PoolClient,
+    actorUserId: string,
+    storeId: string | null,
+    referenceId: string,
+    overrides: { name?: string; category_id?: string; brand_id?: string; price_minor?: string; cost?: string },
+  ) {
+    {
       const { rows } = await tx.query<{
         scan_code: string;
         description: string | null;
@@ -267,7 +284,51 @@ export class ReferenceService {
       });
 
       return { product_id: created.id, variant_id: created.variants[0]!.id, name };
-    });
+    }
+  }
+
+  /**
+   * Create a catalog item from whatever the reference file knows about a
+   * scanned code, inside a transaction the caller already owns.
+   *
+   * The counterpart to `promote` for the other direction: `promote` is a
+   * person picking a row off a list, this is a scanner meeting a code nobody
+   * has catalogued yet. Both end at the same `createProductTx`, so an item
+   * born either way is an ordinary item with nothing special about it.
+   *
+   * Returns null rather than throwing when the file has never heard of the
+   * code, or has heard of it but recorded no usable name. Neither is an error
+   * at a scanner: the caller keeps the line unresolved and a human names it,
+   * which is exactly what happened before this existed.
+   */
+  async createFromReferenceTx(
+    tx: PoolClient,
+    actorUserId: string,
+    storeId: string | null,
+    code: string,
+  ): Promise<{ variantId: string; created: boolean } | null> {
+    const normalized = normalizeCode(code);
+    if (!normalized) return null;
+
+    const { rows } = await tx.query<{ id: string; scan_code: string; description: string | null }>(
+      `SELECT id, scan_code, description FROM reference_products
+       WHERE scan_code = $1 ORDER BY created_at DESC LIMIT 1`,
+      [normalized],
+    );
+    const reference = rows[0];
+    // A row with no name cannot become a product -- `createProductTx` needs
+    // one, and inventing "Unknown item" would put a lie in the catalog.
+    if (!reference || !reference.description?.trim()) return null;
+
+    // The caller looked the code up as scanned; this looks it up normalized,
+    // which can be a different string (a `*` wrapper, a stray keystroke). If
+    // the normalized form is already a real item, say so rather than letting
+    // createProductTx collide with its own unique index.
+    const existing = await this.catalog.findVariantBySkuOrBarcodeTx(tx, reference.scan_code);
+    if (existing) return { variantId: existing.id, created: false };
+
+    const created = await this.createFromReferenceRowTx(tx, actorUserId, storeId, reference.id, {});
+    return { variantId: created.variant_id, created: true };
   }
 }
 

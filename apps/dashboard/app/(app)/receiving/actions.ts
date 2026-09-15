@@ -2,6 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { apiFetch, ApiError } from "@/lib/api";
 import { minorToMajor, parseMajorToMinor } from "@/lib/money";
 import type { ActionResult } from "@/lib/action-result";
@@ -195,9 +196,33 @@ export async function commitSessionAction(id: string): Promise<ActionResult<Rece
       method: "POST",
       headers: { "Idempotency-Key": randomUUID() },
     });
+    revalidatePath("/receiving");
     return { ok: true, data };
   } catch (e) {
     return { ok: false, error: e instanceof ApiError ? e.message : "Could not put this into stock." };
+  }
+}
+
+/**
+ * Take a verified delivery back out of stock so it can be corrected.
+ *
+ * Does not erase what verifying did — the ledger keeps both the movement in
+ * and the movement back out, which is what actually happened. The delivery
+ * returns to Counting and can be edited again.
+ */
+export async function unverifySessionAction(id: string): Promise<ActionResult<ReceivingSession>> {
+  try {
+    const data = await apiFetch<ReceivingSession>(`/api/v1/receiving/${id}/unverify`, {
+      method: "POST",
+      headers: { "Idempotency-Key": randomUUID() },
+    });
+    revalidatePath("/receiving");
+    return { ok: true, data };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof ApiError ? e.message : "Could not take this back out of stock.",
+    };
   }
 }
 

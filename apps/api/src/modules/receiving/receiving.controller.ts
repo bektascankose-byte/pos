@@ -144,6 +144,36 @@ export class ReceivingController {
     return outcome.body;
   }
 
+  /**
+   * Take the delivery back out of stock so it can be corrected. Carries an
+   * Idempotency-Key for exactly the reason commit does, in the other
+   * direction: a retried request without one would remove the box twice.
+   */
+  @Post(':id/unverify')
+  @RequirePermissions('purchasing.receive')
+  async unverify(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Headers('idempotency-key') key?: string,
+  ) {
+    if (!key) {
+      throw new ApiException(
+        'validation_failed',
+        'POST /v1/receiving/:id/unverify requires an Idempotency-Key header',
+        { retryable: false },
+      );
+    }
+
+    const outcome = await this.idempotency.execute(
+      user.orgId,
+      key,
+      'POST /v1/receiving/:id/unverify',
+      { id },
+      async () => ({ status: 200, body: await this.receiving.unverify(user.orgId, user.userId, id) }),
+    );
+    return outcome.body;
+  }
+
   @Post(':id/cancel')
   @RequirePermissions('purchasing.create')
   cancel(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { apiFetch, ApiError } from "@/lib/api";
 import { primaryStoreId } from "@/lib/store";
 import type { ReceivingSession } from "@snappos/contracts";
+import { VerifyButton } from "./VerifyButton";
 
 export default async function ReceivingPage() {
   let sessions: ReceivingSession[] = [];
@@ -42,6 +43,7 @@ export default async function ReceivingPage() {
               <th className="px-4 py-2 text-right font-normal">Lines</th>
               <th className="px-4 py-2 font-normal">Status</th>
               <th className="px-4 py-2 font-normal">Started</th>
+              <th className="px-4 py-2" />
             </tr>
           </thead>
           <tbody>
@@ -81,11 +83,14 @@ export default async function ReceivingPage() {
                 <td className="px-4 py-2 text-[var(--color-text-muted)]">
                   {new Date(session.created_at).toLocaleString()}
                 </td>
+                <td className="px-4 py-2 text-right">
+                  <VerifyButton session={session} />
+                </td>
               </tr>
             ))}
             {sessions.length === 0 && !error ? (
               <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-[var(--color-text-muted)]">
+                <td colSpan={6} className="px-4 py-6 text-center text-[var(--color-text-muted)]">
                   Nothing received yet.
                 </td>
               </tr>

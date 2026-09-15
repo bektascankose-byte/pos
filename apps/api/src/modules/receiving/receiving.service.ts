@@ -4,6 +4,7 @@ import { money, type CreateProduct, type CreateProductForScan, type CreateReceiv
 import { DatabaseService } from '../../platform/database/database.service.js';
 import { AuditService } from '../../platform/audit/audit.service.js';
 import { CatalogService } from '../catalog/catalog.service.js';
+import { ReferenceService } from '../catalog/reference.service.js';
 import { InventoryRepository, type Movement } from '../inventory/inventory.repository.js';
 import { ApiException } from '../../platform/errors/api-exception.js';
 
@@ -14,7 +15,7 @@ const SESSION_COLUMNS = `s.id, s.store_id, s.vendor_id, v.name AS vendor_name, s
          WHERE l.session_id = s.id AND l.variant_id IS NULL) AS unresolved_count`;
 
 const LINE_COLUMNS = `l.id, l.variant_id, l.scanned_code, p.name AS product_name, pv.variant_name,
-       pv.sku, l.quantity::text, l.unit_cost::text, l.note, l.created_at`;
+       pv.sku, l.quantity::text, l.unit_cost::text, l.note, l.filled_from_reference, l.created_at`;
 
 const LINE_FROM = `receiving_lines l
        LEFT JOIN product_variants pv ON pv.id = l.variant_id
@@ -26,6 +27,7 @@ export class ReceivingService {
     private readonly db: DatabaseService,
     private readonly audit: AuditService,
     private readonly catalog: CatalogService,
+    private readonly reference: ReferenceService,
     private readonly inventoryRepository: InventoryRepository,
   ) {}
 
@@ -83,7 +85,7 @@ export class ReceivingService {
    */
   async bulkScan(orgId: string, actorUserId: string, id: string, codes: string[]) {
     return this.db.withOrg(orgId, async (tx) => {
-      await this.assertOpen(tx, id);
+      const session = await this.assertOpen(tx, id);
 
       const tally = new Map<string, number>();
       for (const raw of codes) {
@@ -92,9 +94,9 @@ export class ReceivingService {
         tally.set(code, (tally.get(code) ?? 0) + 1);
       }
 
-      for (const [code, count] of tally) {
-        const match = await this.catalog.findVariantBySkuOrBarcodeTx(tx, code);
+      let filledFromReference = 0;
 
+      for (const [code, count] of tally) {
         // Already on this session? Add to it rather than opening a second
         // line for the same thing -- someone scanning a box in two passes
         // should end with one line of ten, not two lines of five.
@@ -113,10 +115,14 @@ export class ReceivingService {
           continue;
         }
 
+        const resolved = await this.resolveCode(tx, actorUserId, session.store_id, code);
+        if (resolved.fromReference) filledFromReference += 1;
+
         await tx.query(
-          `INSERT INTO receiving_lines (org_id, session_id, variant_id, scanned_code, quantity)
-           VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, $4)`,
-          [id, match?.id ?? null, code, count],
+          `INSERT INTO receiving_lines
+             (org_id, session_id, variant_id, scanned_code, quantity, filled_from_reference)
+           VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, $4, $5)`,
+          [id, resolved.variantId, code, count, resolved.fromReference],
         );
       }
 
@@ -125,7 +131,7 @@ export class ReceivingService {
         entityType: 'receiving_session',
         entityId: id,
         actorUserId,
-        newValue: { codes: codes.length, distinct: tally.size },
+        newValue: { codes: codes.length, distinct: tally.size, filled_from_reference: filledFromReference },
       });
 
       return this.load(tx, id);
@@ -139,9 +145,8 @@ export class ReceivingService {
     input: { scanned_code: string; quantity?: string | undefined; unit_cost?: string | undefined; note?: string | undefined },
   ) {
     return this.db.withOrg(orgId, async (tx) => {
-      await this.assertOpen(tx, id);
+      const session = await this.assertOpen(tx, id);
       const code = input.scanned_code.trim();
-      const match = await this.catalog.findVariantBySkuOrBarcodeTx(tx, code);
 
       const { rows: existing } = await tx.query<{ id: string }>(
         `SELECT id FROM receiving_lines
@@ -159,15 +164,57 @@ export class ReceivingService {
           [existing[0].id, input.quantity ?? '1', input.unit_cost ?? null, input.note ?? null],
         );
       } else {
+        const resolved = await this.resolveCode(tx, actorUserId, session.store_id, code);
         await tx.query(
-          `INSERT INTO receiving_lines (org_id, session_id, variant_id, scanned_code, quantity, unit_cost, note)
-           VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, $4, $5, $6)`,
-          [id, match?.id ?? null, code, input.quantity ?? '1', input.unit_cost ?? null, input.note ?? null],
+          `INSERT INTO receiving_lines
+             (org_id, session_id, variant_id, scanned_code, quantity, unit_cost, note, filled_from_reference)
+           VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, $4, $5, $6, $7)`,
+          [
+            id,
+            resolved.variantId,
+            code,
+            input.quantity ?? '1',
+            input.unit_cost ?? null,
+            input.note ?? null,
+            resolved.fromReference,
+          ],
         );
       }
 
       return this.load(tx, id);
     });
+  }
+
+  /**
+   * What is this code, and if the catalog doesn't know, can the old system's
+   * item file answer instead?
+   *
+   * The catalog is asked first and always wins. Only a code it has never seen
+   * goes to `reference_products`, and a hit there creates the product from
+   * what that file recorded -- name, price, cost, case size -- so a count can
+   * keep moving instead of stopping at a dialog per unfamiliar box.
+   *
+   * The price it creates with is the price that item had in ANOTHER system on
+   * the day that file was exported. That is a real risk and the reason this
+   * does not also put stock on the shelf: the session still has to be verified
+   * by a person, and the line is flagged so the screen can say which items
+   * named themselves. A miss is not an error -- the line stays unresolved,
+   * exactly as before, and somebody names it by hand.
+   */
+  private async resolveCode(
+    tx: PoolClient,
+    actorUserId: string,
+    storeId: string,
+    code: string,
+  ): Promise<{ variantId: string | null; fromReference: boolean }> {
+    const match = await this.catalog.findVariantBySkuOrBarcodeTx(tx, code);
+    if (match) return { variantId: match.id, fromReference: false };
+
+    const created = await this.reference.createFromReferenceTx(tx, actorUserId, storeId, code);
+    if (!created) return { variantId: null, fromReference: false };
+    // Only a product this scan actually *created* carries the warning. One
+    // that already existed was simply matched, and needs no second look.
+    return { variantId: created.variantId, fromReference: created.created };
   }
 
   async updateLine(orgId: string, id: string, lineId: string, input: UpdateReceivingLine) {
@@ -367,6 +414,89 @@ export class ReceivingService {
         entityId: id,
         actorUserId,
         newValue: { line_count: lines.length },
+      });
+
+      return this.load(tx, id);
+    });
+  }
+
+  /**
+   * Take a verified delivery back out of stock so it can be corrected.
+   *
+   * The ledger is append-only by design -- "corrections are new rows, never
+   * edits" -- so this does NOT delete what verifying posted. It posts the
+   * opposite movement against the same session, leaving both halves visible:
+   * anyone reading the ledger sees the +6 that went in and the -6 that came
+   * back out, which is what actually happened. Deleting the original would
+   * make a month-end total that was correct when it was taken silently become
+   * a different number.
+   *
+   * The reason stays `receiving` rather than becoming an adjustment, because
+   * this is not a count correction -- it is the undoing of a specific receipt,
+   * and the reference columns say which one.
+   *
+   * Stock is allowed to go negative here, as everywhere else in this ledger: if
+   * some of the delivery has already been sold, refusing to unverify would
+   * trap the session in a state the shop cannot fix. The count is reported so
+   * the caller can say so out loud.
+   */
+  async unverify(orgId: string, actorUserId: string, id: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string; store_id: string; status: string }>(
+        `SELECT id, store_id, status FROM receiving_sessions WHERE id = $1 FOR UPDATE`,
+        [id],
+      );
+      const session = rows[0];
+      if (!session) throw ApiException.notFound('delivery');
+      if (session.status !== 'committed') {
+        throw new ApiException(
+          'conflict',
+          session.status === 'open'
+            ? 'this delivery has not been verified, so there is nothing to take back out of stock'
+            : `this delivery is ${session.status} and cannot be unverified`,
+          { retryable: false },
+        );
+      }
+
+      const { rows: lines } = await tx.query<{
+        variant_id: string | null;
+        quantity: string;
+        unit_cost: string | null;
+      }>(
+        `SELECT variant_id, quantity::text, unit_cost::text
+         FROM receiving_lines WHERE session_id = $1 AND variant_id IS NOT NULL ORDER BY created_at`,
+        [id],
+      );
+
+      const movements: Movement[] = lines.map((line) => ({
+        storeId: session.store_id,
+        variantId: line.variant_id!,
+        // The negative of what verifying posted. Quantity is numeric(14,3) as
+        // a string and is negated as text, never parsed through a float.
+        delta: negate(line.quantity),
+        reason: 'receiving',
+        referenceType: 'receiving_session',
+        referenceId: id,
+        actorUserId,
+        note: 'unverified',
+        ...(line.unit_cost ? { unitCost: line.unit_cost } : {}),
+      }));
+
+      if (movements.length > 0) await this.inventoryRepository.post(tx, movements);
+
+      // committed_at has to clear with the status: `receiving_committed_at_set`
+      // in 0019 requires the two to agree.
+      await tx.query(
+        `UPDATE receiving_sessions SET status = 'open', committed_at = NULL WHERE id = $1`,
+        [id],
+      );
+
+      await this.audit.record(tx, {
+        action: 'receiving.unverify',
+        entityType: 'receiving_session',
+        entityId: id,
+        actorUserId,
+        newValue: { reversed_lines: movements.length },
       });
 
       return this.load(tx, id);
@@ -592,4 +722,17 @@ export class ReceivingService {
 /** The same rule `barcodeSchema` enforces, checked before offering a scanned code as a barcode. */
 function isBarcodeShaped(code: string): boolean {
   return code.length >= 4 && code.length <= 48 && /^[0-9A-Za-z._-]+$/.test(code);
+}
+
+/**
+ * Flip the sign of a `numeric(14,3)` that is travelling as a string.
+ *
+ * Textual, not arithmetic: quantities are strings throughout this system
+ * precisely so they never pass through a float, and `-Number(q)` would undo
+ * that for the one operation where an off-by-a-hair silently unbalances a
+ * reversal against the movement it is meant to cancel.
+ */
+function negate(quantity: string): string {
+  const value = quantity.trim();
+  return value.startsWith('-') ? value.slice(1) : `-${value}`;
 }
