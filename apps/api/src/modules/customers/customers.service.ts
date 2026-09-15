@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { PoolClient } from 'pg';
 import type { CreateCustomer, CustomerSearch, UpdateCustomer } from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
 import { AuditService } from '../../platform/audit/audit.service.js';
@@ -156,6 +157,242 @@ export class CustomersService {
       });
 
       return customer;
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Consent
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Where this customer stands on each channel right now.
+   *
+   * `customer_consents` is an append-only log, so "current" is the most
+   * recent event per channel -- `DISTINCT ON` over it ordered by time. A
+   * channel with no row at all comes back as `never_asked`, which is
+   * deliberately not the same as an explicit `granted: false`: one is a
+   * customer who declined and one is a customer nobody ever asked, and only
+   * the first is a fact about them. Neither may be sent to.
+   */
+  async consents(orgId: string, customerId: string) {
+    return this.db.withOrg(orgId, (tx) => this.consentsTx(tx, customerId));
+  }
+
+  /**
+   * Takes the transaction rather than opening one, so `setConsent` can read
+   * back the state it just wrote. Opening a second `withOrg` inside an open
+   * one takes a different pooled connection, which cannot see the insert the
+   * outer transaction has not committed -- the panel came back saying "never
+   * asked" immediately after recording an opt-in for exactly that reason.
+   */
+  private async consentsTx(tx: PoolClient, customerId: string) {
+    const { rows } = await tx.query<{
+      channel: string;
+      granted: boolean;
+      source: string;
+      occurred_at: string;
+    }>(
+      `SELECT DISTINCT ON (channel) channel, granted, source, occurred_at
+       FROM customer_consents
+       WHERE customer_id = $1
+       ORDER BY channel, occurred_at DESC`,
+      [customerId],
+    );
+
+    const byChannel = new Map(rows.map((r) => [r.channel, r]));
+    return (['email', 'sms'] as const).map((channel) => {
+      const found = byChannel.get(channel);
+      return {
+        channel,
+        granted: found?.granted ?? false,
+        source: found?.source ?? null,
+        occurred_at: found?.occurred_at ?? null,
+        never_asked: !found,
+      };
+    });
+  }
+
+  /** The whole log for one customer, newest first -- what was agreed, when, and on what basis. */
+  async consentHistory(orgId: string, customerId: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query(
+        `SELECT id, channel, granted, source, evidence, occurred_at
+         FROM customer_consents WHERE customer_id = $1
+         ORDER BY occurred_at DESC LIMIT 100`,
+        [customerId],
+      );
+      return rows;
+    });
+  }
+
+  /**
+   * Record a consent event. Always an INSERT -- never an update of an earlier
+   * row, and never a delete.
+   *
+   * Revoking appends `granted: false` rather than removing the grant, because
+   * the question a regulator or an angry customer actually asks is "was this
+   * person opted in on the day you sent that", and a deleted grant cannot
+   * answer it. The log answers it by construction.
+   *
+   * The employee and their note go into `evidence` alongside the source, so
+   * a back-office grant carries who claimed it and on what basis rather than
+   * appearing from nowhere.
+   */
+  async setConsent(
+    orgId: string,
+    actorUserId: string,
+    customerId: string,
+    input: { channel: string; granted: boolean; source: string; note?: string | undefined },
+  ) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows: customerRows } = await tx.query<{ id: string; anonymized_at: string | null }>(
+        `SELECT id, anonymized_at FROM customers WHERE id = $1`,
+        [customerId],
+      );
+      const customer = customerRows[0];
+      if (!customer) throw ApiException.notFound('customer');
+      // An anonymized customer has had their identity deliberately erased.
+      // Recording a fresh marketing consent against that row would be
+      // re-attaching a person to it, which is the one thing anonymizing was
+      // meant to prevent.
+      if (customer.anonymized_at) {
+        throw new ApiException(
+          'validation_failed',
+          'this customer has been anonymized — consent cannot be recorded against them',
+          { retryable: false },
+        );
+      }
+
+      await tx.query(
+        `INSERT INTO customer_consents (org_id, customer_id, channel, granted, source, evidence)
+         VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, $4, $5::jsonb)`,
+        [
+          customerId,
+          input.channel,
+          input.granted,
+          input.source,
+          JSON.stringify({
+            recorded_by: actorUserId,
+            ...(input.note?.trim() ? { note: input.note.trim() } : {}),
+          }),
+        ],
+      );
+
+      await this.audit.record(tx, {
+        action: input.granted ? 'customer.consent_grant' : 'customer.consent_revoke',
+        entityType: 'customer',
+        entityId: customerId,
+        actorUserId,
+        newValue: { channel: input.channel, source: input.source, note: input.note ?? null },
+      });
+
+      return this.consentsTx(tx, customerId);
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Purchase history
+  // ---------------------------------------------------------------------------
+
+  /**
+   * What this customer is worth and what they actually buy.
+   *
+   * `sales_customer_idx (customer_id, completed_at DESC)` has existed since
+   * the sales migration and until now nothing read `customer_id` at all --
+   * this is the query it was built for.
+   *
+   * Refunds are netted through `sale_lines.quantity_refunded` rather than by
+   * joining the refund tables: it is the one mutable column on a sale line
+   * and exists precisely so "what did they keep" is answerable without a
+   * second pass. A line refunded in full contributes nothing to the
+   * most-bought list, which is the honest answer -- a customer who returned
+   * the thing does not want another one.
+   */
+  async history(orgId: string, customerId: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows: summaryRows } = await tx.query<{
+        visit_count: number;
+        lifetime_spend_minor: string;
+        first_visit_at: string | null;
+        last_visit_at: string | null;
+        days_since_last_visit: number | null;
+      }>(
+        // Lifetime spend is sales minus refunds -- money the shop actually
+        // kept. `sales.total_minor` is immutable and a refund is its own row,
+        // so summing sales alone would credit a customer for everything they
+        // brought back, which is precisely the number not to make a targeting
+        // decision on.
+        //
+        // A refund is theirs if it names them OR if it refunds one of their
+        // sales; `DISTINCT` because a refund that does both is still one
+        // refund. A visit still counts as a visit even if it was refunded --
+        // they came in.
+        `WITH their_sales AS (
+           SELECT id, total_minor, completed_at
+           FROM sales WHERE customer_id = $1 AND status = 'completed'
+         ),
+         their_refunds AS (
+           SELECT DISTINCT r.id, r.total_minor
+           FROM refunds r
+           WHERE r.customer_id = $1
+              OR r.original_sale_id IN (SELECT id FROM their_sales)
+         )
+         SELECT (SELECT count(*)::int FROM their_sales) AS visit_count,
+                ((SELECT COALESCE(sum(total_minor), 0) FROM their_sales)
+                 - (SELECT COALESCE(sum(total_minor), 0) FROM their_refunds))::text
+                  AS lifetime_spend_minor,
+                (SELECT min(completed_at) FROM their_sales) AS first_visit_at,
+                (SELECT max(completed_at) FROM their_sales) AS last_visit_at,
+                (SELECT date_part('day', now() - max(completed_at))::int FROM their_sales)
+                  AS days_since_last_visit`,
+        [customerId],
+      );
+      const summary = summaryRows[0]!;
+
+      const { rows: topProducts } = await tx.query(
+        `SELECT p.id AS product_id,
+                p.name AS product_name,
+                pv.variant_name,
+                sum(sl.quantity - sl.quantity_refunded)::text AS quantity,
+                -- The line total scaled by the share of it that wasn't sent
+                -- back, so a partly refunded line counts for the part kept.
+                COALESCE(sum(
+                  sl.total_minor
+                  * (sl.quantity - sl.quantity_refunded)
+                  / NULLIF(sl.quantity, 0)
+                ), 0)::bigint::text AS gross_minor,
+                max(s.completed_at) AS last_bought_at
+         FROM sale_lines sl
+         JOIN sales s ON s.id = sl.sale_id
+         JOIN product_variants pv ON pv.id = sl.variant_id
+         JOIN products p ON p.id = pv.product_id
+         WHERE s.customer_id = $1
+           AND s.status = 'completed'
+           AND sl.quantity > sl.quantity_refunded
+         GROUP BY p.id, p.name, pv.variant_name
+         ORDER BY sum(sl.quantity - sl.quantity_refunded) DESC
+         LIMIT 10`,
+        [customerId],
+      );
+
+      const { rows: recentSales } = await tx.query(
+        `SELECT s.id, s.receipt_no, s.completed_at, s.total_minor::text,
+                (SELECT count(*)::int FROM sale_lines l WHERE l.sale_id = s.id) AS line_count
+         FROM sales s
+         WHERE s.customer_id = $1 AND s.status = 'completed'
+         ORDER BY s.completed_at DESC
+         LIMIT 10`,
+        [customerId],
+      );
+
+      const spend = BigInt(summary.lifetime_spend_minor);
+      return {
+        ...summary,
+        average_ticket_minor:
+          summary.visit_count > 0 ? (spend / BigInt(summary.visit_count)).toString() : '0',
+        top_products: topProducts,
+        recent_sales: recentSales,
+      };
     });
   }
 }

@@ -2,6 +2,54 @@
 
 Notable changes. Newest first.
 
+## Marketing consent, and what a customer actually buys
+
+First half of the marketing pass — the two things everything else depends on.
+
+**Consent is now writable.** `customer_consents` has existed since the first sales migration carrying the
+comment *"Consent is timestamped, sourced and never inferred. A marketing send that cannot point at a row
+here does not go out."* Nothing had ever written to it. The customer page now records opt-in and opt-out
+per channel, and keeps the rule literal:
+
+- **Three states, not two**: opted in, opted out, and **never asked**. The third is the one that matters —
+  a customer nobody has ever asked is not the same as one who declined, and collapsing them into an
+  unticked box is how a shop comes to believe it has a mailing list it never earned. Neither may be sent
+  to.
+- **Recording an opt-in requires saying how they opted in.** "Never inferred" only means something if
+  someone has to state the basis; the note and the employee who entered it go into `evidence`. Opting
+  *out* needs no justification — demanding one would be a reason not to record it.
+- **The log is append-only.** Revoking appends `granted: false`; it does not delete the grant. The
+  question that actually gets asked is "was this person opted in on the day you sent that", and a deleted
+  grant cannot answer it. Verified: after an opt-in then an opt-out, both rows stand.
+- Consent cannot be recorded against an anonymized customer — that would re-attach a person to a row
+  whose identity was deliberately erased.
+
+**Purchase history** on the customer page: lifetime spend, visits, average ticket, days since last visit,
+the ten items they buy most, and their recent receipts. This is what `sales_customer_idx (customer_id,
+completed_at DESC)` was built for — it has existed all along and no query read `customer_id` at all.
+
+- **Refunds are netted.** A line refunded in full contributes nothing to the most-bought list, which is
+  the honest answer: someone who returned it does not want another. A partly refunded line counts for the
+  part kept, scaled by quantity.
+- **Lifetime spend is sales minus refunds.** `sales.total_minor` is immutable and a refund is its own row,
+  so summing sales alone credits a customer for everything they brought back — the worst possible number
+  to base targeting on. A refund counts as theirs if it names them or refunds one of their sales, counted
+  once either way. A refunded visit still counts as a visit; they came in.
+
+Verified against real dev data by attaching three sales to a customer and marking a line half-returned:
+$115.23 lifetime over 3 visits, $38.41 average, and the returned item showing 1 / $27.05 rather than
+2 / $54.10. All of it reverted afterwards.
+
+One bug found by using it: recording an opt-in left the panel saying "never asked". `setConsent` returned
+a read that opened its *own* transaction on a different pooled connection, which could not see the insert
+the outer transaction had not committed yet. The read now takes the caller's transaction.
+
+**Still to come in this pass:** segments, campaigns and actual sending. The provider recommendation stands
+— SendGrid for email (its policy explicitly permits tobacco with age verification), and SMS kept
+transactional, because US carriers block SHAFT content on A2P messaging no matter who consented. That
+warning is now on the consent panel itself, so nobody collects SMS opt-ins and then wonders why nothing
+sends.
+
 ## Import and export, with AI working out the columns
 
 Third of four passes. Items and customers can now be imported from a CSV or an Excel file and exported

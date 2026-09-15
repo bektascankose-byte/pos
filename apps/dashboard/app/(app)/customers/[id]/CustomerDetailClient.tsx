@@ -2,9 +2,20 @@
 
 import { useState, useTransition } from "react";
 import { setCustomerStatusAction, updateCustomerAction } from "../actions";
-import type { Customer } from "@snappos/contracts";
+import { ConsentPanel, HistoryPanel } from "./CustomerPanels";
+import type { Customer, ConsentState, CustomerHistory } from "@snappos/contracts";
 
-export function CustomerDetailClient({ customerId, initialCustomer }: { customerId: string; initialCustomer: Customer }) {
+export function CustomerDetailClient({
+  customerId,
+  initialCustomer,
+  consents,
+  history,
+}: {
+  customerId: string;
+  initialCustomer: Customer;
+  consents: ConsentState[] | null;
+  history: CustomerHistory | null;
+}) {
   const [customer, setCustomer] = useState(initialCustomer);
   const [message, setMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null);
   const [pending, startTransition] = useTransition();
@@ -43,7 +54,7 @@ export function CustomerDetailClient({ customerId, initialCustomer }: { customer
   };
 
   return (
-    <div className="flex max-w-lg flex-col gap-4">
+    <div className="flex max-w-3xl flex-col gap-4">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold">
@@ -76,9 +87,20 @@ export function CustomerDetailClient({ customerId, initialCustomer }: { customer
         </p>
       ) : null}
 
+      {history ? <HistoryPanel history={history} /> : null}
+
+      {consents ? (
+        <ConsentPanel
+          customerId={customerId}
+          initialConsents={consents}
+          hasEmail={Boolean(customer.email)}
+          hasPhone={Boolean(customer.phone)}
+        />
+      ) : null}
+
       <form
         onSubmit={handleSubmit}
-        className="flex flex-col gap-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4"
+        className="flex max-w-lg flex-col gap-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4"
       >
         <p className="text-xs text-[var(--color-text-muted)]">
           Leave a field blank to keep its current value.

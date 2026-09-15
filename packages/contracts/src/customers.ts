@@ -97,7 +97,122 @@ export const customerSearchSchema = pagination.extend({
   status: entityStatus.optional(),
 });
 
+// ------------------------------------------------------------------- consent
+
+/**
+ * Marketing consent.
+ *
+ * `customer_consents` has existed since the first sales migration, carrying
+ * the comment *"Consent is timestamped, sourced and never inferred. A
+ * marketing send that cannot point at a row here does not go out."* Nothing
+ * wrote to it until now. These schemas are that write path, and they keep the
+ * rule literal: a customer with no row is not consented, silence is never
+ * taken for agreement, and every grant records where it came from.
+ *
+ * The table is an append-only log, not a flag. Revoking does not delete the
+ * grant -- it appends a `granted: false` row -- because proving someone *had*
+ * opted in when a message went out is exactly what the log is for, and a
+ * deleted grant proves nothing.
+ */
+export const consentChannel = z.enum(['sms', 'email']);
+
+/**
+ * Where a consent came from. `back_office` is the one that needs care: an
+ * employee ticking a box on a customer's behalf, which is only legitimate if
+ * something real happened (a signed slip, a verbal yes at the counter). That
+ * is why granting requires a note saying what.
+ */
+export const consentSource = z.enum(['register', 'web_signup', 'sms_stop', 'import', 'back_office']);
+
+/** One event in the log. */
+export const consentEventSchema = z.object({
+  id: uuid,
+  channel: consentChannel,
+  granted: z.boolean(),
+  source: consentSource,
+  evidence: z.record(z.unknown()),
+  occurred_at: timestamp,
+});
+
+/** Where a customer stands right now, per channel: the latest event, or nothing at all. */
+export const consentStateSchema = z.object({
+  channel: consentChannel,
+  granted: z.boolean(),
+  source: consentSource.nullable(),
+  occurred_at: timestamp.nullable(),
+  /** No row has ever been written for this channel. Distinct from an explicit `false`. */
+  never_asked: z.boolean(),
+});
+
+export const setConsentSchema = z
+  .object({
+    channel: consentChannel,
+    granted: z.boolean(),
+    source: consentSource,
+    /**
+     * What actually happened, in the employee's own words. Required when
+     * granting: "never inferred" is only meaningful if someone has to say how
+     * they know. Optional when revoking -- a customer asking to stop needs no
+     * justification, and demanding one would be a reason not to record it.
+     */
+    note: z.string().max(500).optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.granted && !v.note?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['note'],
+        message: 'say how this customer opted in — consent is recorded, never assumed',
+      });
+    }
+  });
+
+// ------------------------------------------------------------ purchase history
+
+/** One product this customer actually buys, netted of refunds. */
+export const customerTopProductSchema = z.object({
+  product_id: uuid,
+  product_name: z.string(),
+  variant_name: z.string().nullable(),
+  quantity: z.string(),
+  gross_minor: z.string(),
+  last_bought_at: timestamp.nullable(),
+});
+
+/**
+ * What a customer is worth and what they buy.
+ *
+ * Every figure nets refunds through `sale_lines.quantity_refunded` and counts
+ * only completed sales, so "lifetime spend" is money the shop actually kept.
+ */
+export const customerHistorySchema = z.object({
+  visit_count: z.number().int(),
+  lifetime_spend_minor: z.string(),
+  average_ticket_minor: z.string(),
+  first_visit_at: timestamp.nullable(),
+  last_visit_at: timestamp.nullable(),
+  /** Days since the last visit, or null if they have never bought anything. */
+  days_since_last_visit: z.number().int().nullable(),
+  top_products: z.array(customerTopProductSchema),
+  recent_sales: z.array(
+    z.object({
+      id: uuid,
+      receipt_no: z.string(),
+      completed_at: timestamp,
+      total_minor: z.string(),
+      line_count: z.number().int(),
+    }),
+  ),
+});
+
 export type Customer = z.infer<typeof customerSchema>;
 export type CreateCustomer = z.infer<typeof createCustomerSchema>;
 export type UpdateCustomer = z.infer<typeof updateCustomerSchema>;
 export type CustomerSearch = z.infer<typeof customerSearchSchema>;
+export type ConsentChannel = z.infer<typeof consentChannel>;
+export type ConsentSource = z.infer<typeof consentSource>;
+export type ConsentEvent = z.infer<typeof consentEventSchema>;
+export type ConsentState = z.infer<typeof consentStateSchema>;
+export type SetConsent = z.infer<typeof setConsentSchema>;
+export type CustomerTopProduct = z.infer<typeof customerTopProductSchema>;
+export type CustomerHistory = z.infer<typeof customerHistorySchema>;

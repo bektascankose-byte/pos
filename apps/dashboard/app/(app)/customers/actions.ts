@@ -3,7 +3,7 @@
 import { apiFetch, ApiError } from "@/lib/api";
 import type { ActionResult } from "@/lib/action-result";
 import { normalizePhone } from "@/lib/phone";
-import type { Customer } from "@snappos/contracts";
+import type { Customer, ConsentState } from "@snappos/contracts";
 
 /** Shared by create and update: the fields a person types, read off the form. */
 function readCustomerFields(formData: FormData): Record<string, unknown> {
@@ -61,6 +61,29 @@ export async function createCustomerAction(formData: FormData): Promise<ActionRe
     return { ok: true, data };
   } catch (e) {
     return { ok: false, error: e instanceof ApiError ? e.message : "Could not add that customer." };
+  }
+}
+
+/**
+ * Record a marketing opt-in or opt-out.
+ *
+ * Appends to the consent log rather than setting a flag: proving someone was
+ * opted in on the day a message went out is what the log exists for, and a
+ * grant that gets overwritten proves nothing. Granting needs a note saying
+ * how the customer opted in — the API enforces it, and the form says so.
+ */
+export async function setConsentAction(
+  id: string,
+  input: { channel: "email" | "sms"; granted: boolean; source: string; note?: string },
+): Promise<ActionResult<ConsentState[]>> {
+  try {
+    const data = await apiFetch<ConsentState[]>(`/api/v1/customers/${id}/consents`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not record that." };
   }
 }
 
