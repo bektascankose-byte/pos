@@ -17,6 +17,7 @@ import { DataTransferModule } from './modules/data-transfer/data-transfer.module
 import { EmployeesModule } from './modules/employees/employees.module.js';
 import { InvoicingModule } from './modules/invoicing/invoicing.module.js';
 import { LoyaltyModule } from './modules/loyalty/loyalty.module.js';
+import { MarketingModule } from './modules/marketing/marketing.module.js';
 import { OnboardingModule } from './modules/onboarding/onboarding.module.js';
 import { PurchasingModule } from './modules/purchasing/purchasing.module.js';
 import { ReportsModule } from './modules/reports/reports.module.js';
@@ -40,6 +41,7 @@ import { HealthController } from './modules/health/health.controller.js';
     EmployeesModule,
     InvoicingModule,
     LoyaltyModule,
+    MarketingModule,
     OnboardingModule,
     PurchasingModule,
     ReportsModule,

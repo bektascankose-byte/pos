@@ -122,7 +122,15 @@ export const consentChannel = z.enum(['sms', 'email']);
  * something real happened (a signed slip, a verbal yes at the counter). That
  * is why granting requires a note saying what.
  */
-export const consentSource = z.enum(['register', 'web_signup', 'sms_stop', 'import', 'back_office']);
+export const consentSource = z.enum([
+  'register',
+  'web_signup',
+  'sms_stop',
+  'import',
+  'back_office',
+  /** Written by `marketing_unsubscribe`, never by a client -- see migration 0018. */
+  'unsubscribe_link',
+]);
 
 /** One event in the log. */
 export const consentEventSchema = z.object({
@@ -144,11 +152,19 @@ export const consentStateSchema = z.object({
   never_asked: z.boolean(),
 });
 
+/**
+ * The sources a *caller* may claim. Narrower than `consentSource` on purpose:
+ * `import`, `sms_stop` and `unsubscribe_link` are written by machinery that
+ * knows those things happened, and a client asserting one would be forging
+ * the provenance the log exists to record.
+ */
+export const recordableConsentSource = z.enum(['register', 'web_signup', 'back_office']);
+
 export const setConsentSchema = z
   .object({
     channel: consentChannel,
     granted: z.boolean(),
-    source: consentSource,
+    source: recordableConsentSource,
     /**
      * What actually happened, in the employee's own words. Required when
      * granting: "never inferred" is only meaningful if someone has to say how

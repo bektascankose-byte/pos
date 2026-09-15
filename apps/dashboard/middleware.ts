@@ -32,6 +32,13 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const isLogin = pathname === "/login";
 
+  // Unsubscribe is reached by a customer clicking a link in their email. They
+  // have no account here and never will, so sending them to a login screen
+  // would make the opt-out impossible to complete -- which CAN-SPAM
+  // specifically forbids. The token in the URL is the whole authorization and
+  // the API verifies it; this page must simply render.
+  if (pathname.startsWith("/unsubscribe/")) return NextResponse.next();
+
   const access = request.cookies.get(ACCESS_COOKIE)?.value;
   const refresh = request.cookies.get(REFRESH_COOKIE)?.value;
 

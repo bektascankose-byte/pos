@@ -2,6 +2,58 @@
 
 Notable changes. Newest first.
 
+## Segments, campaigns, and a send that can't skip consent
+
+The rest of the marketing pass. Migration 0018 adds segments, campaigns, recipients and a suppression
+list, and the rule the whole thing is built around is now structural rather than a comment: **a send that
+cannot point at a consent row does not go out.** There is no "send anyway" flag, deliberately.
+
+- **Segments** are saved questions — bought this item or category, within N days, not seen for N days,
+  spent at least $X, at least N visits, tagged. Stored as structured jsonb and compiled to SQL with every
+  value bound, because storing SQL a user can edit is storing an injection with extra steps.
+- **The preview reports two numbers, not one.** *Matched* is who fits the question; *reachable* is who may
+  lawfully be emailed. Showing only the first is how somebody reads "412 customers" and takes it for the
+  size of a send. The gap is itemized — no opt-in, unsubscribed or bounced, no address — and a sample
+  names individual customers with the reason beside each.
+- **Campaigns** are drafts until sent, and the send screen counts recipients *live* rather than reusing
+  whatever the draft saw, so someone who unsubscribed yesterday isn't mailed today by a week-old draft.
+  Every customer considered gets a recipient row — including the ones deliberately left out and why — so
+  a campaign that mailed 40 of 120 can say where the other 80 went.
+- **Unsubscribe actually works.** Every email carries a per-recipient link and a `List-Unsubscribe`
+  header. Clicking it appends a consent revoke *and* suppresses the address in one statement. The page
+  needs no login — a customer reading their email has no account, and CAN-SPAM forbids making them get
+  one — which meant exempting it from the dashboard's auth middleware, and reaching it through a narrow
+  `SECURITY DEFINER` function, the same shape `auth_lookup_user` uses and for the same reason: the one
+  query with no org context is a fixed function signature rather than a weakened table policy.
+  It does **not** unsubscribe on page load; a mail client that prefetches links would otherwise opt
+  people out who never clicked.
+- **Suppressions are separate from consent** and win over it. Consent is what a person wants; a
+  suppression is the address being unusable — bounced, or reported as spam. Matched by address rather
+  than by customer, because a bounce is a fact about the address and the same one can sit on two records.
+- **Promotional SMS is refused outright**, not attempted. US carriers filter SHAFT content — tobacco and
+  vape included — downstream of consent, so every message would fail with Twilio 30458 while accumulating
+  violations against the shop's number. `MessagingService.sendSms` exists and is wired for transactional
+  use (receipts, order notices); the campaign path says why in a sentence instead of burning a sending
+  reputation to discover it.
+- Sending is a separate permission from composing (`marketing.send` vs `marketing.manage`), and provider
+  calls happen outside the database transaction — holding one open across four hundred network calls
+  would pin a pooled connection and roll back the record of a half-finished send, which is not undoable
+  anyway once the mail has left.
+
+Verified end to end against five purpose-built customers covering every branch: opted in, never asked,
+opted in then opted out, opted in but suppressed, and opted in with no address. The segment matched all
+five and reported exactly one reachable, with the right reason per row — including the opted-out customer,
+whose earlier grant is correctly overridden by the later revoke. Sending with no provider configured left
+the campaign a draft with zero recipient rows rather than a half-applied send. Unsubscribing through the
+public page dropped reachable from 1 to 0 and wrote both the revoke and the suppression.
+
+Two wording bugs the live screens caught: "1 have no email address", and counting someone who opted in
+and then unsubscribed under "never opted in" — true of the arithmetic bucket, false about the person.
+
+**Still needs a provider.** Buy SendGrid (its policy permits tobacco with age verification) and set
+`SENDGRID_API_KEY`, `MARKETING_FROM_EMAIL`, `MARKETING_FROM_NAME` and `PUBLIC_APP_URL`. Until then the
+send button reports that it isn't configured and writes nothing.
+
 ## Marketing consent, and what a customer actually buys
 
 First half of the marketing pass — the two things everything else depends on.
