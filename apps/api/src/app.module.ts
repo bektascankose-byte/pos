@@ -24,12 +24,14 @@ import { ReceivingModule } from './modules/receiving/receiving.module.js';
 import { ReportsModule } from './modules/reports/reports.module.js';
 import { SchedulingModule } from './modules/scheduling/scheduling.module.js';
 import { AuditModule } from './platform/audit/audit.module.js';
+import { OutboxModule } from './platform/outbox/outbox.module.js';
 import { HealthController } from './modules/health/health.controller.js';
 
 @Module({
   imports: [
     DatabaseModule,
     AuditModule,
+    OutboxModule,
     AuthModule,
     IdempotencyModule,
     CatalogModule,
