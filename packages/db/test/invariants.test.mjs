@@ -269,4 +269,29 @@ await expectOk('row level security is enabled on every tenant table', async () =
   if (missing.length) throw new Error(`RLS missing on: ${missing.map(r => r.relname).join(', ')}`);
 });
 
+// ------------------------------------------------ 14. Views cannot leak past RLS
+//
+// A Postgres view runs with its OWNER's rights by default, and every object
+// here is owned by the migrator role, which carries BYPASSRLS. A view over a
+// tenant table without `security_invoker` therefore serves every
+// organization's rows to any caller -- a hole the table underneath cannot
+// open on its own. This caught exactly that on `storefront_availability`
+// during phase 2, so it is asserted rather than remembered.
+await expectOk('every view over a tenant table runs as the caller, not its owner', async () => {
+  const leaky = await q(`
+    select c.relname from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relkind = 'v'
+      and not coalesce((
+        select option_value = 'true'
+        from pg_options_to_table(c.reloptions)
+        where option_name = 'security_invoker'
+      ), false)`);
+  if (leaky.length) {
+    throw new Error(
+      `views missing security_invoker: ${leaky.map(r => r.relname).join(', ')}`,
+    );
+  }
+});
+
 await scratch.drop();
