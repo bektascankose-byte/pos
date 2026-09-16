@@ -49,6 +49,15 @@ export const NAV_ENTRIES: NavEntry[] = [
     keywords: ["today", "home", "summary"],
   },
   {
+    id: "orders",
+    label: "Online orders",
+    href: "/orders",
+    group: "Overview",
+    surfaces: ["work"],
+    icon: "🛎️",
+    keywords: ["online", "web", "pickup", "collection", "queue", "website", "ecommerce"],
+  },
+  {
     id: "reports",
     label: "Reports",
     href: "/reports",

@@ -43,6 +43,11 @@ export class OrgController {
    *
    * So the server, which does have the whole history, reports where the
    * register got to. A re-provisioned device resumes from there.
+   *
+   * The online-orders register is left out. It is numbered by the server, and a
+   * device takes the first register listed for its store -- "ONLINE" sorts
+   * before "R1", so without this a phone would sign in to it and start issuing
+   * the numbers online handovers use.
    */
   @Get('registers')
   registers(@CurrentUser() user: AuthenticatedUser) {
@@ -53,7 +58,10 @@ export class OrgController {
                   (SELECT max(s.register_sequence) FROM sales s WHERE s.register_id = r.id),
                   0
                 )::text AS last_sequence
-         FROM registers r WHERE r.status = 'active' ORDER BY r.code`,
+         FROM registers r
+         WHERE r.status = 'active'
+           AND r.config->>'kind' IS DISTINCT FROM 'online'
+         ORDER BY r.code`,
       );
       return { data: rows };
     });

@@ -1,0 +1,67 @@
+{
+  "about": "Time travel. Every rule is dated because the law that governed a sale is the law on the day of the sale, and an auditor asks about last March. A rule engine that reads the clock itself cannot answer that question, so `asOf` is always supplied.",
+  "cases": [
+    {
+      "name": "a rule that has not started yet does not apply",
+      "about": "The federal hemp redefinition lands 12 November 2026. Loading it in October must not change what is sold in October.",
+      "rules": [
+        { "id": "r-future", "name": "r-future", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "effect": "deny", "priority": 0, "effectiveFrom": "2026-11-12T00:00:00Z", "denyMessage": "Federal hemp redefinition.", "authorityNote": "Federal hemp redefinition." },
+        { "id": "r-now", "name": "r-now", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "effect": "allow", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" }
+      ],
+      "subject": { "variantId": "v1" },
+      "context": { "channel": "pickup", "region": "TX", "asOf": "2026-10-01T12:00:00Z" },
+      "expect": { "allowed": true, "matchedRuleIds": ["r-now"] }
+    },
+    {
+      "name": "the same rule set answers differently once the date passes",
+      "about": "Identical rules, identical subject, one day later. This is the whole point of dating rules rather than deploying them.",
+      "rules": [
+        { "id": "r-future", "name": "r-future", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "effect": "deny", "priority": 0, "effectiveFrom": "2026-11-12T00:00:00Z", "denyMessage": "Federal hemp redefinition.", "authorityNote": "Federal hemp redefinition." },
+        { "id": "r-now", "name": "r-now", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "effect": "allow", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" }
+      ],
+      "subject": { "variantId": "v1" },
+      "context": { "channel": "pickup", "region": "TX", "asOf": "2026-11-13T12:00:00Z" },
+      "expect": { "allowed": false, "reasonContains": "Federal hemp redefinition" }
+    },
+    {
+      "name": "an expired rule stops applying",
+      "rules": [
+        { "id": "r-old", "name": "r-old", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "effect": "allow", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z", "effectiveTo": "2026-01-01T00:00:00Z" }
+      ],
+      "subject": { "variantId": "v1" },
+      "context": { "channel": "pickup", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": false, "matchedRuleIds": [] }
+    },
+    {
+      "name": "a rule applies on the instant it begins",
+      "about": "The boundary is inclusive at the start.",
+      "rules": [
+        { "id": "r", "name": "r", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "effect": "allow", "priority": 0, "effectiveFrom": "2026-09-15T12:00:00Z" }
+      ],
+      "subject": { "variantId": "v1" },
+      "context": { "channel": "pickup", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": true }
+    },
+    {
+      "name": "a rule has stopped applying on the instant it ends",
+      "about": "Half-open, [from, to). A rule ending exactly as its replacement begins must not overlap it for a millisecond, or one moment is governed by two contradictory rules.",
+      "rules": [
+        { "id": "r-old", "name": "r-old", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "effect": "deny", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z", "effectiveTo": "2026-09-15T12:00:00Z", "denyMessage": "Old rule.", "authorityNote": "Old rule." },
+        { "id": "r-new", "name": "r-new", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "effect": "allow", "priority": 0, "effectiveFrom": "2026-09-15T12:00:00Z" }
+      ],
+      "subject": { "variantId": "v1" },
+      "context": { "channel": "pickup", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": true, "matchedRuleIds": ["r-new"] }
+    },
+    {
+      "name": "an unparseable asOf denies rather than defaulting to now",
+      "about": "A caller that fails to supply a usable timestamp gets refused. Substituting the current time would answer a question nobody asked.",
+      "rules": [
+        { "id": "r", "name": "r", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "effect": "allow", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" }
+      ],
+      "subject": { "variantId": "v1" },
+      "context": { "channel": "pickup", "region": "TX", "asOf": "not-a-date" },
+      "expect": { "allowed": false, "matchedRuleIds": [] }
+    }
+  ]
+}

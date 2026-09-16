@@ -1,0 +1,85 @@
+{
+  "about": "Which items a rule covers. The category prefix is the important one: `vapes.` governs everything beneath it, so a category added next week is covered by a rule written today rather than quietly escaping it.",
+  "cases": [
+    {
+      "name": "a category prefix covers the whole subtree",
+      "rules": [
+        { "id": "r-deny", "name": "no vape delivery", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "subjectCategoryPathPrefix": "vapes.", "effect": "deny", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z", "denyMessage": "Vapes cannot be delivered." }
+      ],
+      "subject": { "variantId": "v1", "categoryPath": "vapes.disposable.geek-bar" },
+      "context": { "channel": "delivery", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": false, "reasonContains": "Vapes cannot be delivered" }
+    },
+    {
+      "name": "a category added later under the same parent is covered too",
+      "about": "The point of a prefix. Nobody has to remember to extend the rule.",
+      "rules": [
+        { "id": "r-deny", "name": "no vape delivery", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "subjectCategoryPathPrefix": "vapes.", "effect": "deny", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z", "denyMessage": "Vapes cannot be delivered." }
+      ],
+      "subject": { "variantId": "v2", "categoryPath": "vapes.pods.brand-invented-next-week" },
+      "context": { "channel": "delivery", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": false }
+    },
+    {
+      "name": "a sibling subtree is not covered",
+      "rules": [
+        { "id": "r-deny", "name": "no vape delivery", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "subjectCategoryPathPrefix": "vapes.", "effect": "deny", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z", "denyMessage": "Vapes cannot be delivered." },
+        { "id": "r-allow", "name": "snacks deliver fine", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "effect": "allow", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" }
+      ],
+      "subject": { "variantId": "v3", "categoryPath": "snacks.chips" },
+      "context": { "channel": "delivery", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": true, "matchedRuleIds": ["r-allow"] }
+    },
+    {
+      "name": "an item with no category escapes a category rule, and then matches nothing",
+      "about": "Failing closed is what saves this. An uncategorised item is not quietly exempt from a prohibition — it simply has no rule permitting it either.",
+      "rules": [
+        { "id": "r-deny", "name": "no vape delivery", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "subjectCategoryPathPrefix": "vapes.", "effect": "deny", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z", "denyMessage": "Vapes cannot be delivered." }
+      ],
+      "subject": { "variantId": "v4" },
+      "context": { "channel": "delivery", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": false, "matchedRuleIds": [] }
+    },
+    {
+      "name": "regulated class matches independently of category",
+      "about": "`product_compliance.regulated_class` is how the register already labels ends/tobacco/consumable_hemp. A rule can follow that label wherever the item is filed.",
+      "rules": [
+        { "id": "r-hemp", "name": "hemp needs verified ID", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "subjectRegulatedClass": "consumable_hemp", "effect": "require_provider_verification", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" },
+        { "id": "r-allow", "name": "delivery permitted", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "effect": "allow", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" }
+      ],
+      "subject": { "variantId": "v5", "categoryPath": "drinks.seltzer", "regulatedClass": "consumable_hemp" },
+      "context": { "channel": "delivery", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": true, "requiresProviderVerification": true }
+    },
+    {
+      "name": "a rule with no channel applies to every channel",
+      "about": "Null channel means all. Used for rules that are about the product rather than how it travels.",
+      "rules": [
+        { "id": "r-any", "name": "21 everywhere", "orgId": null, "scopeRegion": "TX", "effect": "require_age", "effectAge": 21, "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" },
+        { "id": "r-allow", "name": "pickup permitted", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "effect": "allow", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" }
+      ],
+      "subject": { "variantId": "v6" },
+      "context": { "channel": "pickup", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": true, "minimumAge": 21 }
+    },
+    {
+      "name": "a denial says whether a manager may override it",
+      "about": "Overridable is false unless the rule says otherwise. A cashier must not be able to wave through a statutory prohibition.",
+      "rules": [
+        { "id": "r-hard", "name": "statutory", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "effect": "deny", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z", "denyMessage": "Not permitted by state law." }
+      ],
+      "subject": { "variantId": "v7" },
+      "context": { "channel": "delivery", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": false, "overridable": false }
+    },
+    {
+      "name": "a shop's own policy denial can be overridable",
+      "rules": [
+        { "id": "r-soft", "name": "shop policy", "orgId": "org-1", "scopeRegion": "TX", "channel": "pickup", "effect": "deny", "overridable": true, "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z", "denyMessage": "Shop policy — ask a manager." }
+      ],
+      "subject": { "variantId": "v8" },
+      "context": { "channel": "pickup", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": false, "overridable": true, "reasonContains": "ask a manager" }
+    }
+  ]
+}

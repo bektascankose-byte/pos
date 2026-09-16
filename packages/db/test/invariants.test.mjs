@@ -294,4 +294,75 @@ await expectOk('every view over a tenant table runs as the caller, not its owner
   }
 });
 
+// ------------------------------------------------ 15. an order is not a sale
+//
+// An online order claims stock without moving it, and produces a sale at
+// handover. The one fact everything else hangs off is that "completed" and
+// "has a sale" are the same fact: a completed order without a sale is stock
+// that left with nothing to explain it, and a sale on an order that was never
+// handed over is the reverse. The API funnels every move through the state
+// machine, but these hold even for a write that skips it.
+const orderInsert = (extra = {}) => {
+  const row = {
+    org_id: org.id, store_id: store.id, order_number: 'HH01-0916-001', fulfilment: 'pickup',
+    guest_name: 'Dana Ruiz', guest_email: 'dana@example.test', ...extra,
+  };
+  const cols = Object.keys(row);
+  return q(`insert into orders (${cols.join(',')}) values (${cols.map((_, i) => `$${i + 1}`).join(',')}) returning id`,
+           Object.values(row));
+};
+
+const [order] = await orderInsert();
+
+await expectReject('an order with no customer and no way to reach a guest is refused',
+  () => orderInsert({ order_number: 'HH01-0916-002', guest_email: null }),
+  'orders_has_somebody');
+
+await expectReject('an order cannot be completed without the sale that explains the stock',
+  () => q(`update orders set status='completed', completed_at=now() where id=$1`, [order.id]),
+  'orders_completed_has_sale');
+
+await expectReject('a sale cannot be attached to an order that was never handed over',
+  () => q(`update orders set sale_id=$1 where id=$2`, [saleId, order.id]),
+  'orders_completed_has_sale');
+
+await expectReject('a completed order must say when it completed',
+  () => q(`update orders set status='completed', sale_id=$1 where id=$2`, [saleId, order.id]),
+  'orders_completed_at_set');
+
+await expectOk('handover sets status, sale and time together', () =>
+  q(`update orders set status='completed', sale_id=$1, completed_at=now() where id=$2`, [saleId, order.id]));
+
+await expectReject('order numbers are unique per org regardless of case',
+  () => orderInsert({ order_number: 'hh01-0916-001' }),
+  'orders_number_key');
+
+const [orderLine] = await q(
+  `insert into order_lines (org_id, order_id, variant_id, quantity, unit_price_minor, line_total_minor,
+     description, upc_snapshot)
+   values ($1,$2,$3,1,2499,2499,'Geek Bar Pulse X Miami Mint','850043572091') returning id`,
+  [org.id, order.id, v1.id]);
+
+await expectReject('a line cannot be taken off an order without saying why — the customer reads it',
+  () => q(`update order_lines set removed_at=now(), removed_reason='  ' where id=$1`, [orderLine.id]),
+  'order_line_removed_explained');
+
+await expectReject('an order line must be for something',
+  () => q(`insert into order_lines (org_id, order_id, variant_id, quantity, unit_price_minor, line_total_minor,
+             description, upc_snapshot) values ($1,$2,$3,0,2499,0,'x','x')`, [org.id, order.id, v1.id]),
+  'check');
+
+await expectOk('the order status vocabulary is the one the state machine was written against', async () => {
+  // Pinned so a status added in a migration is a deliberate, reviewed change
+  // to `ORDER_STATUSES` in `packages/contracts/src/order-state.ts` and its transition table, rather
+  // than a value the database accepts and the lifecycle has never heard of.
+  const [{ labels }] = await q(`select array_to_string(enum_range(null::order_status), ',') as labels`);
+  const expected = [
+    'placed', 'accepted', 'preparing', 'ready', 'completed', 'rejected', 'cancelled',
+    'pending_payment', 'payment_failed', 'courier_requested', 'in_transit',
+    'delivery_failed', 'returned_to_store',
+  ].join(',');
+  if (labels !== expected) throw new Error(`order_status is\n  ${labels}\nexpected\n  ${expected}`);
+});
+
 await scratch.drop();

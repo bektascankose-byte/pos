@@ -1,0 +1,136 @@
+{
+  "about": "How the engine picks between rules that all apply. Every case here exists because two implementations could reasonably disagree, and a disagreement means the register and the website enforce different law.",
+  "cases": [
+    {
+      "name": "nothing matches, so nothing is sold",
+      "about": "The engine fails closed. An unconfigured channel is shut, not open — the failure mode of guessing wrong here is an illegal sale, not an inconvenience.",
+      "rules": [],
+      "subject": { "variantId": "v1" },
+      "context": { "channel": "delivery", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": false, "minimumAge": null, "matchedRuleIds": [] }
+    },
+    {
+      "name": "a narrower scope beats a wider one",
+      "about": "A state may permit what a city forbids. The city is where the sale happens.",
+      "rules": [
+        { "id": "r-state", "name": "r-state", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "effect": "allow", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" },
+        { "id": "r-city", "name": "r-city", "orgId": null, "scopeCity": "Harker Heights", "channel": "delivery", "effect": "deny", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z", "denyMessage": "City ordinance prohibits delivery of this category.", "authorityNote": "City ordinance prohibits delivery of this category." }
+      ],
+      "subject": { "variantId": "v1" },
+      "context": { "channel": "delivery", "region": "TX", "city": "Harker Heights", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": false, "reasonContains": "City ordinance" }
+    },
+    {
+      "name": "a deny wins even when an allow is more specific",
+      "about": "Pinned deliberately. Specificity orders the list; it does not let a permission overrule a prohibition. A rule saying 'never through this channel' is not outranked by one saying 'this particular item is fine'.",
+      "rules": [
+        { "id": "r-deny", "name": "r-deny", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "effect": "deny", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z", "denyMessage": "Nicotine may not be delivered.", "authorityNote": "Nicotine may not be delivered." },
+        { "id": "r-allow", "name": "r-allow", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "subjectVariantId": "v1", "effect": "allow", "priority": 99, "effectiveFrom": "2020-01-01T00:00:00Z" }
+      ],
+      "subject": { "variantId": "v1" },
+      "context": { "channel": "delivery", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": false, "reasonContains": "Nicotine may not be delivered" }
+    },
+    {
+      "name": "requirements without a permission do not add up to one",
+      "about": "A rule saying 'check ID' describes how to sell something, not that you may. Reading it as permission is the mistake that sells a prohibited item carefully.",
+      "rules": [
+        { "id": "r-age", "name": "r-age", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "effect": "require_age", "effectAge": 21, "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" }
+      ],
+      "subject": { "variantId": "v1" },
+      "context": { "channel": "pickup", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": false, "minimumAge": 21 }
+    },
+    {
+      "name": "an organization's rule beats a platform default of equal specificity",
+      "rules": [
+        { "id": "r-platform", "name": "r-platform", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "effect": "allow", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" },
+        { "id": "r-org", "name": "r-org", "orgId": "org-1", "scopeRegion": "TX", "channel": "pickup", "effect": "deny", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z", "denyMessage": "This shop does not offer pickup for this category.", "authorityNote": "This shop does not offer pickup for this category." }
+      ],
+      "subject": { "variantId": "v1" },
+      "context": { "channel": "pickup", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": false, "reasonContains": "does not offer pickup" }
+    },
+    {
+      "name": "variant outranks product outranks category subtree",
+      "about": "Only the ordering is under test here. The category rule matches by path prefix, so one row governs the whole `vapes.` subtree.",
+      "rules": [
+        { "id": "r-cat", "name": "r-cat", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "subjectCategoryPathPrefix": "vapes.", "effect": "allow", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" },
+        { "id": "r-brand", "name": "r-brand", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "subjectProductId": "p1", "effect": "require_age", "effectAge": 18, "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" },
+        { "id": "r-variant", "name": "r-variant", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "subjectVariantId": "v1", "effect": "require_age", "effectAge": 21, "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" }
+      ],
+      "subject": { "variantId": "v1", "productId": "p1", "categoryPath": "vapes.disposable.geek-bar" },
+      "context": { "channel": "pickup", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": true, "minimumAge": 21, "matchedRuleIds": ["r-variant", "r-brand", "r-cat"] }
+    },
+    {
+      "name": "the strictest age wins, not the most specific rule's age",
+      "about": "Two rules both apply and both name an age. Taking the more specific rule's age would let a narrow 18 rule undercut a broad 21 one.",
+      "rules": [
+        { "id": "r-broad", "name": "r-broad", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "effect": "require_age", "effectAge": 21, "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" },
+        { "id": "r-narrow", "name": "r-narrow", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "subjectVariantId": "v1", "effect": "require_age", "effectAge": 18, "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" },
+        { "id": "r-ok", "name": "r-ok", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "effect": "allow", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" }
+      ],
+      "subject": { "variantId": "v1" },
+      "context": { "channel": "pickup", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": true, "minimumAge": 21 }
+    },
+    {
+      "name": "requirements accumulate across rules",
+      "rules": [
+        { "id": "r-allow", "name": "r-allow", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "effect": "allow", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" },
+        { "id": "r-age", "name": "r-age", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "effect": "require_age", "effectAge": 21, "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" },
+        { "id": "r-scan", "name": "r-scan", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "effect": "require_id_scan", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" },
+        { "id": "r-prov", "name": "r-prov", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "effect": "require_provider_verification", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" }
+      ],
+      "subject": { "variantId": "v1" },
+      "context": { "channel": "delivery", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": {
+        "allowed": true,
+        "minimumAge": 21,
+        "requiresIdScan": true,
+        "requiresProviderVerification": true
+      }
+    },
+    {
+      "name": "a channel's rules do not leak into another channel",
+      "about": "Permission to sell at the counter is not permission to deliver. This is the whole reason channel is part of the key.",
+      "rules": [
+        { "id": "r-instore", "name": "r-instore", "orgId": null, "scopeRegion": "TX", "channel": "in_store", "effect": "allow", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" }
+      ],
+      "subject": { "variantId": "v1" },
+      "context": { "channel": "delivery", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": false, "matchedRuleIds": [] }
+    },
+    {
+      "name": "an unknown jurisdiction matches nothing",
+      "about": "A delivery address whose county could not be determined must not quietly inherit the county rule. Not knowing is a reason to stop.",
+      "rules": [
+        { "id": "r-county", "name": "r-county", "orgId": null, "scopeCounty": "Bell", "channel": "delivery", "effect": "allow", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" }
+      ],
+      "subject": { "variantId": "v1" },
+      "context": { "channel": "delivery", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": false, "matchedRuleIds": [] }
+    },
+    {
+      "name": "jurisdiction matching ignores case and stray spacing",
+      "about": "'TX', 'tx' and 'tx ' come from three different address forms and are one state.",
+      "rules": [
+        { "id": "r-state", "name": "r-state", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "effect": "allow", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" }
+      ],
+      "subject": { "variantId": "v1" },
+      "context": { "channel": "pickup", "region": " tx ", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": true }
+    },
+    {
+      "name": "every named attribute must match",
+      "rules": [
+        { "id": "r-attr", "name": "r-attr", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "subjectMatch": { "cannabinoid": "delta-9" }, "effect": "deny", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z", "denyMessage": "Not sold here.", "authorityNote": "Not sold here." },
+        { "id": "r-allow", "name": "r-allow", "orgId": null, "scopeRegion": "TX", "channel": "pickup", "effect": "allow", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" }
+      ],
+      "subject": { "variantId": "v1", "attributes": { "cannabinoid": "cbd" } },
+      "context": { "channel": "pickup", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": true, "matchedRuleIds": ["r-allow"] }
+    }
+  ]
+}

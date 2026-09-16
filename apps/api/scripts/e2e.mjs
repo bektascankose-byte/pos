@@ -14,6 +14,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { runSalesChecks } from './e2e-sales.mjs';
+import { runOrderChecks } from './e2e-orders.mjs';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -590,7 +591,18 @@ await runSalesChecks({
   storeId,
 });
 
-// ------------------------------------------------------------------ 9. summary
+// ------------------------------------------------------ 9. an order collected
+
+await runOrderChecks({
+  api,
+  check,
+  ownerToken,
+  managerToken,
+  cashierToken,
+  storeId,
+});
+
+// ----------------------------------------------------------------- 10. summary
 
 console.log(`\n  ${passed} passed, ${failed} failed\n`);
 if (failed > 0) {

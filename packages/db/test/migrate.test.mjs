@@ -18,21 +18,21 @@ const db = scratch.db;
 const n = async (sql) => Number((await db.query(sql))[0].n);
 
 test(`all ${migrationFiles().length} migrations applied on ${scratch.engine}`, () => {
-  assert.equal(migrationFiles().length, 25);
+  assert.equal(migrationFiles().length, 27);
 });
 
 test('migrations are numbered contiguously from 0001', () => {
   const prefixes = migrationFiles().map((f) => Number(f.name.slice(0, 4)));
-  assert.deepEqual(prefixes, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
+  assert.deepEqual(prefixes, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]);
 });
 
-test('82 base tables exist', async () => {
+test('86 base tables exist', async () => {
   assert.equal(
     await n(`select count(*) n from pg_class c
              join pg_namespace ns on ns.oid = c.relnamespace
              where ns.nspname='public' and c.relkind in ('r','p')
                and not c.relispartition`),
-    82,
+    86,
   );
 });
 
@@ -45,21 +45,26 @@ test('inventory_ledger and audit_log are range partitioned', async () => {
   assert.deepEqual(rows.map((r) => r.relname), ['audit_log', 'inventory_ledger']);
 });
 
-test('128 foreign keys, 29 enums, 95 table level checks', async () => {
+test('136 foreign keys, 31 enums, 102 table level checks', async () => {
+  // 0027 accounts for the last move: seven foreign keys (four off `orders`,
+  // two off `order_lines`, one off `order_events`), the order_fulfilment and
+  // order_status enums, and six checks -- four on `orders` including the one
+  // that makes "completed" and "has a sale" the same fact, two on
+  // `order_lines`.
   assert.equal(await n(`select count(*) n from pg_constraint c
                         join pg_namespace ns on ns.oid=c.connamespace
-                        where ns.nspname='public' and c.contype='f'`), 128);
+                        where ns.nspname='public' and c.contype='f'`), 136);
   assert.equal(await n(`select count(distinct t.typname) n from pg_type t
                         join pg_namespace ns on ns.oid=t.typnamespace
-                        where ns.nspname='public' and t.typtype='e'`), 29);
+                        where ns.nspname='public' and t.typtype='e'`), 31);
   assert.equal(await n(`select count(*) n from pg_constraint c
                         join pg_class t on t.oid=c.conrelid
                         join pg_namespace ns on ns.oid=c.connamespace
                         where ns.nspname='public' and c.contype='c'
-                          and not t.relispartition`), 95);
+                          and not t.relispartition`), 102);
 });
 
-test('12 functions and 41 user triggers', async () => {
+test('12 functions and 42 user triggers', async () => {
   // Extensions install their own functions into public (pg_trgm adds ~20), so
   // count only what our migrations own.
   assert.equal(await n(`select count(*) n from pg_proc p
@@ -75,10 +80,11 @@ test('12 functions and 41 user triggers', async () => {
   // plus one each from 0011 (shifts), 0012 (loyalty_settings), 0014
   // (invoice_imports), 0015 (onboarding_task_templates) and 0017
   // (import_jobs), two from 0018 (customer_segments, campaigns), one from 0019
-  // (receiving_sessions) and one from 0020 (reference_products) -- all reusing
-  // touch_updated_at rather than a new function, which is why the function
-  // count moves only by the one 0018 actually adds, marketing_unsubscribe.
-  assert.equal(await n(`select count(*) n from pg_trigger where not tgisinternal`), 41);
+  // (receiving_sessions), one from 0020 (reference_products) and one from 0027
+  // (orders) -- all reusing touch_updated_at rather than a new function, which
+  // is why the function count moves only by the one 0018 actually adds,
+  // marketing_unsubscribe.
+  assert.equal(await n(`select count(*) n from pg_trigger where not tgisinternal`), 42);
 });
 
 test('every table carrying org_id has RLS enabled and exactly one policy', async () => {
