@@ -223,6 +223,41 @@ export const suggestVariantsSchema = z.object({
   brand_name: z.string().max(128).optional(),
 });
 
+/**
+ * A photo of a product, or of one specific variant of it.
+ *
+ * `url` and `thumb_url` are **storage keys, not addresses** — the bucket is
+ * private, so the bytes come back through `GET catalog/images/:id`, which
+ * checks the caller the same way every other read does. A public or presigned
+ * URL would either leak the catalog or expire out from under a register that
+ * has been offline since Tuesday.
+ *
+ * Attached to a variant when the flavours look different and to the product
+ * when they don't, which is why exactly one of the two ids is set.
+ */
+export const productImageSchema = z.object({
+  id: uuid,
+  product_id: uuid.nullable(),
+  variant_id: uuid.nullable(),
+  alt_text: z.string().nullable(),
+  sort_order: z.number().int(),
+  /** True for the image a list or a register tile should show. The lowest sort_order wins. */
+  is_primary: z.boolean(),
+  created_at: timestamp,
+});
+
+export const uploadProductImageSchema = z.object({
+  /** One of these, not both: a photo belongs either to the product or to one of its variants. */
+  product_id: uuid.optional(),
+  variant_id: uuid.optional(),
+  alt_text: z.string().max(256).optional(),
+});
+
+export const reorderProductImagesSchema = z.object({
+  /** Image ids in the order they should appear. The first becomes the primary. */
+  image_ids: z.array(uuid).min(1).max(24),
+});
+
 export const productSchema = z.object({
   id: uuid,
   name: z.string().min(1).max(256),
@@ -241,6 +276,7 @@ export const productSchema = z.object({
   updated_at: timestamp,
   compliance: productComplianceSchema.nullable().optional(),
   variants: z.array(variantSchema).optional(),
+  images: z.array(productImageSchema).optional(),
 });
 
 export const createProductSchema = z
@@ -470,6 +506,9 @@ export type Category = z.infer<typeof categorySchema>;
 export type Brand = z.infer<typeof brandSchema>;
 export type CreateBrand = z.infer<typeof createBrandSchema>;
 export type Product = z.infer<typeof productSchema>;
+export type ProductImage = z.infer<typeof productImageSchema>;
+export type UploadProductImage = z.infer<typeof uploadProductImageSchema>;
+export type ReorderProductImages = z.infer<typeof reorderProductImagesSchema>;
 export type Variant = z.infer<typeof variantSchema>;
 export type CreateProduct = z.infer<typeof createProductSchema>;
 export type UpdateProduct = z.infer<typeof updateProductSchema>;

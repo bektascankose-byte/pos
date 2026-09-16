@@ -22,4 +22,6 @@ export interface SearchRow {
   cost: string | null;
   on_hand: string;
   available: string;
+  /** The photo to show for this row — the variant's own, or the product's. Null when there is none. */
+  image_id: string | null;
 }

@@ -177,6 +177,9 @@ export function CatalogListClient({
                     onChange={(e) => toggleAll(e.target.checked)}
                   />
                 </th>
+                <th className="px-3 py-2 font-normal">
+                  <span className="sr-only">Photo</span>
+                </th>
                 <th className="px-3 py-2 font-normal">Product</th>
                 <th className="px-3 py-2 font-normal">Brand</th>
                 <th className="px-3 py-2 font-normal">Category</th>
@@ -199,6 +202,22 @@ export function CatalogListClient({
                       value={`${row.product_id}:${row.variant_id}`}
                       onChange={recountSelected}
                     />
+                  </td>
+                  <td className="px-3 py-1">
+                    {/* A fixed box whether or not there is a photo, so every
+                        row keeps one height and the list does not jitter as
+                        images arrive. */}
+                    <div className="h-9 w-9 overflow-hidden rounded border border-[var(--color-border)] bg-[var(--color-bg)]">
+                      {row.image_id ? (
+                        /* eslint-disable-next-line @next/next/no-img-element -- served by this app's own proxy */
+                        <img
+                          src={`/api/product-images/${row.image_id}?size=thumb`}
+                          alt=""
+                          loading="lazy"
+                          className="h-full w-full object-contain"
+                        />
+                      ) : null}
+                    </div>
                   </td>
                   <td className="px-3 py-2">
                     <Link href={`/catalog/${row.product_id}`} className="text-[var(--color-accent)]">
@@ -254,7 +273,7 @@ export function CatalogListClient({
               ))}
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-4 py-6 text-center text-[var(--color-text-muted)]">
+                  <td colSpan={12} className="px-4 py-6 text-center text-[var(--color-text-muted)]">
                     {query ? `No match for "${query}".` : "No products yet."}
                   </td>
                 </tr>

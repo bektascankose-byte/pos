@@ -116,7 +116,17 @@ export class CatalogService {
                 v.cost::text,
                 pr.price_minor::text,
                 COALESCE(il.on_hand, 0)::text   AS on_hand,
-                COALESCE(il.available, 0)::text AS available
+                COALESCE(il.available, 0)::text AS available,
+                -- The picture a list row shows: this variant's own if it has
+                -- one, otherwise the product's. Flavours that were never
+                -- photographed individually still show the product, which is
+                -- nearly always the right picture and always better than a gap.
+                COALESCE(
+                  (SELECT i.id FROM product_images i
+                    WHERE i.variant_id = v.id ORDER BY i.sort_order, i.created_at LIMIT 1),
+                  (SELECT i.id FROM product_images i
+                    WHERE i.product_id = p.id ORDER BY i.sort_order, i.created_at LIMIT 1)
+                ) AS image_id
          FROM product_variants v
          JOIN products p ON p.id = v.product_id
          LEFT JOIN brands br ON br.id = p.brand_id
@@ -711,9 +721,27 @@ export class CatalogService {
         barcodesByVariant.set(b.variant_id, list);
       }
 
+      // Read here rather than left to a second request: the page shows them
+      // together, and a photo arriving a beat after the name it belongs to is
+      // the flicker every product page in the world gets wrong.
+      const { rows: imageRows } = await tx.query(
+        `SELECT i.id, i.product_id, i.variant_id, i.alt_text, i.sort_order,
+                (i.sort_order = (SELECT min(i2.sort_order) FROM product_images i2
+                                  WHERE i2.product_id IS NOT DISTINCT FROM i.product_id
+                                    AND i2.variant_id IS NOT DISTINCT FROM i.variant_id))
+                  AS is_primary,
+                i.created_at
+         FROM product_images i
+         WHERE i.product_id = $1
+            OR i.variant_id IN (SELECT id FROM product_variants WHERE product_id = $1)
+         ORDER BY i.sort_order, i.created_at`,
+        [id],
+      );
+
       return {
         ...product,
         compliance: complianceRows[0] ?? null,
+        images: imageRows,
         variants: variantRows.map((v) => ({
           ...v,
           barcodes: barcodesByVariant.get(v.id) ?? [],

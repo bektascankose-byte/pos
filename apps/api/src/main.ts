@@ -39,7 +39,12 @@ async function bootstrap(): Promise<void> {
 
   await app.register(multipart, {
     limits: {
-      files: 1,
+      // Two, not one: a product photo is uploaded together with the thumbnail
+      // the browser scaled from it, so that a picture and its thumbnail can
+      // never get out of step with each other. Every other upload in the API
+      // sends a single file and is unaffected; the point of the limit is to
+      // refuse someone posting fifty, and it still does.
+      files: 2,
       fileSize: 15 * 1024 * 1024,
     },
   });

@@ -54,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -61,7 +62,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
 import com.snappos.data.ResolvedProduct
+import com.snappos.pos.productImageUrl
 import com.snappos.domain.Cart
 import com.snappos.domain.CartLine
 import com.snappos.domain.Money
@@ -598,21 +601,38 @@ private fun ProductTileCard(tile: ResolvedProduct, onTap: () -> Unit) {
       .padding(Space.S.dp),
     verticalArrangement = Arrangement.SpaceBetween,
   ) {
-    Column {
-      Text(
-        tile.productName,
-        style = MaterialTheme.typography.bodyMedium,
-        maxLines = 2,
-        overflow = TextOverflow.Ellipsis,
-      )
-      tile.variantName?.let {
+    Row(verticalAlignment = Alignment.Top) {
+      // Only takes room when there is a photo. An empty placeholder on every
+      // unphotographed tile would shrink the name on all of them to make space
+      // for nothing, and most of a real shop's catalog has no picture.
+      tile.imageUrl?.let { path ->
+        AsyncImage(
+          model = productImageUrl(path),
+          contentDescription = null,
+          contentScale = ContentScale.Fit,
+          modifier = Modifier
+            .size(40.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        )
+        Spacer(Modifier.width(Space.S.dp))
+      }
+      Column(Modifier.weight(1f)) {
         Text(
-          it,
-          style = MaterialTheme.typography.labelMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          maxLines = 1,
+          tile.productName,
+          style = MaterialTheme.typography.bodyMedium,
+          maxLines = 2,
           overflow = TextOverflow.Ellipsis,
         )
+        tile.variantName?.let {
+          Text(
+            it,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
       }
     }
     Row(

@@ -137,7 +137,7 @@ class CatalogSync @Inject constructor(
           taxCategoryId = v.tax_category_id,
           cost = v.cost,
           caseQuantity = v.case_quantity,
-          imageUrl = null,
+          imageUrl = v.image_url,
           sortOrder = v.sort_order,
           isDefault = v.is_default,
           status = v.status,

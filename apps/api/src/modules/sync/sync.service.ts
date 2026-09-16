@@ -628,11 +628,27 @@ export class SyncService {
                   p.brand_id, b.name AS brand_name, p.category_id, p.tax_category_id,
                   v.cost::text, v.case_quantity, v.sort_order, v.is_default, v.status,
                   pc.minimum_age, COALESCE(pc.id_scan_required, false) AS id_scan_required,
-                  pc.regulated_class
+                  pc.regulated_class,
+                  -- A path, not the bytes. The register fetches the image
+                  -- itself and keeps it: an image's address never changes
+                  -- meaning -- replacing a photo makes a new row with a new
+                  -- id -- so whatever a register has already downloaded stays
+                  -- valid forever, and the snapshot stays small enough to sync
+                  -- over a shop's uplink.
+                  img.path AS image_url
            FROM product_variants v
            JOIN products p ON p.id = v.product_id
            LEFT JOIN brands b ON b.id = p.brand_id
            LEFT JOIN product_compliance pc ON pc.product_id = p.id
+           -- The variant's own photo wins; failing that the product's, which is
+           -- the right picture for a flavour nobody photographed separately.
+           LEFT JOIN LATERAL (
+             SELECT '/api/v1/catalog/images/' || i.id || '?size=thumb' AS path
+             FROM product_images i
+             WHERE i.variant_id = v.id OR i.product_id = p.id
+             ORDER BY (i.variant_id IS NULL), i.sort_order, i.created_at
+             LIMIT 1
+           ) img ON true
            WHERE v.status = 'active' AND p.status = 'active'`,
         ) : empty,
         includes('catalog') ? tx.query(

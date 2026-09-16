@@ -28,6 +28,8 @@ data class ResolvedProduct(
   val onHand: String?,
   val minimumAge: Int?,
   val idScanRequired: Boolean,
+  /** Server-relative path to this item's photo, or null. Joined to the base URL by whatever draws it. */
+  val imageUrl: String?,
 ) {
   val displayName: String get() = productName
   val inStock: Boolean get() = (onHand?.toDoubleOrNull() ?: 0.0) > 0.0
@@ -77,5 +79,6 @@ class CatalogRepository @Inject constructor(
     onHand = onHand,
     minimumAge = variant.minimumAge,
     idScanRequired = variant.idScanRequired,
+    imageUrl = variant.imageUrl,
   )
 }

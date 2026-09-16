@@ -2,6 +2,51 @@
 
 Notable changes. Newest first.
 
+## Product photos, in the back office and on the register
+
+`product_images` has existed since `0002_catalog.sql` and nothing had ever written to it. It does now:
+photos attach to a product, or to one variant of it when the flavours look different, and they show on
+the item page, in the catalog list, and on the register's product tiles.
+
+**The scaling happens in the browser, before anything is uploaded.** A phone camera makes 4–12MB files
+and a shop has hundreds of products; sending those as-is would fill a bucket, crawl over a shop's uplink,
+and arrive at a register that has to pull them all down again. Two versions go up instead — one to look
+at, one for a list row. A real 4.9MB photo became **18KB and 2KB**. It also means the API needs no
+image-processing library at all, and the one place that decides how big a photo should be is the one
+place that knows how big it will be drawn. Re-encoding every image also strips EXIF, so a photo taken
+behind the counter doesn't publish the shop's GPS coordinates into object storage.
+
+**The bytes are private.** Only a storage key is kept in the row and it is never handed to a client;
+images come back through an endpoint that authenticates the caller like every other read. The dashboard
+reaches them through its own proxy, because the access token lives in an httpOnly cookie that page
+JavaScript deliberately cannot see. A presigned URL would have expired out from under a register that
+had been offline since Tuesday.
+
+**On the register**, tiles show the item's photo — the variant's own, or the product's, which is the
+right picture for a flavour nobody photographed separately. They are fetched lazily and cached
+effectively forever rather than bulk-downloaded during sync: an image's address never changes meaning,
+so anything downloaded once stays correct. That is a deliberate asymmetry — a price or an age rule has
+to be right offline or the shop cannot trade, whereas a missing picture costs a cashier a second of
+recognition, and making every full sync drag hundreds of files across a shop's uplink to avoid that is
+the wrong trade. Coil is wired to the register's existing authenticated OkHttp client, so it inherits
+both the bearer token and the host-rewriting that lets a register be pointed at a different server.
+
+**No local database migration.** The register's `VariantEntity` has carried an unused `imageUrl` column
+since it was written; the server now sends a path to put in it. Renaming it to `imageId` would have read
+slightly better and cost a hand-written SQLite table rebuild on a device that may be holding sales that
+have not uploaded — not a trade worth making for a noun, and not one to make blind on an app that cannot
+be run here.
+
+Verified end to end: upload returns 201 and the bytes round-trip byte-identical; a 3000×2000 photo fed
+through the real browser path came back 1400×933 and 256×171 with the aspect ratio intact; the catalog
+list and item page render through the proxy; a variant photo correctly beats the product's while its
+siblings fall back to it; and the sync snapshot carries the paths. The Android app compiles. It has
+**not** been run on a device — there is no emulator or attached phone here, so the register half is
+verified by compilation and by the payload it will receive, not by looking at it.
+
+Fixed on the way: the global multipart limit of one file per request, which an image and its thumbnail
+legitimately exceed. Now two; every other upload sends one and is unaffected.
+
 ## Verify and unverify a delivery, and let unknown scans name themselves
 
 A counted delivery could be put into stock and then never touched again. Every way of correcting one —

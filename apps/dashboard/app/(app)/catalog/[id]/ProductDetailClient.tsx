@@ -19,6 +19,7 @@ import {
   PricingPanel,
   VariantPicker,
 } from "./ItemDetailPanels";
+import { ImagePanel } from "./ImagePanel";
 import type { Product, Variant, Brand, Category, TaxCategory } from "@snappos/contracts";
 
 interface Props {
@@ -95,6 +96,11 @@ export function ProductDetailClient({ productId, storeId, initialProduct, brands
                   onSaved={(updated) => setProduct(updated)}
                 />
                 <CompliancePanel product={product} onSaved={(updated) => setProduct(updated)} />
+                <ImagePanel
+                  productId={productId}
+                  variants={variants}
+                  initialImages={product.images ?? []}
+                />
               </div>
             ),
           },

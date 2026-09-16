@@ -45,6 +45,11 @@ data class VariantEntity(
   /** numeric(14,6) on the server. Kept as text so it never becomes a float. */
   val cost: String,
   val caseQuantity: Int,
+  /**
+   * Path to this item's photo on the server, relative to the configured base
+   * URL, or null. A path rather than an id because the server owns the shape of
+   * its own routes; the register only has to join it to the host it syncs with.
+   */
   val imageUrl: String?,
   val sortOrder: Int,
   val isDefault: Boolean,

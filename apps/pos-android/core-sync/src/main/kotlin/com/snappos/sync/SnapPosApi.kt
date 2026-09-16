@@ -280,6 +280,8 @@ data class VariantDto(
   val minimum_age: Int? = null,
   val id_scan_required: Boolean = false,
   val regulated_class: String? = null,
+  /** Server-relative path to this item's photo, if it has one. The bytes are fetched separately and cached. */
+  val image_url: String? = null,
 )
 
 @Serializable
