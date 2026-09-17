@@ -1,23 +1,30 @@
 import Link from "next/link";
 import type { ShopProductList } from "@snappos/contracts";
 import { ProductGrid } from "@/components/ProductCard";
+import { FeatureBanners, HeroBanner } from "@/components/Banner";
 import { shopFetch } from "@/lib/api";
-import { getCategories, getShopInfo } from "@/lib/shop";
+import { getBanners, getCategories, getShopInfo } from "@/lib/shop";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  const [info, categories, featured] = await Promise.all([
+  const [info, categories, featured, heroes, features] = await Promise.all([
     getShopInfo(),
     getCategories(),
     shopFetch<ShopProductList>("/products?in_stock=true&page_size=8", { withCart: false, withSession: false }).catch(
       () => null,
     ),
+    getBanners("home_hero"),
+    getBanners("home_feature"),
   ]);
+  const hero = heroes[0] ?? null;
   const topLevel = categories.filter((category) => category.depth === 0);
 
   return (
     <div className="flex flex-col gap-10">
+      {hero ? (
+        <HeroBanner banner={hero} />
+      ) : (
       <section className="flex flex-col gap-4 rounded-3xl bg-[var(--ink)] px-6 py-8 text-[var(--bg)] sm:px-10 sm:py-10">
         <p className="eyebrow text-[color-mix(in_srgb,var(--bg)_70%,transparent)]">Order online · pick up in store</p>
         <h1 className="display max-w-3xl text-4xl font-extrabold uppercase sm:text-6xl">
@@ -28,6 +35,13 @@ export default async function HomePage() {
           must be 21 or older.
         </p>
       </section>
+      )}
+
+      {features.length > 0 ? (
+        <section aria-label="Featured" className="flex flex-col gap-3">
+          <FeatureBanners banners={features} />
+        </section>
+      ) : null}
 
       {topLevel.length > 0 ? (
         <section aria-labelledby="shop-by-category" className="flex flex-col gap-3">

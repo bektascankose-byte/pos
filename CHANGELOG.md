@@ -2,6 +2,72 @@
 
 Notable changes. Newest first.
 
+## The manufacturers' artwork, on the website
+
+`storefront_banners` and the back office screens for it shipped in 0032 and the
+website never drew any of them: the table, the API and the management UI all
+existed, and the public site had no idea they were there. It does now — a hero
+across the top of the home page and a feature row beneath it — and the first
+real media kits are loaded.
+
+**The warning is not a caption.** Federal rules require the nicotine warning on
+advertising for these products and hold the retailer responsible for artwork
+the manufacturer made, so it is drawn in its own band across the banner rather
+than as small print somewhere further down the page. `advertises_nicotine`
+already defaulted to true on the way in; this is the half that makes it visible.
+
+**A banner is decoration, so it fails like decoration.** `getBanners` never
+throws: a shop whose banner service is having a bad afternoon still sells, and
+the home page falls back to the plain hero it had before. The words beside the
+picture are real text rather than baked into it, so a shopper who cannot load
+images — or cannot see them — still gets the headline and the link.
+
+Artwork is served through `/banner/[id]/[kind]` on the site's own origin, the
+same shape `/img` already used: the bucket is private and the API hands the
+bytes only to a caller holding the shop key, so a browser cannot reach them
+directly. Range requests pass through, because a browser asks for video a piece
+at a time and will not play one that arrives any other way.
+
+### 39 product photos, and 38 more items on the website
+
+The Foger and Geek Bar kits cover most of what the shop actually stocks, so the
+photos are now on the catalogue and those items are listed for pickup. The
+Vapes category went from 2 products to 38.
+
+`tools/media-import` is the tooling, kept because a new kit arrives whenever a
+supplier launches something. It scales to exactly what the back office uploader
+produces — 1400px display, 256px thumbnail, JPEG at 0.85, flattened onto white —
+so these are indistinguishable from photos a person uploaded, and the API still
+needs no image library. 7.2MB of source became 2.1MB of web images; the largest
+display photo is 87KB.
+
+**Matching is scoped per product line, and that is the whole difficulty.**
+Several kits ship a "Blue Razz Ice". A global flavour-to-file map put a Foger
+pod on a Geek Bar product on the first run — same flavour name, a completely
+different device, and a photo that lies about what is in the bag. A catalogue
+row may now only draw from its own line's kit, and a row whose line has no kit
+matches nothing. Thirteen flavours the shop stocks have no artwork in any kit
+and four Geek Bar CLR products have no kit at all; they keep their initials
+tile, which is the right answer. A missing photo beats a wrong one.
+
+### Measured
+
+A production build, served by `next start`, against the API and a real
+database:
+
+| Page | Cold | Warm | HTML |
+|---|---|---|---|
+| Home | 140 ms | ~50 ms | 51 KB |
+| Vapes, 38 products | 59 ms | ~40 ms | 89 KB |
+| Product | 38 ms | ~30 ms | 28 KB |
+| Search | 32 ms | ~30 ms | 23 KB |
+| Cart | 34 ms | ~30 ms | 17 KB |
+
+Shared JS is 103KB across every route and the per-page bundles run 143 B to
+2.6 kB, because nearly all of this renders on the server. The same pages in dev
+mode take 13.8 s cold and 1.9–3.6 s warm: that is on-demand compilation, and
+worth remembering before anyone measures the development server and panics.
+
 ## The website: a shop a customer can order from
 
 `apps/storefront` is a Next.js server rendering a shop's own website: a home page, brand

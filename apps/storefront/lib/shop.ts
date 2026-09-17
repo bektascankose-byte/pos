@@ -1,7 +1,7 @@
 import "server-only";
 import { cache } from "react";
 import { cookies } from "next/headers";
-import type { ShopCart, ShopCategory, ShopCustomerProfile, ShopInfo } from "@snappos/contracts";
+import type { BannerPlacement, ShopBanner, ShopCart, ShopCategory, ShopCustomerProfile, ShopInfo } from "@snappos/contracts";
 import { CART_COOKIE, SESSION_COOKIE } from "./cookies";
 import { ShopApiError, shopFetch } from "./api";
 
@@ -43,5 +43,22 @@ export const getCustomer = cache(async (): Promise<ShopCustomerProfile | null> =
   } catch (e) {
     if (e instanceof ShopApiError && e.status === 401) return null;
     throw e;
+  }
+});
+
+/**
+ * The banners showing in one place on the page.
+ *
+ * Never throws: artwork is decoration, and a shop whose banner service is
+ * having a bad afternoon should still be able to sell. The page renders
+ * without it.
+ */
+export const getBanners = cache(async (placement: BannerPlacement, brandId?: string): Promise<ShopBanner[]> => {
+  const query = new URLSearchParams({ placement });
+  if (brandId) query.set("brand", brandId);
+  try {
+    return await shopFetch<ShopBanner[]>(`/banners?${query}`, { withCart: false, withSession: false });
+  } catch {
+    return [];
   }
 });

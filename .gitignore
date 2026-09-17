@@ -61,3 +61,9 @@ marketing/
 apps/pos-android/**/build/
 apps/pos-android/.gradle/
 apps/pos-android/.kotlin/
+
+# Scratch from a media import: the scaled derivatives and the catalogue export
+# it matched against. The tooling that makes them is in tools/media-import.
+.media-work/
+catalog.txt
+brands.txt

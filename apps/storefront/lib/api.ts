@@ -81,3 +81,12 @@ export async function shopImage(id: string, size: "full" | "thumb"): Promise<Res
     cache: "no-store",
   });
 }
+
+/** The bytes of a banner's picture or video, for the /banner route. */
+export async function shopBannerMedia(id: string, kind: "image" | "mobile_image" | "video", range?: string | null): Promise<Response> {
+  const key = process.env.SHOP_API_KEY ?? "";
+  return fetch(`${API_BASE_URL}/api/v1/shop/banners/${encodeURIComponent(id)}/media/${kind}`, {
+    headers: { "x-shop-key": key, ...(range ? { Range: range } : {}) },
+    cache: "no-store",
+  });
+}
