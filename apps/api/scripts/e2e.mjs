@@ -15,6 +15,11 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { runSalesChecks } from './e2e-sales.mjs';
 import { runOrderChecks } from './e2e-orders.mjs';
+import { runShopChecks } from './e2e-shop.mjs';
+import { E2E_DOORDASH_AUTHORIZATION, runDeliveryAndRewardsChecks } from './e2e-delivery-rewards.mjs';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -113,14 +118,33 @@ if (process.env.E2E_SKIP_RESET !== 'true') {
 // file it is about to reload disappears mid-rebuild. Running the tests must not
 // take the development API down with it, for the same reason they must not
 // reset the development database.
+// Emails the server would send land here instead, one file each, so the account
+// checks can follow a confirmation link the way a customer would.
+const mailbox = mkdtempSync(join(tmpdir(), 'snappos-e2e-mail-'));
+
 const server = spawn(process.execPath, ['dist-e2e/main.js'], {
   cwd,
   env: {
+    // Local MinIO, the same defaults `scripts/dev.mjs` uses. The server refuses to
+    // boot without object storage, and the environment can still point elsewhere.
+    S3_ENDPOINT: 'http://localhost:9000',
+    S3_REGION: 'us-east-1',
+    S3_BUCKET: 'snappos-invoices',
+    S3_ACCESS_KEY_ID: 'snappos',
+    S3_SECRET_ACCESS_KEY: 'dev_only_not_a_secret',
+    S3_FORCE_PATH_STYLE: 'true',
     ...process.env,
     PORT: String(PORT),
     DATABASE_URL: APP_URL,
     JWT_SECRET: 'e2e_secret_that_is_at_least_thirty_two_chars',
     RATE_LIMIT_MAX: '10000',
+    DEV_MAILBOX_DIR: mailbox,
+    // Listing pages cache what is for sale for ten seconds. The checks below
+    // change listings and rules and look straight away.
+    SHOP_SNAPSHOT_TTL_MS: '0',
+    STOREFRONT_URL: 'http://shop.e2e.test',
+    // What DoorDash sends back in the Authorization header, agreed in its portal.
+    DOORDASH_WEBHOOK_AUTHORIZATION: E2E_DOORDASH_AUTHORIZATION,
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -132,8 +156,15 @@ server.stderr.on('data', (d) => (serverLog += d.toString()));
 const stop = () => server.kill();
 process.on('exit', stop);
 
+// Two minutes, not thirty seconds. A build that has just been written is slow
+// to load the first time on a Windows machine that scans new files, and thirty
+// seconds was being missed by a server that started fine a few seconds later --
+// with nothing in its log, because the API buffers its logs until it is up.
+const startedAt = Date.now();
 let ready = false;
-for (let attempt = 0; attempt < 60; attempt++) {
+let exited = null;
+server.on('exit', (code) => (exited = code));
+for (let attempt = 0; attempt < 240 && exited === null; attempt++) {
   await sleep(500);
   try {
     const r = await fetch(`${BASE}/health`);
@@ -147,9 +178,11 @@ for (let attempt = 0; attempt < 60; attempt++) {
 }
 
 if (!ready) {
-  console.error('server did not start\n', serverLog);
+  const why = exited === null ? `not answering after ${Math.round((Date.now() - startedAt) / 1000)}s` : `exited with code ${exited}`;
+  console.error(`server did not start: ${why}\n`, serverLog);
   process.exit(1);
 }
+console.log(`  server up in ${Math.round((Date.now() - startedAt) / 1000)}s`);
 
 console.log('\nEND TO END\n');
 
@@ -602,7 +635,33 @@ await runOrderChecks({
   storeId,
 });
 
-// ----------------------------------------------------------------- 10. summary
+// ------------------------------------------------------------ 10. the website
+
+await runShopChecks({
+  api,
+  check,
+  ownerToken,
+  managerToken,
+  cashierToken,
+  storeId,
+  mailbox,
+});
+
+// ------------------------------------------- 11. points, phones and deliveries
+
+await runDeliveryAndRewardsChecks({
+  api,
+  base: BASE,
+  check,
+  uuidV7,
+  ownerToken,
+  managerToken,
+  cashierToken,
+  storeId,
+  mailbox,
+});
+
+// ----------------------------------------------------------------- 12. summary
 
 console.log(`\n  ${passed} passed, ${failed} failed\n`);
 if (failed > 0) {

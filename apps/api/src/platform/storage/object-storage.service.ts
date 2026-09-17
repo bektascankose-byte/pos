@@ -65,4 +65,25 @@ export class ObjectStorageService implements OnModuleInit {
     const bytes = await result.Body!.transformToByteArray();
     return Buffer.from(bytes);
   }
+
+  /**
+   * Part of an object, for video.
+   *
+   * Browsers ask for a video a byte range at a time, and Safari will not play
+   * one at all from a server that cannot answer a range. `range` is the
+   * request's own `Range` header, passed straight to storage, which answers it
+   * the way HTTP does; `contentRange` comes back set when a range was served.
+   */
+  async getRange(
+    key: string,
+    range?: string,
+  ): Promise<{ body: Buffer; contentRange: string | null; totalBytes: number | null }> {
+    const result = await this.client.send(
+      new GetObjectCommand({ Bucket: this.bucket, Key: key, ...(range ? { Range: range } : {}) }),
+    );
+    const bytes = await result.Body!.transformToByteArray();
+    const contentRange = result.ContentRange ?? null;
+    const total = contentRange ? Number(contentRange.split('/')[1]) : (result.ContentLength ?? null);
+    return { body: Buffer.from(bytes), contentRange, totalBytes: Number.isFinite(total) ? total : null };
+  }
 }

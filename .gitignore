@@ -11,6 +11,9 @@ out/
 next-env.d.ts
 *.tsbuildinfo
 
+# Development mailbox: emails a dev server did not send, links and all.
+.dev-mailbox/
+
 # Environment and secrets. Never commit these.
 .env
 .env.*

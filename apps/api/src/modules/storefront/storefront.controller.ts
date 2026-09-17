@@ -1,6 +1,8 @@
 import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { z } from 'zod';
+import { createStorefrontClientSchema } from '@snappos/contracts';
 import { AvailabilityService, type Fulfilment } from './availability.service.js';
+import { StorefrontClientsService } from './storefront-clients.service.js';
 import { zodBody } from '../../platform/validation/zod.pipe.js';
 import { CurrentUser } from '../../platform/auth/current-user.decorator.js';
 import { RequirePermissions } from '../../platform/auth/auth.guard.js';
@@ -16,6 +18,8 @@ const setListingSchema = z.object({
   online_price_minor: z.string().regex(/^\d+$/).optional(),
   hold_for_pickup: z.boolean().optional(),
   hold_for_delivery: z.boolean().optional(),
+  clear_max_per_order: z.boolean().optional(),
+  clear_online_price: z.boolean().optional(),
 });
 
 const checkSchema = z.object({
@@ -28,17 +32,55 @@ const checkSchema = z.object({
 });
 
 /**
- * Staff-facing for now.
+ * Staff-facing: what the website may sell, and the keys it sells with.
  *
- * These endpoints answer "what may the website sell" and are read by the
- * storefront through a service token, not by a customer's browser. The public,
- * unauthenticated catalog routes arrive with the storefront itself in phase 5;
- * shipping them before anything consumes them would mean an open endpoint
- * nobody is watching.
+ * The website itself never calls these. It uses the shop routes in
+ * `modules/shop`, which are authenticated by a storefront key and show only
+ * what is listed, priced, in stock and allowed.
  */
 @Controller({ path: 'storefront', version: '1' })
 export class StorefrontController {
-  constructor(private readonly availability: AvailabilityService) {}
+  constructor(
+    private readonly availability: AvailabilityService,
+    private readonly clients: StorefrontClientsService,
+  ) {}
+
+  /** One product's variants with their online settings, for the item page. */
+  @Get('listings')
+  @RequirePermissions('storefront.view')
+  productListings(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('store_id') storeId: string,
+    @Query('product_id') productId: string,
+  ) {
+    if (!z.string().uuid().safeParse(storeId).success || !z.string().uuid().safeParse(productId).success) {
+      throw new ApiException('validation_failed', 'store_id and product_id are required', { retryable: false });
+    }
+    return this.availability.productListings(user.orgId, storeId, productId);
+  }
+
+  @Get('clients')
+  @RequirePermissions('storefront.manage')
+  listClients(@CurrentUser() user: AuthenticatedUser) {
+    return this.clients.list(user.orgId);
+  }
+
+  /** Issue a key. The response is the only time the key is ever shown. */
+  @Post('clients')
+  @RequirePermissions('storefront.manage')
+  createClient(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body(zodBody(createStorefrontClientSchema)) body: ReturnType<typeof createStorefrontClientSchema.parse>,
+  ) {
+    return this.clients.create(user.orgId, user.userId, body.store_id, body.name);
+  }
+
+  @Post('clients/:id/revoke')
+  @RequirePermissions('storefront.manage')
+  revokeClient(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    if (!z.string().uuid().safeParse(id).success) throw ApiException.notFound('storefront key');
+    return this.clients.revoke(user.orgId, user.userId, id);
+  }
 
   @Get('availability')
   @RequirePermissions('storefront.view')

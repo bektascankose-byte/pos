@@ -33,11 +33,21 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
           <h1 className="mt-1 text-xl font-semibold">{order.order_number}</h1>
           <p className="text-sm text-[var(--color-text-muted)]">
             {contact} · <span className="capitalize">{order.fulfilment}</span> ·{" "}
-            <span className="capitalize">{readableStatus(order.status)}</span>
+            <span className="capitalize">{readableStatus(order.status)}</span> ·{" "}
+            {order.placed_via === "storefront" ? "Placed on the website" : "Keyed in by staff"}
           </p>
         </div>
-        <OrderActions id={order.id} status={order.status} />
+        <OrderActions id={order.id} status={order.status} minimumAge={order.minimum_age} />
       </div>
+
+      {order.minimum_age !== null && !order.sale_id ? (
+        <p className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm">
+          <strong className="font-medium">Check photo ID at pickup: {order.minimum_age} or older.</strong>{" "}
+          {order.age_attested_at
+            ? "The customer said they were when they ordered, but that is their word, not a check."
+            : "This order has age-restricted items."}
+        </p>
+      ) : null}
 
       {order.resolution_note ? (
         <p className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm">
@@ -108,12 +118,24 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
             </tbody>
             <tfoot className="border-t border-[var(--color-border)]">
               <tr>
-                <td className="px-4 py-2 text-right text-[var(--color-text-muted)]" colSpan={4}>
-                  Total
+                <td className="px-4 pt-2 text-right text-[var(--color-text-muted)]" colSpan={4}>
+                  Subtotal
                 </td>
-                <td className="px-4 py-2 text-right font-medium tabular-nums">
-                  {formatMinor(order.total_minor)}
+                <td className="px-4 pt-2 text-right tabular-nums">{formatMinor(order.subtotal_minor)}</td>
+                <td />
+              </tr>
+              <tr>
+                <td className="px-4 text-right text-[var(--color-text-muted)]" colSpan={4}>
+                  Sales tax
                 </td>
+                <td className="px-4 text-right tabular-nums">{formatMinor(order.tax_minor)}</td>
+                <td />
+              </tr>
+              <tr>
+                <td className="px-4 pb-2 text-right text-[var(--color-text-muted)]" colSpan={4}>
+                  To collect
+                </td>
+                <td className="px-4 pb-2 text-right font-medium tabular-nums">{formatMinor(order.total_minor)}</td>
                 <td />
               </tr>
             </tfoot>

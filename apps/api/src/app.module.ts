@@ -11,6 +11,10 @@ import { SyncModule } from './modules/sync/sync.module.js';
 import { StorefrontModule } from './modules/storefront/storefront.module.js';
 import { ComplianceModule } from './modules/compliance/compliance.module.js';
 import { OrdersModule } from './modules/orders/orders.module.js';
+import { ShopModule } from './modules/shop/shop.module.js';
+import { DeliveryModule } from './modules/delivery/delivery.module.js';
+import { ShopAuthModule } from './platform/shop/shop-auth.module.js';
+import { ProvidersModule } from './platform/providers.module.js';
 import { OrgModule } from './modules/org/org.module.js';
 import { SalesModule } from './modules/sales/sales.module.js';
 import { RefundsModule } from './modules/refunds/refunds.module.js';
@@ -57,6 +61,10 @@ import { HealthController } from './modules/health/health.controller.js';
     StorefrontModule,
     ComplianceModule,
     OrdersModule,
+    ShopAuthModule,
+    ProvidersModule,
+    ShopModule,
+    DeliveryModule,
     OrgModule,
   ],
   controllers: [HealthController],

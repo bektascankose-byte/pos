@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
-import { shiftQuerySchema, createShiftSchema, updateShiftSchema } from '@snappos/contracts';
+import { shiftQuerySchema, createShiftSchema, createShiftBatchSchema, updateShiftSchema } from '@snappos/contracts';
 import { SchedulingService } from './scheduling.service.js';
 import { zodBody } from '../../platform/validation/zod.pipe.js';
 import { CurrentUser } from '../../platform/auth/current-user.decorator.js';
@@ -23,6 +23,15 @@ export class SchedulingController {
     @Body(zodBody(createShiftSchema)) body: ReturnType<typeof createShiftSchema.parse>,
   ) {
     return this.scheduling.create(user.orgId, user.userId, body);
+  }
+
+  @Post('shifts/batch')
+  @RequirePermissions('schedule.manage')
+  createBatch(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body(zodBody(createShiftBatchSchema)) body: ReturnType<typeof createShiftBatchSchema.parse>,
+  ) {
+    return this.scheduling.createBatch(user.orgId, user.userId, body.shifts);
   }
 
   @Patch('shifts/:id')

@@ -7,6 +7,7 @@ import { InventoryRepository } from '../inventory/inventory.repository.js';
 import { AuditService } from '../../platform/audit/audit.service.js';
 import { ApiException } from '../../platform/errors/api-exception.js';
 import { RetryableIntakeError } from '../../platform/errors/retryable-intake.js';
+import { LoyaltyLedger } from '../loyalty/loyalty-ledger.service.js';
 
 export type IntakeResult = 'accepted' | 'duplicate';
 
@@ -18,6 +19,7 @@ export class SalesService {
     private readonly db: DatabaseService,
     private readonly inventory: InventoryRepository,
     private readonly audit: AuditService,
+    private readonly loyalty: LoyaltyLedger,
   ) {}
 
   /**
@@ -92,6 +94,9 @@ export class SalesService {
     if (sale.status === 'completed') {
       await this.postStockMovements(tx, sale, completedAt);
       await this.postCashMovements(tx, sale);
+      // In the same transaction as the sale, so points exist exactly when the
+      // sale does -- from a register upload and a website handover alike.
+      await this.loyalty.earnForSaleTx(tx, sale.id);
     }
 
     if (variance !== 0n) {
@@ -472,6 +477,7 @@ export class SalesService {
       );
 
       await this.reverseCashMovements(tx, saleId, sale.session_id, actorUserId, reason);
+      await this.loyalty.reverseForVoidTx(tx, saleId, actorUserId, reason);
 
       await this.audit.record(tx, {
         action: 'sale.void',

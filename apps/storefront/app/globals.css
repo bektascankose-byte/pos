@@ -1,0 +1,182 @@
+@import "tailwindcss";
+
+/*
+ * Smoke and ember.
+ *
+ * A cool smoke-grey ground, white surfaces, near-black ink, and one ember
+ * orange that is spent only on things a shopper can do -- add, check out,
+ * place the order. Status colours are separate from it and always paired with
+ * words, never colour alone. Every text pairing meets WCAG 2.2 AA in both
+ * themes; the ember is darkened in light mode (#B83A0B, better than 5:1 with
+ * white) and lifted in dark mode, where it carries dark text instead of white.
+ */
+:root {
+  --bg: #f1f2f4;
+  --surface: #ffffff;
+  --surface-sunk: #e8eaee;
+  --ink: #16181d;
+  --muted: #555c69;
+  --line: #d6d9df;
+  --ember: #b83a0b;
+  --ember-ink: #ffffff;
+  --ember-soft: #fbe9e1;
+  --ok: #17693f;
+  --warn: #8a5100;
+  --danger: #b42318;
+  --focus: #1f5fbf;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101216;
+    --surface: #191c22;
+    --surface-sunk: #14161b;
+    --ink: #eceef1;
+    --muted: #a6adb8;
+    --line: #2b3039;
+    --ember: #ff8a5c;
+    --ember-ink: #16181d;
+    --ember-soft: #3a2219;
+    --ok: #5ccf8f;
+    --warn: #f2b54b;
+    --danger: #ff7b6e;
+    --focus: #8ab4ff;
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --font-display: var(--font-archivo), "Arial Narrow", system-ui, sans-serif;
+  --font-sans: var(--font-public-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/*
+ * The rules below live in Tailwind's layers. CSS outside a layer outranks
+ * every utility, so a class like `btn px-4 text-sm` used to keep the button's
+ * own padding and size and quietly drop the utilities beside it.
+ */
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Focus that is always visible and never relies on colour alone. */
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+@layer components {
+  /* The display face, condensed: shelf-sign lettering for the shop name and headings. */
+  .display {
+    font-family: var(--font-display);
+    font-stretch: 75%;
+    font-variation-settings: "wdth" 75;
+    letter-spacing: 0.01em;
+    /* Tailwind's text sizes take their line height from --tw-leading when it is set. */
+    --tw-leading: 1.05;
+    line-height: 1.05;
+    text-wrap: balance;
+  }
+
+  .eyebrow {
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .skip-link {
+    position: absolute;
+    left: 1rem;
+    top: -4rem;
+    z-index: 50;
+    background: var(--ink);
+    color: var(--bg);
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+  }
+  .skip-link:focus {
+    top: 1rem;
+  }
+
+  /* Controls a shopper operates, sized for a thumb: at least 44px tall. */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    min-height: 44px;
+    padding: 0 1.1rem;
+    border-radius: 999px;
+    font-weight: 600;
+    font-size: 0.95rem;
+    transition: background-color 120ms ease, border-color 120ms ease;
+  }
+  .btn-primary {
+    background: var(--ember);
+    color: var(--ember-ink);
+  }
+  .btn-primary:hover {
+    background: color-mix(in srgb, var(--ember) 88%, var(--ink));
+  }
+  .btn-quiet {
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+  }
+  .btn-quiet:hover {
+    border-color: var(--muted);
+  }
+  .btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .field {
+    width: 100%;
+    min-height: 44px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--ink);
+    padding: 0.55rem 0.8rem;
+  }
+  .field[aria-invalid="true"] {
+    border-color: var(--danger);
+  }
+
+  /* The perforation between a pickup ticket's stub and its body. */
+  .perforation {
+    border: 0;
+    border-top: 2px dashed var(--line);
+    margin: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
+}

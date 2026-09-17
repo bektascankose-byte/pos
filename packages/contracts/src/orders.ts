@@ -14,6 +14,7 @@
 import { z } from 'zod';
 import { uuid, timestamp, quantity } from './primitives.js';
 import { ORDER_FULFILMENTS, ORDER_STATUSES } from './order-state.js';
+import { orderDeliverySchema, orderPaymentSchema } from './delivery.js';
 
 /**
  * Money as it comes off the wire: a digit string of minor units.
@@ -49,6 +50,13 @@ export const orderQueueEntrySchema = z.object({
    * this figure and a device with a wrong clock would show the wrong one.
    */
   waiting_seconds: z.number().int(),
+  /** The oldest age any line needs, or null. When set, handover asks whether the ID was checked. */
+  minimum_age: z.number().int().nullable(),
+  /** For a delivery: the ZIP code it is going to and what the courier last said. Null for pickup. */
+  delivery_postal_code: z.string().nullable(),
+  courier_status: z.string().nullable(),
+  /** Paid online already, so nothing is collected when it leaves the shop. */
+  paid_online: z.boolean(),
 });
 
 export const orderLineSchema = z.object({
@@ -95,6 +103,13 @@ export const orderSchema = z.object({
   resolution_note: z.string().nullable(),
   /** Null until handoff. That nullness is the honest answer to "has this moved stock yet". */
   sale_id: uuid.nullable(),
+  /** "storefront" when a customer placed it on the website, "staff" when it was keyed in. */
+  placed_via: z.enum(['staff', 'storefront']),
+  /** When the customer said they were old enough. A statement, never a verification. */
+  age_attested_at: timestamp.nullable(),
+  /** The oldest age any remaining line needs, or null. The ID check at handover is against this. */
+  minimum_age: z.number().int().nullable(),
+  id_required: z.boolean(),
   placed_at: timestamp,
   accepted_at: timestamp.nullable(),
   ready_at: timestamp.nullable(),
@@ -102,6 +117,10 @@ export const orderSchema = z.object({
   cancelled_at: timestamp.nullable(),
   lines: z.array(orderLineSchema),
   events: z.array(orderEventSchema),
+  /** Where a delivery is going and what the courier has said. Null for pickup. */
+  delivery: orderDeliverySchema.nullable(),
+  /** The online payment, when the order was paid for on the website. */
+  payment: orderPaymentSchema.nullable(),
 });
 
 export type OrderQueueEntry = z.infer<typeof orderQueueEntrySchema>;

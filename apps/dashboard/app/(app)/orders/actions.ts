@@ -51,8 +51,8 @@ export async function readyOrderAction(id: string) {
  * Handover. The only one of these that moves stock, and the one that writes
  * the sale — which is why it asks how the customer paid rather than assuming.
  */
-export async function completeOrderAction(id: string, tender: "cash" | "card" | "other") {
-  return move(id, "complete", { tender });
+export async function completeOrderAction(id: string, tender: "cash" | "card" | "other", idChecked: boolean) {
+  return move(id, "complete", { tender, id_checked: idChecked });
 }
 
 export async function rejectOrderAction(id: string, reason: string) {

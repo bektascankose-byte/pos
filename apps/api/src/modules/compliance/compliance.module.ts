@@ -1,15 +1,18 @@
 import { Module } from '@nestjs/common';
 import { ComplianceService } from './compliance.service.js';
+import { ComplianceRulesService } from './compliance-rules.service.js';
+import { ComplianceController } from './compliance.controller.js';
 
 /**
- * Exported, not controller-backed, for now.
+ * The compliance engine, and the screens that manage its rules.
  *
- * Nothing should call the compliance engine over HTTP: it is consulted by the
- * things that place orders, not by a client asking whether it may. The rule
- * management screens land with the back office in a later phase.
+ * The engine itself is exported rather than routed: it is consulted by the
+ * things that place orders, inside their own transactions. The controller only
+ * lists, adds and ends rules.
  */
 @Module({
-  providers: [ComplianceService],
+  controllers: [ComplianceController],
+  providers: [ComplianceService, ComplianceRulesService],
   exports: [ComplianceService],
 })
 export class ComplianceModule {}

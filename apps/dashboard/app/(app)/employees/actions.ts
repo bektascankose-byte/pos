@@ -24,6 +24,15 @@ export async function updateEmployeeAction(id: string, formData: FormData): Prom
   }
 }
 
+export async function removeEmployeeAction(id: string): Promise<ActionResult> {
+  try {
+    await apiFetch(`/api/v1/employees/${id}`, { method: "DELETE" });
+    return { ok: true, data: undefined };
+  } catch (e) {
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not remove the employee." };
+  }
+}
+
 export async function setPinAction(id: string, formData: FormData): Promise<ActionResult> {
   const pin = String(formData.get("pin") ?? "").trim();
   try {

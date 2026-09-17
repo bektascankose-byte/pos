@@ -142,10 +142,22 @@ export class ComplianceService {
               subject_product_id::text, subject_variant_id::text, subject_match,
               channel, effect, effect_age, overridable, deny_message,
               effective_from, effective_to, authority_note
-       FROM compliance_rules
-       WHERE (channel = $1 OR channel IS NULL)
-         AND effective_from <= $2
-         AND (effective_to IS NULL OR effective_to > $2)`,
+       FROM compliance_rules r
+       WHERE (r.channel = $1 OR r.channel IS NULL)
+         AND r.effective_from <= $2
+         AND (r.effective_to IS NULL OR r.effective_to > $2)
+         -- A platform rule this shop lifted after counsel review is not in
+         -- force here. Dropped before the evaluator sees it rather than
+         -- outranked inside it, so a deny still ends the matter and the
+         -- Kotlin engine needs no matching change. Row level security scopes
+         -- the lift table to this organization, so this cannot read another
+         -- shop's decision.
+         AND NOT EXISTS (
+           SELECT 1 FROM compliance_rule_lifts l
+           WHERE l.rule_id = r.id
+             AND l.effective_from <= $2
+             AND (l.effective_to IS NULL OR l.effective_to > $2)
+         )`,
       [channel, asOf],
     );
 

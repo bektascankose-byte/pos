@@ -36,26 +36,50 @@ export class SchedulingService {
 
   async create(orgId: string, actorUserId: string, input: CreateShift) {
     return this.db.withOrg(orgId, async (tx) => {
-      await this.assertNoOverlap(tx, input.user_id, input.starts_at, input.ends_at);
-
-      const { rows } = await tx.query<{ id: string }>(
-        `INSERT INTO shifts (org_id, store_id, user_id, starts_at, ends_at, note, created_by)
-         VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, $4, $5, $6)
-         RETURNING id`,
-        [input.store_id, input.user_id, input.starts_at, input.ends_at, input.note ?? null, actorUserId],
-      );
-      const id = rows[0]!.id;
-
-      await this.audit.record(tx, {
-        action: 'schedule.create',
-        entityType: 'shift',
-        entityId: id,
-        actorUserId,
-        newValue: { user_id: input.user_id, starts_at: input.starts_at, ends_at: input.ends_at },
-      });
-
-      return this.getOne(tx, id);
+      await this.lockEmployeeSchedule(tx, input.user_id);
+      return this.insertShift(tx, actorUserId, input);
     });
+  }
+
+  /** The whole repeating setup succeeds or fails together when any slot overlaps. */
+  async createBatch(orgId: string, actorUserId: string, inputs: CreateShift[]) {
+    return this.db.withOrg(orgId, async (tx) => {
+      for (const userId of [...new Set(inputs.map((shift) => shift.user_id))].sort()) {
+        await this.lockEmployeeSchedule(tx, userId);
+      }
+      const created = [];
+      for (const input of inputs) created.push(await this.insertShift(tx, actorUserId, input));
+      return created;
+    });
+  }
+
+  private async lockEmployeeSchedule(tx: PoolClient, userId: string) {
+    await tx.query('SELECT pg_advisory_xact_lock(hashtext($1)::bigint)', [userId]);
+  }
+
+  private async insertShift(tx: PoolClient, actorUserId: string, input: CreateShift) {
+    const { rows: employees } = await tx.query<{ status: string }>('SELECT status FROM users WHERE id = $1', [input.user_id]);
+    if (!employees[0] || !['active', 'invited'].includes(employees[0].status)) {
+      throw new ApiException('conflict', 'Only active employees can be scheduled', { retryable: false });
+    }
+    await this.assertNoOverlap(tx, input.user_id, input.starts_at, input.ends_at);
+    const { rows } = await tx.query<{ id: string }>(
+      `INSERT INTO shifts (org_id, store_id, user_id, starts_at, ends_at, note, created_by)
+       VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, $4, $5, $6)
+       RETURNING id`,
+      [input.store_id, input.user_id, input.starts_at, input.ends_at, input.note ?? null, actorUserId],
+    );
+    const id = rows[0]!.id;
+
+    await this.audit.record(tx, {
+      action: 'schedule.create',
+      entityType: 'shift',
+      entityId: id,
+      actorUserId,
+      newValue: { user_id: input.user_id, starts_at: input.starts_at, ends_at: input.ends_at },
+    });
+
+    return this.getOne(tx, id);
   }
 
   /** Time and note only -- moving a shift to a different employee or store is a cancel-and-recreate, not an edit. */

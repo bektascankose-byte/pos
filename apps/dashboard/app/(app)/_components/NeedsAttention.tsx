@@ -69,8 +69,8 @@ export function NeedsAttentionSection({ attention }: { attention: NeedsAttention
 
   if (nothingToDo) {
     return (
-      <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
-        <h2 className="text-sm font-medium">Nothing needs you</h2>
+      <section className="insights-panel insights-panel-pad">
+        <h2 className="insights-panel-title">All caught up</h2>
         <p className="mt-1 text-sm text-[var(--color-text-muted)]">
           Everything is priced, in stock, moving, and every invoice is committed.
         </p>
@@ -79,8 +79,7 @@ export function NeedsAttentionSection({ attention }: { attention: NeedsAttention
   }
 
   return (
-    <section className="flex flex-col gap-3">
-      <h2 className="text-sm font-medium text-[var(--color-text-muted)]">Needs you</h2>
+    <section>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {cards.map((card) => (
           <AttentionCard
@@ -95,7 +94,7 @@ export function NeedsAttentionSection({ attention }: { attention: NeedsAttention
         ))}
 
         {invoices.count > 0 ? (
-          <article className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+          <article className="insights-panel insights-panel-pad">
             <header className="flex items-baseline justify-between">
               <h3 className="text-sm font-medium">Invoices not committed</h3>
               <span className="text-2xl font-semibold tabular-nums">{invoices.count}</span>
@@ -148,7 +147,7 @@ function AttentionCard({
         : "text-[var(--color-text-muted)]";
 
   return (
-    <article className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+    <article className="insights-panel insights-panel-pad">
       <header className="flex items-baseline justify-between">
         <h3 className="text-sm font-medium">{title}</h3>
         <span className={`text-2xl font-semibold tabular-nums ${countColor}`}>{group.count}</span>

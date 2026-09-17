@@ -24,17 +24,21 @@ type Result = { ok: true; data: Order } | { ok: false; error: string };
  * change in one place cannot leave a dead button behind in the other.
  *
  * Handover asks how the customer paid, because until online payment exists a
- * pickup order is paid at the counter and the sale has to record which way.
- * Rejecting and cancelling ask why, because the customer is shown that
+ * pickup order is paid at the counter and the sale has to record which way --
+ * and, for an order with age-restricted items, for confirmation that the ID was
+ * checked. Rejecting and cancelling ask why, because the customer is shown that
  * sentence.
  */
 export function OrderActions({
   id,
   status,
+  minimumAge,
   compact = false,
 }: {
   id: string;
   status: OrderStatus;
+  /** The oldest age any line needs. When set, handover asks for the ID check first. */
+  minimumAge: number | null;
   compact?: boolean;
 }) {
   const router = useRouter();
@@ -84,7 +88,13 @@ export function OrderActions({
         ) : null}
 
         {available.has("completed") ? (
-          <TenderPicker disabled={pending} onPick={(tender) => run(() => completeOrderAction(id, tender))} size={size} />
+          <TenderPicker
+            id={id}
+            disabled={pending}
+            minimumAge={minimumAge}
+            onPick={(tender, idChecked) => run(() => completeOrderAction(id, tender, idChecked))}
+            size={size}
+          />
         ) : null}
 
         {available.has("rejected") ? (
@@ -132,17 +142,27 @@ export function OrderActions({
  * Three buttons behind one, rather than three across the row: at the moment of
  * handover the cashier has already taken the money and needs one action, and a
  * row that reads "Cash  Card  Other" next to "Reject" invites the wrong tap.
+ *
+ * For an age-restricted order the tender buttons stay disabled until the ID
+ * check is ticked. The website only took the customer's word for their age;
+ * this is where it is actually checked, the same as for any counter sale.
  */
 function TenderPicker({
+  id,
   disabled,
+  minimumAge,
   onPick,
   size,
 }: {
+  id: string;
   disabled: boolean;
-  onPick: (tender: "cash" | "card" | "other") => void;
+  minimumAge: number | null;
+  onPick: (tender: "cash" | "card" | "other", idChecked: boolean) => void;
   size: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [idChecked, setIdChecked] = useState(false);
+  const needsId = minimumAge !== null;
 
   if (!open) {
     return (
@@ -158,17 +178,29 @@ function TenderPicker({
   }
 
   return (
-    <span className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] p-1">
+    <span className="inline-flex flex-wrap items-center justify-end gap-1 rounded-md border border-[var(--color-border)] p-1">
+      {needsId ? (
+        <label className="inline-flex items-center gap-1.5 px-1 text-xs" htmlFor={`id-checked-${id}`}>
+          <input
+            id={`id-checked-${id}`}
+            type="checkbox"
+            checked={idChecked}
+            onChange={(event) => setIdChecked(event.target.checked)}
+          />
+          Checked photo ID: {minimumAge}+
+        </label>
+      ) : null}
       <span className="pl-1 text-xs text-[var(--color-text-muted)]">Paid by</span>
       {(["cash", "card", "other"] as const).map((tender) => (
         <button
           key={tender}
           type="button"
-          disabled={disabled}
+          disabled={disabled || (needsId && !idChecked)}
           className={`rounded ${size} capitalize hover:bg-[var(--color-surface-muted)] disabled:opacity-40`}
           onClick={() => {
             setOpen(false);
-            onPick(tender);
+            onPick(tender, idChecked);
+            setIdChecked(false);
           }}
         >
           {tender}
@@ -177,7 +209,10 @@ function TenderPicker({
       <button
         type="button"
         className="rounded px-1.5 py-1 text-xs text-[var(--color-text-muted)]"
-        onClick={() => setOpen(false)}
+        onClick={() => {
+          setOpen(false);
+          setIdChecked(false);
+        }}
         aria-label="Cancel handover"
       >
         ✕

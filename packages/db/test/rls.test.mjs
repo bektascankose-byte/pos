@@ -115,6 +115,87 @@ if (engine !== 'postgres') {
     await app.query('ROLLBACK');
   });
 
+  test('the outbox pump can claim events that row level security hides from it', async () => {
+    // The pump serves every organization and so runs with no org set. Before
+    // 0029 its claim was a plain query, which under RLS matched nothing: every
+    // event emitted by the API sat undelivered, and nothing said so.
+    const [event] = await asMigrator.query(
+      `insert into outbox_events (org_id, event_type, aggregate_type, aggregate_id, payload)
+       values ($1, 'test.event', 'test', uuid_generate_v7(), '{}') returning id`,
+      [orgA.id],
+    );
+
+    const hidden = await app.query('select id from outbox_events');
+    assert.equal(hidden.rows.length, 0, 'with no org set, the app role sees no events at all');
+
+    const claimed = await app.query('select id, org_id, event_type, attempts from outbox_claim(10, 60)');
+    assert.equal(claimed.rows.length, 1, 'the claim function reaches the event anyway');
+    assert.equal(claimed.rows[0].id, event.id);
+    assert.equal(claimed.rows[0].org_id, orgA.id);
+    assert.equal(claimed.rows[0].attempts, 1);
+
+    const again = await app.query('select id from outbox_claim(10, 60)');
+    assert.equal(again.rows.length, 0, 'a claimed event is out of sight until its visibility timeout passes');
+
+    await app.query('select outbox_mark_delivered($1)', [event.id]);
+    const [row] = await asMigrator.query('select published_at is not null as published from outbox_events where id = $1', [
+      event.id,
+    ]);
+    assert.equal(row.published, true);
+  });
+
+  test("a courier's webhook can find its delivery before anyone knows whose it is, and learns nothing else", async () => {
+    const [order] = await asMigrator.query(
+      `insert into orders (org_id, store_id, order_number, fulfilment, guest_name, guest_email)
+       select $1, s.id, 'B1-0917-001', 'delivery', 'Sam B', 'sam@example.test' from stores s where s.org_id = $1
+       returning id`,
+      [orgB.id],
+    );
+    await asMigrator.query(
+      `insert into order_deliveries (order_id, org_id, provider, recipient_name, recipient_phone, address_line1,
+         city, region, postal_code, external_delivery_id, requested_at)
+       values ($1,$2,'simulated','Sam B','+12545550199','1 A St','Killeen','TX','76542','snappos-rls-1', now())`,
+      [order.id, orgB.id],
+    );
+
+    const hidden = await app.query('select * from order_deliveries');
+    assert.equal(hidden.rows.length, 0, 'with no org set, no delivery address is readable');
+
+    const found = await app.query(`select * from delivery_lookup_order('snappos-rls-1')`);
+    assert.equal(found.rows.length, 1, 'the lookup function reaches the delivery anyway');
+    assert.deepEqual(Object.keys(found.rows[0]).sort(), ['order_id', 'org_id'], 'and returns whose it is, nothing more');
+    assert.equal(found.rows[0].org_id, orgB.id);
+
+    await app.query('BEGIN');
+    await app.query(`SET LOCAL app.org_id = '${orgA.id}'`);
+    const acrossTenants = await app.query('select * from order_deliveries');
+    await app.query('COMMIT');
+    assert.equal(acrossTenants.rows.length, 0, "another organization cannot read the address");
+  });
+
+  test('loyalty balances, read through their view, stay inside their organization', async () => {
+    const [member] = await asMigrator.query(
+      `insert into customers (org_id, first_name, phone) values ($1,'Member B','+12545550188') returning id`,
+      [orgB.id],
+    );
+    await asMigrator.query(
+      `insert into loyalty_ledger (org_id, customer_id, kind, points, note) values ($1,$2,'adjust',250,'Opening balance')`,
+      [orgB.id, member.id],
+    );
+
+    await app.query('BEGIN');
+    await app.query(`SET LOCAL app.org_id = '${orgA.id}'`);
+    const fromA = await app.query('select * from loyalty_balances');
+    await app.query('COMMIT');
+    assert.equal(fromA.rows.length, 0, 'the view must not run with its owner rights and leak another org');
+
+    await app.query('BEGIN');
+    await app.query(`SET LOCAL app.org_id = '${orgB.id}'`);
+    const fromB = await app.query('select points from loyalty_balances where customer_id = $1', [member.id]);
+    await app.query('COMMIT');
+    assert.equal(fromB.rows[0]?.points, 250);
+  });
+
   test('snappos_app cannot escalate to the owner role', async () => {
     await assert.rejects(() => app.query('SET ROLE snappos_migrator'), /permission denied|not a member/i);
   });

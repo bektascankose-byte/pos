@@ -2,6 +2,130 @@
 
 Notable changes. Newest first.
 
+## The website: a shop a customer can order from
+
+`apps/storefront` is a Next.js server rendering a shop's own website: a home page, brand
+and category pages, search, product pages, a cart, checkout, customer accounts, and a link
+that follows an order to the door. Pickup worked before this; what is new is everything a
+member of the public touches, and delivery.
+
+**One customer, not two.** Somebody who signs up online is a row in `customers`, the same
+table the register writes. A shopper who buys at the counter on Tuesday and online on
+Thursday is one person with one history, one rewards balance and one marketing consent. A
+separate "web customer" table would have been easier for a week and wrong forever, because
+the cashier would have had no way to know they were the same person.
+
+**The storefront is a server, and it holds the key.** A shopper's browser never sees it.
+`storefront_clients` stores a SHA-256 of the key and its first few characters, so a shop
+can tell two keys apart on screen without the rest ever being shown again; the key tells
+the API which shop the website sells for, and marks the request as coming from a server, so
+rate limiting counts the shopper's own address rather than putting every shopper in the
+country in one bucket. Session tokens, cart tokens and the one-time links in emails are
+hashed the same way. A copy of the database hands nobody a working session.
+
+**A cart holds variant ids and quantities and nothing else.** Never a price. The price is
+whatever the catalog says at the moment of checkout, and a stored one is a stale one. What
+makes a double-clicked Place Order button produce one order is `carts.converted_order_id`:
+the second request finds the cart already converted and is handed back the order the first
+one made.
+
+**Nobody signs in before confirming their address.** An in-store customer's email is
+already on file, so without that check anyone could register a stranger's address and read
+their purchase history. Sign-up answers identically whether or not an address already has
+an account, and so does a password reset — the difference would tell someone who shops
+here. A marketing opt-in ticked at sign-up waits on the token and is recorded only when the
+link is followed.
+
+### Delivery, by courier
+
+**Payment comes first, and that is the whole shape of it.** A pickup order is paid at the
+counter by somebody standing in front of the goods. A delivery order is not: it leaves with
+a courier who takes no money. So it is authorized at checkout, captured when the courier
+hands it over, and released if it never arrives. `order_payments` keeps that apart from
+`payments`, which belong to finished sales and cannot exist before one does.
+
+The courier is DoorDash Drive behind a `Courier` interface, with its own JWT signing and a
+simulated driver for a server with no credentials. A delivery of anything age-restricted is
+booked asking for an ID check and a signature, and comes back to the shop rather than being
+left at the door. Stock does not move while an order is on the road; the sale is written
+when the driver hands it over, with the delivery fee as its own line — a fee is not a thing
+on a shelf, so `products.track_inventory` is what stops selling one from counting stock that
+never existed.
+
+### A shop can lift a platform rule, on record
+
+This one was load-bearing and nearly invisible. The platform seeds a conservative baseline
+in 0002, and two of those rules are holds rather than prohibitions — "Delivery of ENDS
+requires review" and "No shipping of ENDS" — denying until somebody has done the legal work,
+and saying so in their own authority notes.
+
+But **a shop cannot end a platform rule**, correctly: it is not the shop's rule and it
+stands in front of every other shop. And an allow the shop writes does not help either,
+because a deny ends an evaluation wherever it appears in the matched set — which is what
+makes the engine fail closed and is not up for negotiation. Between them, those two correct
+rules left the delivery half of this product permanently unreachable for the goods it
+exists to sell. A shop could switch delivery on, write an allow, list a vape for it, and
+every cart would still be refused, with the back office reporting itself ready.
+
+`compliance_rule_lifts` is how a rule stops applying: not by editing it, and not by changing
+how rules are judged, but by no longer being in force for one organization. **The evaluator
+is untouched.** A deny still ends the matter, the conformance fixtures still hold, and the
+Kotlin engine needs no matching change — which matters, because a rule that behaved
+differently on the register than on the website is the one failure this design refuses to
+allow. What changed is which rules the loader hands the evaluator, the same kind of decision
+an effective date already makes.
+
+What it costs to lift one is the attestation: the date counsel reviewed it, the permit the
+shop trades under, and a note. All required by the table, so a lift cannot exist without the
+answer to "on whose authority". Lifting is the owner's and nobody else's, it is append only
+like every other compliance record — withdrawn by dating it, never deleted — and only a
+platform rule can be lifted, because a shop ends its own.
+
+**The delivery readiness check now asks the engine instead of asking whether a rule
+exists.** It was reporting no problems while every cart would be refused. It now evaluates
+what is actually listed for delivery and, when nothing may be sold that way, names the rule
+standing in the way so the shop knows which one to take to its attorney.
+
+### Points, and pictures
+
+**Loyalty is a ledger, not a balance column.** One row per thing that changed a customer's
+points, from the counter or the website alike, because both kinds of sale arrive through the
+same intake. A balance that is updated in place cannot explain itself, and "why do I only
+have 40 points" is a question a shop has to answer at the counter; the balance is a view
+over the ledger, so the two cannot disagree. Federal rules forbid giving anything in
+exchange for buying cigarettes or smokeless tobacco, and points you can spend are something,
+so `excluded_regulated_classes` names what never earns and starts with those two. A phone on
+an online account has to be proven with a texted code before it collects anything, or
+anyone could type a stranger's number.
+
+**Banners** put the manufacturers' media kits on the home page and brand pages without a
+code change. `advertises_nicotine` defaults to true, because the safe mistake is showing the
+federal warning on something that did not need it; `hide_when_unavailable` keeps a banner off
+the page while nothing it points at can be bought, since advertising the one thing a shopper
+cannot then order is worse than advertising nothing.
+
+### Fixed
+
+- **The outbox pump could never see the outbox.** It serves every organization, so it runs
+  with no `app.org_id` set — and `outbox_events`, like every tenant table, is under row level
+  security that fails closed when no organization is set. Connected as `snappos_app`, the
+  role the API actually uses, its claim query matched nothing, forever. It looked healthy,
+  raised nothing and delivered nothing. The tests that proved it worked in 0024 connected as
+  the migrator, which bypasses row level security on every table. Fixed the way this schema
+  already handles the other reads that are cross-tenant by necessity: three definer functions
+  that claim a batch, mark one delivered and mark one failed, and can do nothing else.
+- **A category rule matched as raw text.** A rule written `vapes.` missed a product filed
+  directly under Vapes — a deny that silently did not apply — and `tobacco` would have caught
+  `tobacco-free`. Category paths are matched a segment at a time now, with three fixtures
+  covering it in both engines.
+
+### Known limits
+
+- Payment, the courier and the age check are all simulated. No provider is integrated: the
+  card is never asked for, nothing is charged, and the age check verifies nobody. Every
+  screen that shows one says so, and the delivery settings page lists each as a problem.
+- Delivery areas are ZIP code lists, not drive-time polygons.
+
 ## Product photos, in the back office and on the register
 
 `product_images` has existed since `0002_catalog.sql` and nothing had ever written to it. It does now:

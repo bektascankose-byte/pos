@@ -20,6 +20,7 @@ import {
   VariantPicker,
 } from "./ItemDetailPanels";
 import { ImagePanel } from "./ImagePanel";
+import { SellOnlinePanel } from "./SellOnlinePanel";
 import type { Product, Variant, Brand, Category, TaxCategory } from "@snappos/contracts";
 
 interface Props {
@@ -119,6 +120,11 @@ export function ProductDetailClient({ productId, storeId, initialProduct, brands
                 onVariantAdded={(created) => setVariants((prev) => [...prev, created])}
               />
             ),
+          },
+          {
+            id: "online",
+            label: "Sell Online",
+            content: <SellOnlinePanel productId={productId} storeId={storeId} />,
           },
           variantTab("pricing", "Cost & Margin", (variant) => (
             <PricingPanel

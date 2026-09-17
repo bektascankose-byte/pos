@@ -80,6 +80,38 @@
       "subject": { "variantId": "v8" },
       "context": { "channel": "pickup", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
       "expect": { "allowed": false, "overridable": true, "reasonContains": "ask a manager" }
+    },
+    {
+      "name": "a rule written with a trailing dot still covers a product filed directly in that category",
+      "about": "Matched as a text prefix, `vapes.` missed an item whose category path is exactly `vapes` -- a deny that silently did not apply.",
+      "rules": [
+        { "id": "r-deny", "name": "no vape delivery", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "subjectCategoryPathPrefix": "vapes.", "effect": "deny", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z", "denyMessage": "Vapes cannot be delivered." },
+        { "id": "r-allow", "name": "everything else delivers", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "effect": "allow", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" }
+      ],
+      "subject": { "variantId": "v6", "categoryPath": "vapes" },
+      "context": { "channel": "delivery", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": false }
+    },
+    {
+      "name": "a rule without the trailing dot covers the subtree the same way",
+      "rules": [
+        { "id": "r-deny", "name": "no vape delivery", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "subjectCategoryPathPrefix": "vapes", "effect": "deny", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z", "denyMessage": "Vapes cannot be delivered." },
+        { "id": "r-allow", "name": "everything else delivers", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "effect": "allow", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" }
+      ],
+      "subject": { "variantId": "v7", "categoryPath": "vapes.disposable.geek-bar" },
+      "context": { "channel": "delivery", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": false }
+    },
+    {
+      "name": "a category whose name merely starts with the same letters is not covered",
+      "about": "`vapes` must not reach `vapes-accessories`: categories are matched a whole segment at a time.",
+      "rules": [
+        { "id": "r-deny", "name": "no vape delivery", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "subjectCategoryPathPrefix": "vapes", "effect": "deny", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z", "denyMessage": "Vapes cannot be delivered." },
+        { "id": "r-allow", "name": "everything else delivers", "orgId": null, "scopeRegion": "TX", "channel": "delivery", "effect": "allow", "priority": 0, "effectiveFrom": "2020-01-01T00:00:00Z" }
+      ],
+      "subject": { "variantId": "v8", "categoryPath": "vapes-accessories.cases" },
+      "context": { "channel": "delivery", "region": "TX", "asOf": "2026-09-15T12:00:00Z" },
+      "expect": { "allowed": true }
     }
   ]
 }

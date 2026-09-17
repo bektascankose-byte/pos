@@ -76,7 +76,17 @@ export default async function OrdersPage() {
                         {order.order_number}
                       </Link>
                     </td>
-                    <td className="px-4 py-2">{order.customer_name ?? "Guest"}</td>
+                    <td className="px-4 py-2">
+                      {order.customer_name ?? "Guest"}
+                      {order.minimum_age !== null ? (
+                        <span
+                          className="ml-2 rounded border border-[var(--color-border)] px-1.5 py-0.5 text-xs"
+                          title={`Check photo ID at pickup: ${order.minimum_age} or older`}
+                        >
+                          ID {order.minimum_age}+
+                        </span>
+                      ) : null}
+                    </td>
                     <td className="px-4 py-2 capitalize">{order.fulfilment}</td>
                     <td className="px-4 py-2 text-right tabular-nums">{order.line_count}</td>
                     <td className="px-4 py-2 text-right tabular-nums">{formatMinor(order.total_minor)}</td>
@@ -88,7 +98,7 @@ export default async function OrdersPage() {
                       {describeWait(order.waiting_seconds)}
                     </td>
                     <td className="px-4 py-2">
-                      <OrderActions id={order.id} status={order.status} compact />
+                      <OrderActions id={order.id} status={order.status} minimumAge={order.minimum_age} compact />
                     </td>
                   </tr>
                 ))}

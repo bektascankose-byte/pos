@@ -12,6 +12,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "-w", "@snappos/dashboard"],
       "port": 3001
+    },
+    {
+      "name": "storefront",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "-w", "@snappos/storefront"],
+      "port": 3002
     }
   ]
 }

@@ -144,6 +144,7 @@ export class EmployeesService {
   }
 
   async update(orgId: string, actorUserId: string, id: string, input: UpdateEmployee) {
+    if (input.status === 'terminated') return this.remove(orgId, actorUserId, id);
     return this.db.withOrg(orgId, async (tx) => {
       const { rows } = await tx.query(
         `UPDATE users SET
@@ -179,6 +180,62 @@ export class EmployeesService {
       });
 
       return employee;
+    });
+  }
+
+  /**
+   * Remove an employee from the active roster without deleting sales, time
+   * entries, or the audit trail that refer to them. A terminated account cannot
+   * sign in or refresh; revoke existing refresh sessions immediately.
+   */
+  async remove(orgId: string, actorUserId: string, id: string) {
+    if (id === actorUserId) {
+      throw new ApiException('conflict', 'You cannot remove your own account.');
+    }
+    return this.db.withOrg(orgId, async (tx) => {
+      // Serialize removals within one organization so two owners cannot each
+      // remove the other while both still appear active to their transaction.
+      await tx.query('SELECT pg_advisory_xact_lock(hashtext($1)::bigint)', [orgId]);
+      const { rows: targetRows } = await tx.query<{ status: string }>(
+        'SELECT status FROM users WHERE id = $1 FOR UPDATE',
+        [id],
+      );
+      const target = targetRows[0];
+      if (!target) throw ApiException.notFound('employee');
+      if (target.status === 'terminated') {
+        const { rows } = await tx.query(`SELECT ${EMPLOYEE_COLUMNS} FROM users WHERE id = $1`, [id]);
+        return rows[0];
+      }
+
+      const { rows: ownerRows } = await tx.query<{ id: string }>(
+        `SELECT u.id FROM users u
+         WHERE u.status = 'active'
+           AND EXISTS (
+             SELECT 1 FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+             WHERE ur.user_id = u.id AND r.key = 'owner'
+           )`,
+      );
+      if (ownerRows.some((row) => row.id === id) && ownerRows.length <= 1) {
+        throw new ApiException('conflict', 'The last active owner cannot be removed.');
+      }
+
+      const { rows: removedRows } = await tx.query(
+        `UPDATE users SET status = 'terminated' WHERE id = $1 RETURNING ${EMPLOYEE_COLUMNS}`,
+        [id],
+      );
+      await tx.query(
+        `UPDATE auth_sessions SET revoked_at = now(), revoked_reason = 'employee_removed'
+         WHERE user_id = $1 AND revoked_at IS NULL`,
+        [id],
+      );
+      await this.audit.record(tx, {
+        action: 'employee.remove',
+        entityType: 'user',
+        entityId: id,
+        actorUserId,
+        newValue: { status: 'terminated' },
+      });
+      return removedRows[0];
     });
   }
 

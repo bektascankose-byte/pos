@@ -18,21 +18,21 @@ const db = scratch.db;
 const n = async (sql) => Number((await db.query(sql))[0].n);
 
 test(`all ${migrationFiles().length} migrations applied on ${scratch.engine}`, () => {
-  assert.equal(migrationFiles().length, 27);
+  assert.equal(migrationFiles().length, 33);
 });
 
 test('migrations are numbered contiguously from 0001', () => {
   const prefixes = migrationFiles().map((f) => Number(f.name.slice(0, 4)));
-  assert.deepEqual(prefixes, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]);
+  assert.deepEqual(prefixes, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33]);
 });
 
-test('86 base tables exist', async () => {
+test('98 base tables exist', async () => {
   assert.equal(
     await n(`select count(*) n from pg_class c
              join pg_namespace ns on ns.oid = c.relnamespace
              where ns.nspname='public' and c.relkind in ('r','p')
                and not c.relispartition`),
-    86,
+    98,
   );
 });
 
@@ -45,26 +45,43 @@ test('inventory_ledger and audit_log are range partitioned', async () => {
   assert.deepEqual(rows.map((r) => r.relname), ['audit_log', 'inventory_ledger']);
 });
 
-test('136 foreign keys, 31 enums, 102 table level checks', async () => {
+test('155 foreign keys, 35 enums, 142 table level checks', async () => {
   // 0027 accounts for the last move: seven foreign keys (four off `orders`,
   // two off `order_lines`, one off `order_events`), the order_fulfilment and
   // order_status enums, and six checks -- four on `orders` including the one
   // that makes "completed" and "has a sale" the same fact, two on
-  // `order_lines`.
+  // `order_lines`. 0028 then adds ten foreign keys (shop keys, customer
+  // credentials, sessions and one-time tokens, carts and their lines), the
+  // customer_token_purpose enum, and seven checks -- expiries that must follow
+  // their start, a cart line for something, and `orders.placed_via`.
+  // 0030 adds the loyalty ledger: three foreign keys (customer, sale, refund),
+  // the loyalty_entry_kind enum, six checks on what each kind of entry must
+  // carry and one pairing a verified phone with when it was verified. 0031
+  // adds delivery: three foreign keys (settings to store, delivery and payment
+  // to order), the order_payment_status enum, and thirteen checks -- ZIP codes,
+  // fees and a cutoff on the settings, a ZIP, an E.164 phone and a courier id on
+  // the delivery, amounts and timestamps on the payment, and a cart's ZIP. 0032
+  // adds banners: one foreign key, the banner_placement enum and eight checks.
+  // 0033 adds the lifts a shop records against a platform rule: two foreign
+  // keys (organization and rule, both RESTRICT so neither can be deleted out
+  // from under a record of what was traded under it), no enum, and five checks
+  // -- the withdrawal window, a permit reference and an authority note that
+  // are actually filled in, a counsel review date that is not in the future,
+  // and a withdrawal that names who withdrew it.
   assert.equal(await n(`select count(*) n from pg_constraint c
                         join pg_namespace ns on ns.oid=c.connamespace
-                        where ns.nspname='public' and c.contype='f'`), 136);
+                        where ns.nspname='public' and c.contype='f'`), 155);
   assert.equal(await n(`select count(distinct t.typname) n from pg_type t
                         join pg_namespace ns on ns.oid=t.typnamespace
-                        where ns.nspname='public' and t.typtype='e'`), 31);
+                        where ns.nspname='public' and t.typtype='e'`), 35);
   assert.equal(await n(`select count(*) n from pg_constraint c
                         join pg_class t on t.oid=c.conrelid
                         join pg_namespace ns on ns.oid=c.connamespace
                         where ns.nspname='public' and c.contype='c'
-                          and not t.relispartition`), 102);
+                          and not t.relispartition`), 142);
 });
 
-test('12 functions and 42 user triggers', async () => {
+test('19 functions and 55 user triggers', async () => {
   // Extensions install their own functions into public (pg_trgm adds ~20), so
   // count only what our migrations own.
   assert.equal(await n(`select count(*) n from pg_proc p
@@ -72,7 +89,7 @@ test('12 functions and 42 user triggers', async () => {
                         where ns.nspname='public'
                           and not exists (
                             select 1 from pg_depend d
-                            where d.objid = p.oid and d.deptype = 'e')`), 12);
+                            where d.objid = p.oid and d.deptype = 'e')`), 19);
   // 18, plus the twelve change_log triggers from migration 0008 (one per
   // replicated table) plus the one from 0010 on role_permissions (the join
   // table that grants a permission to a role, whose own change_log trigger
@@ -83,8 +100,20 @@ test('12 functions and 42 user triggers', async () => {
   // (receiving_sessions), one from 0020 (reference_products) and one from 0027
   // (orders) -- all reusing touch_updated_at rather than a new function, which
   // is why the function count moves only by the one 0018 actually adds,
-  // marketing_unsubscribe.
-  assert.equal(await n(`select count(*) n from pg_trigger where not tgisinternal`), 42);
+  // marketing_unsubscribe -- and by the one 0028 adds, shop_lookup_client, the
+  // definer function a storefront key is resolved through, and by the three
+  // 0029 adds so the outbox pump can claim and settle events row level security
+  // would otherwise hide from it. 0028 also adds three
+  // touch triggers: customer_credentials, carts and cart_lines. 0030 adds one
+  // function (guard_loyalty_ledger) and two triggers keeping the ledger's
+  // history uneditable and undeletable; 0031 adds delivery_lookup_order, the
+  // definer function a courier's webhook is matched through, and four triggers
+  // (three touch, and one refusing to delete a payment); 0032 adds one touch
+  // trigger for banners. 0033 adds guard_compliance_rule_lift, which allows a
+  // lift only against a platform rule and only lets a withdrawal be written
+  // afterwards, and three triggers: that guard, a touch, and a refusal to
+  // delete.
+  assert.equal(await n(`select count(*) n from pg_trigger where not tgisinternal`), 55);
 });
 
 test('every table carrying org_id has RLS enabled and exactly one policy', async () => {

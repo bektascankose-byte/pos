@@ -93,8 +93,11 @@ export class OutboxService {
    * Attempts is incremented here rather than on failure, so an event that
    * kills the process still counts its try and cannot spin forever.
    *
-   * Runs unscoped: the pump serves every organization, so it cannot set one
-   * org's id the way a request-scoped call does.
+   * Runs through `outbox_claim` (migration 0029), a definer function, rather
+   * than a query of its own. The pump serves every organization, so it has no
+   * org to set -- and with no org set, row level security shows the API's
+   * role no events at all. The plain query this used to be claimed nothing,
+   * silently, for as long as it ran.
    */
   async claim(limit: number): Promise<ClaimedEvent[]> {
     const { rows } = await this.db.unscoped((c) => c.query<{
@@ -107,18 +110,8 @@ export class OutboxService {
       correlation_id: string | null;
       attempts: number;
     }>(
-      `UPDATE outbox_events
-          SET attempts = attempts + 1,
-              available_at = now() + make_interval(secs => $2)
-       WHERE id IN (
-         SELECT id FROM outbox_events
-         WHERE published_at IS NULL AND dead_at IS NULL AND available_at <= now()
-         ORDER BY available_at, id
-         LIMIT $1
-         FOR UPDATE SKIP LOCKED
-       )
-       RETURNING id, org_id, event_type, aggregate_type, aggregate_id,
-                 payload, correlation_id, attempts`,
+      `SELECT id, org_id, event_type, aggregate_type, aggregate_id, payload, correlation_id, attempts
+       FROM outbox_claim($1, $2)`,
       [limit, VISIBILITY_SECONDS],
     ));
 
@@ -135,12 +128,7 @@ export class OutboxService {
   }
 
   async markDelivered(id: string): Promise<void> {
-    await this.db.unscoped((c) =>
-      c.query(
-        `UPDATE outbox_events SET published_at = now(), last_error = NULL WHERE id = $1`,
-        [id],
-      ),
-    );
+    await this.db.unscoped((c) => c.query(`SELECT outbox_mark_delivered($1)`, [id]));
   }
 
   /**
@@ -152,23 +140,14 @@ export class OutboxService {
    * replayable once whatever broke is fixed.
    */
   async markFailed(id: string, attempts: number, error: string, maxAttempts: number): Promise<void> {
-    if (attempts >= maxAttempts) {
-      await this.db.unscoped((c) =>
-        c.query(`UPDATE outbox_events SET dead_at = now(), last_error = $2 WHERE id = $1`, [
-          id,
-          truncate(error),
-        ]),
-      );
-      return;
-    }
-
+    const dead = attempts >= maxAttempts;
     await this.db.unscoped((c) =>
-      c.query(
-        `UPDATE outbox_events
-           SET available_at = now() + make_interval(secs => $2), last_error = $3
-         WHERE id = $1`,
-        [id, backoffSeconds(attempts), truncate(error)],
-      ),
+      c.query(`SELECT outbox_mark_failed($1, $2, $3, $4)`, [
+        id,
+        truncate(error),
+        dead ? 0 : backoffSeconds(attempts),
+        dead,
+      ]),
     );
   }
 

@@ -4,7 +4,7 @@ import { DatabaseService } from '../../platform/database/database.service.js';
 import { AuditService } from '../../platform/audit/audit.service.js';
 
 const SETTINGS_COLUMNS = `name, is_active, earn_points_per_dollar::text, redemption_points_per_dollar::text,
-       minimum_redemption_points, points_expire_after_days, updated_at`;
+       minimum_redemption_points, points_expire_after_days, excluded_regulated_classes, updated_at`;
 
 @Injectable()
 export class LoyaltyService {
@@ -31,11 +31,11 @@ export class LoyaltyService {
       const { rows } = await tx.query(
         `INSERT INTO loyalty_settings
            (org_id, name, is_active, earn_points_per_dollar, redemption_points_per_dollar,
-            minimum_redemption_points, points_expire_after_days, updated_by)
+            minimum_redemption_points, points_expire_after_days, excluded_regulated_classes, updated_by)
          VALUES (
            current_setting('app.org_id')::uuid,
            COALESCE($1, 'Loyalty Rewards'), COALESCE($2, false), COALESCE($3, 1::numeric), COALESCE($4, 100::numeric),
-           $5, $6, $7
+           $5, $6, COALESCE($8::text[], '{cigarette,smokeless}'), $7
          )
          ON CONFLICT (org_id) DO UPDATE SET
            name                         = COALESCE($1, loyalty_settings.name),
@@ -44,6 +44,7 @@ export class LoyaltyService {
            redemption_points_per_dollar = COALESCE($4, loyalty_settings.redemption_points_per_dollar),
            minimum_redemption_points    = COALESCE($5, loyalty_settings.minimum_redemption_points),
            points_expire_after_days     = COALESCE($6, loyalty_settings.points_expire_after_days),
+           excluded_regulated_classes   = COALESCE($8::text[], loyalty_settings.excluded_regulated_classes),
            updated_by                   = $7
          RETURNING ${SETTINGS_COLUMNS}`,
         [
@@ -54,6 +55,7 @@ export class LoyaltyService {
           input.minimum_redemption_points ?? null,
           input.points_expire_after_days ?? null,
           actorUserId,
+          input.excluded_regulated_classes ?? null,
         ],
       );
       const settings = rows[0];

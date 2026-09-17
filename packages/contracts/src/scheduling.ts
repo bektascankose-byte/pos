@@ -46,6 +46,10 @@ export const createShiftSchema = z
     path: ['ends_at'],
   });
 
+export const createShiftBatchSchema = z.object({
+  shifts: z.array(createShiftSchema).min(1).max(120),
+});
+
 export const updateShiftSchema = z.object({
   starts_at: timestamp.optional(),
   ends_at: timestamp.optional(),
@@ -56,4 +60,5 @@ export type ShiftStatus = z.infer<typeof shiftStatus>;
 export type Shift = z.infer<typeof shiftSchema>;
 export type ShiftQuery = z.infer<typeof shiftQuerySchema>;
 export type CreateShift = z.infer<typeof createShiftSchema>;
+export type CreateShiftBatch = z.infer<typeof createShiftBatchSchema>;
 export type UpdateShift = z.infer<typeof updateShiftSchema>;

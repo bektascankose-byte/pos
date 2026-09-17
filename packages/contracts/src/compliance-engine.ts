@@ -238,11 +238,13 @@ function appliesTo(
     }
   }
 
-  // Path prefix, so a rule on `vapes.` governs `vapes.disposable.geek-bar`
-  // without anybody maintaining a list of category ids.
+  // A category and everything beneath it, so a rule on `vapes` governs
+  // `vapes.disposable.geek-bar` without anybody maintaining a list of category
+  // ids. Matched a whole path segment at a time: a raw text prefix let a rule
+  // written as `vapes.` miss a product filed directly under Vapes -- a deny
+  // that silently did not apply -- and let `tobacco` catch `tobacco-free`.
   if (rule.subjectCategoryPathPrefix) {
-    const path = subject.categoryPath ?? '';
-    if (!normalize(path).startsWith(normalize(rule.subjectCategoryPathPrefix))) return false;
+    if (!withinCategory(subject.categoryPath ?? '', rule.subjectCategoryPathPrefix)) return false;
   }
 
   if (rule.subjectMatch && Object.keys(rule.subjectMatch).length > 0) {
@@ -284,6 +286,14 @@ function withinDates(rule: ComplianceRule, asOf: string): boolean {
 /** Case and surrounding space vary by whoever typed the address; 'TX' and 'tx ' are one region. */
 function normalize(value: string): string {
   return value.trim().toLowerCase();
+}
+
+/** Whether a category path is the named category or sits beneath it. Trailing dots on the rule are ignored. */
+function withinCategory(path: string, prefix: string): boolean {
+  const base = normalize(prefix).replace(/\.+$/, '');
+  const item = normalize(path);
+  if (!base) return true;
+  return item === base || item.startsWith(`${base}.`);
 }
 
 /** How narrowly a rule is scoped. Store beats city beats county beats region beats country. */

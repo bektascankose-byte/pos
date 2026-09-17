@@ -7,7 +7,7 @@ export interface AuditEntry {
   entityType?: string | undefined;
   entityId?: string | undefined;
   actorUserId?: string | undefined;
-  actorType?: 'user' | 'system' | 'device' | undefined;
+  actorType?: 'user' | 'system' | 'device' | 'customer' | undefined;
   storeId?: string | undefined;
   registerId?: string | undefined;
   deviceId?: string | undefined;

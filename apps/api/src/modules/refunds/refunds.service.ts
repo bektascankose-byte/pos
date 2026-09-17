@@ -5,6 +5,7 @@ import { DatabaseService } from '../../platform/database/database.service.js';
 import { InventoryRepository } from '../inventory/inventory.repository.js';
 import { AuditService } from '../../platform/audit/audit.service.js';
 import { ApiException } from '../../platform/errors/api-exception.js';
+import { LoyaltyLedger } from '../loyalty/loyalty-ledger.service.js';
 
 @Injectable()
 export class RefundsService {
@@ -14,6 +15,7 @@ export class RefundsService {
     private readonly db: DatabaseService,
     private readonly inventory: InventoryRepository,
     private readonly audit: AuditService,
+    private readonly loyalty: LoyaltyLedger,
   ) {}
 
   /**
@@ -66,6 +68,7 @@ export class RefundsService {
     await this.insertPayments(tx, refund);
     await this.restock(tx, refund, deviceId);
     await this.postCashMovements(tx, refund);
+    await this.loyalty.reverseForRefundTx(tx, refund.id);
 
     await this.audit.record(tx, {
       action: refund.original_sale_id ? 'refund.create' : 'refund.no_receipt',

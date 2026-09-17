@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { PoolClient } from 'pg';
+import type { VariantListing } from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
 import { AuditService } from '../../platform/audit/audit.service.js';
 
@@ -24,6 +25,10 @@ export interface ListingSettings {
   online_price_minor?: string | undefined;
   hold_for_pickup?: boolean | undefined;
   hold_for_delivery?: boolean | undefined;
+  /** Remove the per-order limit. Leaving `max_per_order` out keeps whatever is set. */
+  clear_max_per_order?: boolean | undefined;
+  /** Go back to the counter price. Leaving `online_price_minor` out keeps whatever is set. */
+  clear_online_price?: boolean | undefined;
 }
 
 /** A line the website wants to sell, checked as a set rather than one at a time. */
@@ -216,8 +221,10 @@ export class AvailabilityService {
          ON CONFLICT (variant_id) DO UPDATE SET
            availability       = COALESCE($2::online_availability, storefront_listings.availability),
            safety_stock       = COALESCE($3::numeric, storefront_listings.safety_stock),
-           max_per_order      = COALESCE($4::numeric, storefront_listings.max_per_order),
-           online_price_minor = COALESCE($5::money_minor, storefront_listings.online_price_minor),
+           max_per_order      = CASE WHEN $9::boolean THEN NULL
+                                     ELSE COALESCE($4::numeric, storefront_listings.max_per_order) END,
+           online_price_minor = CASE WHEN $10::boolean THEN NULL
+                                     ELSE COALESCE($5::money_minor, storefront_listings.online_price_minor) END,
            hold_for_pickup    = COALESCE($6::boolean, storefront_listings.hold_for_pickup),
            hold_for_delivery  = COALESCE($7::boolean, storefront_listings.hold_for_delivery),
            updated_by         = $8
@@ -232,6 +239,8 @@ export class AvailabilityService {
           settings.hold_for_pickup ?? null,
           settings.hold_for_delivery ?? null,
           actorUserId,
+          settings.clear_max_per_order === true,
+          settings.clear_online_price === true,
         ],
       );
 
@@ -247,6 +256,41 @@ export class AvailabilityService {
       });
 
       return rows[0];
+    });
+  }
+
+  /**
+   * Every variant of one product with its online settings, beside the counter
+   * price and the stock the website would see -- what the back office shows
+   * next to "sell online". A variant nobody has listed reads as hidden.
+   */
+  async productListings(orgId: string, storeId: string, productId: string): Promise<VariantListing[]> {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query<VariantListing>(
+        `SELECT v.id AS variant_id, v.variant_name, v.sku AS upc,
+                COALESCE(l.availability, 'hidden')::text AS availability,
+                COALESCE(l.safety_stock, 0)::text AS safety_stock,
+                l.max_per_order::text AS max_per_order,
+                l.online_price_minor::text AS online_price_minor,
+                pr.price_minor::text AS regular_price_minor,
+                COALESCE(il.on_hand, 0)::text AS on_hand,
+                COALESCE(a.sellable, 0)::text AS sellable
+         FROM product_variants v
+         LEFT JOIN storefront_listings l ON l.variant_id = v.id
+         LEFT JOIN inventory_levels il ON il.variant_id = v.id AND il.store_id = $2
+         LEFT JOIN storefront_availability a ON a.variant_id = v.id AND a.store_id = $2
+         LEFT JOIN LATERAL (
+           SELECT price_minor FROM variant_prices
+           WHERE variant_id = v.id AND (store_id = $2 OR store_id IS NULL)
+             AND kind = 'regular' AND effective_from <= now()
+             AND (effective_to IS NULL OR effective_to > now())
+           ORDER BY store_id NULLS LAST, effective_from DESC LIMIT 1
+         ) pr ON true
+         WHERE v.product_id = $1 AND v.status = 'active'
+         ORDER BY v.sort_order, v.variant_name`,
+        [productId, storeId],
+      );
+      return rows;
     });
   }
 

@@ -16,54 +16,25 @@ export function MoneyFlowSection({ flow }: { flow: MoneyFlow }) {
   const hasAny = points.some((p) => p.sales_minor !== "0" || p.purchases_minor !== "0");
 
   return (
-    <section className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <Card label="Sales" value={formatMinor(summary.sales_minor)} tone="in" />
-        <Card
-          label="Cost of goods sold"
-          value={formatMinor(summary.cogs_minor)}
-          note="what those sales cost you"
-        />
-        <Card
-          label="Gross profit"
-          value={formatMinor(summary.gross_profit_minor)}
-          note={
-            summary.margin_rate === null
-              ? "nothing sold in this range"
-              : `${(summary.margin_rate * 100).toFixed(1)}% margin`
-          }
-          tone={BigInt(summary.gross_profit_minor) < 0n ? "bad" : "in"}
-        />
-        <Card
-          label="Purchases invoiced"
-          value={formatMinor(summary.purchases_minor)}
-          note={
-            summary.invoice_count === 0
-              ? "no dated invoices in this range"
-              : `${summary.invoice_count} invoice${summary.invoice_count === 1 ? "" : "s"}`
-          }
-          tone="out"
-        />
-      </div>
-
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div className="text-sm font-medium text-[var(--color-text-muted)]">Purchases vs sales</div>
+    <section>
+      <div className="insights-panel">
+        <div className="insights-panel-head">
+          <div><h2 className="insights-panel-title">Sales & purchases</h2><p className="insights-panel-subtitle">Daily gross sales compared with dated vendor invoices</p></div>
           <div className="flex gap-4 text-xs text-[var(--color-text-muted)]">
             <Key color="var(--color-series-in)" label="Sales" />
             <Key color="var(--color-series-out)" label="Purchases" />
           </div>
         </div>
 
-        {!hasAny ? (
+        <div className="insights-chart-wrap">{!hasAny ? (
           <p className="text-sm text-[var(--color-text-muted)]">
             Nothing sold or invoiced in this range.
           </p>
         ) : (
           <PairedBars points={points} />
-        )}
+        )}</div>
 
-        <p className="mt-3 text-xs text-[var(--color-text-muted)]">
+        <p className="px-5 pb-5 text-xs leading-relaxed text-[var(--color-text-muted)]">
           Sales are counted on the day they happened. Purchases are counted on the date the vendor put
           on the invoice — so they arrive in lumps, and a day with no bar means no invoice was dated
           that day, not that nothing was bought.
@@ -136,14 +107,11 @@ function PairedBars({ points }: { points: MoneyFlow["points"] }) {
                   height={barHeight}
                   fill={bar.color}
                   rx={1}
-                >
-                  <title>
-                    {point.date} · {bar.label} {formatMinor(String(bar.value))}
-                  </title>
-                </rect>
+                  aria-label={`${point.date} · ${bar.label} ${formatMinor(String(bar.value))}`}
+                />
               );
             })}
-            {points.length <= 14 ? (
+            {points.length <= 14 || i === 0 || i === points.length - 1 || i % Math.ceil(points.length / 7) === 0 ? (
               <text
                 x={left + barWidth}
                 y={height - padding + 14}
@@ -172,9 +140,9 @@ export function VendorSpendPanel({ rows }: { rows: VendorSpendRow[] }) {
   const owed = rows.reduce((sum, r) => sum + BigInt(r.outstanding_minor), 0n);
 
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
-      <div className="flex items-baseline justify-between border-b border-[var(--color-border)] px-4 py-3">
-        <span className="text-sm font-medium">Spend by vendor</span>
+    <div className="insights-panel">
+      <div className="insights-panel-head">
+        <div><h2 className="insights-panel-title">Spend by vendor</h2><p className="insights-panel-subtitle">Invoiced costs and balances shown on uploaded paperwork</p></div>
         {owed > 0n ? (
           <span className="text-xs text-[var(--color-text-muted)]">
             {formatMinor(owed.toString())} outstanding per the invoices
@@ -188,7 +156,7 @@ export function VendorSpendPanel({ rows }: { rows: VendorSpendRow[] }) {
         </p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[40rem] text-sm">
+          <table className="insights-table min-w-[40rem]">
             <thead className="text-left text-xs text-[var(--color-text-muted)]">
               <tr>
                 <th className="px-4 py-2 font-normal">Vendor</th>
@@ -226,37 +194,6 @@ export function VendorSpendPanel({ rows }: { rows: VendorSpendRow[] }) {
           </table>
         </div>
       )}
-    </div>
-  );
-}
-
-function Card({
-  label,
-  value,
-  note,
-  tone,
-}: {
-  label: string;
-  value: string;
-  note?: string;
-  tone?: "in" | "out" | "bad";
-}) {
-  const color =
-    tone === "in"
-      ? "var(--color-series-in)"
-      : tone === "out"
-        ? "var(--color-series-out)"
-        : tone === "bad"
-          ? "var(--color-error)"
-          : "var(--color-text)";
-
-  return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
-      <div className="text-xs text-[var(--color-text-muted)]">{label}</div>
-      <div className="mt-1 text-xl font-semibold tabular-nums" style={{ color }}>
-        {value}
-      </div>
-      {note ? <div className="mt-0.5 text-xs text-[var(--color-text-muted)]">{note}</div> : null}
     </div>
   );
 }

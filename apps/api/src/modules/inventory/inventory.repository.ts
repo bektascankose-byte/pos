@@ -75,9 +75,21 @@ export class InventoryRepository {
   async post(tx: PoolClient, movements: readonly Movement[]): Promise<LevelSnapshot[]> {
     if (movements.length === 0) return [];
 
+    // A service rung up as a line -- a delivery fee -- sells no stock. Dropped
+    // here, the one place every movement passes through, so no caller has to
+    // remember that some lines are not things on a shelf.
+    const { rows: untracked } = await tx.query<{ id: string }>(
+      `SELECT v.id FROM product_variants v JOIN products p ON p.id = v.product_id
+       WHERE v.id = ANY($1::uuid[]) AND NOT p.track_inventory`,
+      [[...new Set(movements.map((m) => m.variantId))]],
+    );
+    const skip = new Set(untracked.map((row) => row.id));
+
     const touched = new Map<string, { storeId: string; variantId: string }>();
 
     for (const m of movements) {
+      if (skip.has(m.variantId)) continue;
+
       if (isZero(m.delta)) {
         throw new ApiException('validation_failed', 'a zero stock movement records nothing');
       }

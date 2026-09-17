@@ -7,6 +7,8 @@ import rateLimit from '@fastify/rate-limit';
 import multipart from '@fastify/multipart';
 import { randomUUID } from 'node:crypto';
 import { AppModule } from './app.module.js';
+import { ShopKeyRegistry } from './platform/shop/shop-key.registry.js';
+import { shopRateLimitKey } from './platform/shop/shop.guard.js';
 
 async function bootstrap(): Promise<void> {
   const logger = new Logger('bootstrap');
@@ -49,12 +51,21 @@ async function bootstrap(): Promise<void> {
     },
   });
 
+  const shopKeys = app.get(ShopKeyRegistry);
+
   await app.register(rateLimit, {
     max: Number(process.env.RATE_LIMIT_MAX ?? 300),
     timeWindow: '1 minute',
     // Keyed by authenticated user where possible, so one busy register cannot
     // exhaust the budget for every other register behind the same shop IP.
+    //
+    // Storefront traffic is keyed by shopper. Every shopper reaches this API
+    // through the storefront server, so keying by address would put the whole
+    // website in one bucket; a known shop key instead lets the address the
+    // storefront forwards stand in for the shopper's own.
     keyGenerator: (request: { headers: Record<string, unknown>; ip: string }) => {
+      const shop = shopRateLimitKey(shopKeys, request.headers, request.ip);
+      if (shop) return shop;
       const auth = request.headers['authorization'] as string | undefined;
       return auth ? `t:${auth.slice(-32)}` : `ip:${request.ip}`;
     },

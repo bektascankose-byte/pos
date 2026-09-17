@@ -53,6 +53,7 @@ export function EmployeeDetailClient({
     e.preventDefault();
     setDetailsMessage(null);
     const formData = new FormData(e.currentTarget);
+    if (employee.status === "terminated" && formData.get("status") === "terminated") formData.delete("status");
     startDetailsTransition(async () => {
       const result = await updateEmployeeAction(employeeId, formData);
       if (result.ok) {
@@ -174,9 +175,9 @@ export function EmployeeDetailClient({
 
   return (
     <div className="flex max-w-2xl flex-col gap-6">
-      <h1 className="text-xl font-semibold">{employee.full_name}</h1>
+      <h1 className="text-xl font-semibold">Edit {employee.full_name}</h1>
 
-      <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+      <section id="details" className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
         <h2 className="mb-3 text-sm font-medium text-[var(--color-text-muted)]">Details</h2>
         {detailsMessage ? (
           <p className={`mb-3 text-sm ${detailsMessage.kind === "error" ? "text-[var(--color-error)]" : "text-[var(--color-success)]"}`}>
@@ -205,7 +206,7 @@ export function EmployeeDetailClient({
                 { id: "invited", name: "Invited" },
                 { id: "active", name: "Active" },
                 { id: "suspended", name: "Suspended" },
-                { id: "terminated", name: "Terminated" },
+                ...(employee.status === "terminated" ? [{ id: "terminated", name: "Former employee" }] : []),
               ]}
             />
           </div>

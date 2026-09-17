@@ -34,17 +34,24 @@ const placeOrderSchema = z
   });
 
 const transitionSchema = z.object({ reason: z.string().max(500).optional() });
-/** Completing takes a tender: a finished sale has to record how it was paid. */
-const completeSchema = z.object({ tender: z.enum(['cash', 'card', 'other']) });
+/**
+ * Completing takes a tender, because a finished sale has to record how it was
+ * paid, and -- when any line is age restricted -- confirmation that whoever is
+ * handing it over looked at the customer's photo ID.
+ */
+const completeSchema = z.object({
+  tender: z.enum(['cash', 'card', 'other']),
+  id_checked: z.boolean().optional(),
+});
 const removeLineSchema = z.object({ reason: z.string().min(1).max(500) });
 
 /**
  * Staff-facing.
  *
- * Placing an order is here rather than on a public route because nothing
- * public exists yet — the storefront arrives in phase 5 and will call this
- * through a service token. Shipping an unauthenticated order endpoint before
- * anything consumed it would mean an open door nobody was watching.
+ * Customers place orders through the shop routes (`modules/shop`), which work
+ * from a cart and are authenticated by the storefront's own key. This
+ * controller is the back office: the queue, and every step staff take with an
+ * order once it exists.
  */
 @Controller({ path: 'orders', version: '1' })
 export class OrdersController {
@@ -94,7 +101,8 @@ export class OrdersController {
 
   /**
    * Handover. The only call here that moves stock, and the one that writes the
-   * sale — see `OrdersService.writeSale` for why retrying it is safe.
+   * sale. Retrying it is safe: the order is locked for the whole transition and
+   * a completed order cannot complete again.
    */
   @Post(':id/complete')
   @RequirePermissions('order.manage')
@@ -103,7 +111,10 @@ export class OrdersController {
     @Param('id') id: string,
     @Body(zodBody(completeSchema)) body: ReturnType<typeof completeSchema.parse>,
   ) {
-    return this.orders.transition(user.orgId, user.userId, id, 'completed', { tender: body.tender });
+    return this.orders.transition(user.orgId, user.userId, id, 'completed', {
+      tender: body.tender,
+      idChecked: body.id_checked,
+    });
   }
 
   @Post(':id/reject')

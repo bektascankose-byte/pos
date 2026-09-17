@@ -138,8 +138,23 @@ export async function runOrderChecks({ api, check, ownerToken, managerToken, cas
       'the order is priced from its lines',
       order?.lines?.length === 1 &&
         BigInt(order.lines[0].line_total_minor) === 2n * BigInt(order.lines[0].unit_price_minor) &&
-        order.total_minor === order.lines[0].line_total_minor,
+        order.subtotal_minor === order.lines[0].line_total_minor,
       JSON.stringify(order?.lines),
+    );
+    // The seeded store charges 8.25%, applied to the line once and rounded half
+    // up -- exactly as the register does. Two at 24.99 is 49.98, and 8.25% of
+    // that is 4.12335, which is 4.12.
+    const expectedTax = (BigInt(order?.subtotal_minor ?? '0') * 825n + 5000n) / 10000n;
+    check(
+      'the order carries the sales tax the counter will charge',
+      order?.tax_minor === expectedTax.toString() &&
+        BigInt(order.total_minor) === BigInt(order.subtotal_minor) + expectedTax,
+      `subtotal ${order?.subtotal_minor}, tax ${order?.tax_minor}, total ${order?.total_minor}`,
+    );
+    check(
+      'an order for an age-restricted item says so, for the counter',
+      order?.minimum_age === 21 && order?.id_required === true,
+      `minimum_age ${order?.minimum_age}, id_required ${order?.id_required}`,
     );
     check('placing an order does not move stock', (await levelOf()) === before, `was ${before}`);
 
@@ -193,10 +208,21 @@ export async function runOrderChecks({ api, check, ownerToken, managerToken, cas
     check('a cashier cannot cancel an order staff have already taken', cashierCancel.status === 403,
           `${cashierCancel.status} ${JSON.stringify(cashierCancel.body)}`);
 
-    const handed = await api(`/api/v1/orders/${order?.id}/complete`, {
+    const unchecked = await api(`/api/v1/orders/${order?.id}/complete`, {
       token: cashierToken,
       method: 'POST',
       body: { tender: 'card' },
+    });
+    check(
+      "an age-restricted order cannot be handed over until someone has checked the customer's ID",
+      unchecked.status === 400 && /photo ID/i.test(unchecked.body?.message ?? ''),
+      `${unchecked.status} ${JSON.stringify(unchecked.body)}`,
+    );
+
+    const handed = await api(`/api/v1/orders/${order?.id}/complete`, {
+      token: cashierToken,
+      method: 'POST',
+      body: { tender: 'card', id_checked: true },
     });
     check(
       'handover completes the order and writes a sale',
@@ -209,18 +235,26 @@ export async function runOrderChecks({ api, check, ownerToken, managerToken, cas
     const again = await api(`/api/v1/orders/${order?.id}/complete`, {
       token: cashierToken,
       method: 'POST',
-      body: { tender: 'card' },
+      body: { tender: 'card', id_checked: true },
     });
     const [written] = await sql(
       `WITH written AS (
          SELECT s.id, s.channel::text AS channel, s.register_sequence::int AS sequence,
+                s.subtotal_minor::text, s.tax_minor::text, s.total_minor::text,
                 r.code AS register_code, r.config->>'kind' AS register_kind
          FROM sales s JOIN registers r ON r.id = s.register_id
          WHERE s.receipt_no = $1
        )
        SELECT (SELECT count(*)::int FROM written) AS sales,
               w.register_code, w.register_kind, w.sequence, w.channel,
-              (SELECT count(*)::int FROM payments p WHERE p.sale_id IN (SELECT id FROM written)) AS payments
+              w.subtotal_minor, w.tax_minor, w.total_minor,
+              (SELECT count(*)::int FROM payments p WHERE p.sale_id IN (SELECT id FROM written)) AS payments,
+              (SELECT amount_minor::text FROM payments p WHERE p.sale_id IN (SELECT id FROM written) LIMIT 1) AS paid_minor,
+              (SELECT min(unit_cost)::text FROM sale_lines l WHERE l.sale_id IN (SELECT id FROM written)) AS unit_cost,
+              (SELECT tax_snapshot::text FROM sale_lines l WHERE l.sale_id IN (SELECT id FROM written) LIMIT 1) AS tax_snapshot,
+              (SELECT count(*)::int FROM age_verifications a
+                WHERE a.sale_id IN (SELECT id FROM written) AND a.order_id IS NOT NULL
+                  AND a.method = 'manual' AND a.result = 'pass' AND a.minimum_age_applied = 21) AS id_checks
        FROM written w
        LIMIT 1`,
       [order?.order_number],
@@ -229,6 +263,24 @@ export async function runOrderChecks({ api, check, ownerToken, managerToken, cas
           `${again.status}, ${written?.sales} sales`);
     check('the sale records its tender and its channel', written?.payments === 1 && written?.channel === 'pickup',
           JSON.stringify(written));
+    check(
+      'the sale charges the same tax the order showed, and the tender covers it',
+      written?.tax_minor === order?.tax_minor &&
+        written?.total_minor === order?.total_minor &&
+        written?.paid_minor === order?.total_minor &&
+        /"amount_minor":\s*"\d+"/.test(written?.tax_snapshot ?? ''),
+      JSON.stringify(written),
+    );
+    check(
+      'the sale records what the item cost, not zero',
+      Number(written?.unit_cost) > 0,
+      `unit cost ${written?.unit_cost}`,
+    );
+    check(
+      'the ID check is recorded the way the register records one: that it happened, not what the ID said',
+      written?.id_checks === 1,
+      `${written?.id_checks} matching age checks`,
+    );
 
     // ---------------------------------------- 6. never a counter register's numbers
 

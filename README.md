@@ -10,11 +10,12 @@ Working codename. Rename before commercialization.
 |---|---|
 | Architecture | Decided. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). |
 | Phase 0 monorepo | **Built.** npm workspaces, CI, dev stack, migration runner, seed. |
-| Phase 1 database schema | **Written and executed on PostgreSQL 16 and PGlite.** 63 tables, 93 foreign keys, 62 table level checks, 20 enums, 7 functions, 18 triggers, RLS on all 60 tenant tables. |
-| Schema, invariant and RLS suites | **44 passing on PostgreSQL**, 34 passing + 2 skipped on PGlite. |
-| Phase 1 API | **Built and exercised over HTTP.** Auth, tenancy, RBAC, idempotency, catalog, inventory, sync, sales and refunds. 83 end to end checks. |
+| Database schema | **Written and executed on PostgreSQL 16 and PGlite.** 33 migrations: 98 tables, 155 foreign keys, 142 table level checks, 35 enums, 19 functions, 55 triggers, RLS on every tenant table. |
+| Schema, invariant and RLS suites | **92 passing on PostgreSQL**, 79 passing + 2 skipped on PGlite. |
+| API | **Built and exercised over HTTP.** Auth, tenancy, RBAC, idempotency, catalog, inventory, sync, sales, refunds, orders, the website, delivery and loyalty. 270 end to end checks. |
 | Android register | **Selling on hardware.** Offline sales, cash drawer and shift close, PIN unlock, and refunds with manager approval, verified on a Galaxy S22 Ultra. See [`docs/ANDROID.md`](docs/ANDROID.md). |
-| Dashboard, storefront | Not started. |
+| Back office | **Built.** Catalog, invoice review, receiving, customers, marketing, employees, scheduling, reports, and the website's own settings. |
+| Storefront | **Built.** Accounts, cart, checkout, order tracking, pickup and delivery. Payment, courier and age verification are simulated until providers are chosen. |
 
 The schema numbers above are asserted by a test, not counted by hand:
 `test/migrate.test.mjs` fails if the schema stops matching them. The suite

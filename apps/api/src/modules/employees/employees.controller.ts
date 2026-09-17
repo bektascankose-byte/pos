@@ -53,6 +53,12 @@ export class EmployeesController {
     return this.employees.update(user.orgId, user.userId, id, body);
   }
 
+  @Delete(':id')
+  @RequirePermissions('employee.manage')
+  remove(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.employees.remove(user.orgId, user.userId, id);
+  }
+
   @Post(':id/pin')
   @RequirePermissions('employee.manage')
   setPin(

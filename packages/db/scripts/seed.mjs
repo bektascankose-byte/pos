@@ -11,6 +11,7 @@
 // against a database that holds sales.
 
 import pg from 'pg';
+import { createHash } from 'node:crypto';
 import { hash } from '@node-rs/argon2';
 import { DEFAULT_URL } from '../src/engine.mjs';
 
@@ -59,6 +60,7 @@ if (existing) {
     'auth_sessions',
     'users',
     'registers',
+    'storefront_clients',
     'stores',
   ];
   for (const table of orderedTables) {
@@ -130,6 +132,18 @@ for (const [roleKey, email, fullName, pin] of [
 
   staff.push({ email, roleKey, pin });
 }
+
+// ------------------------------------------------------------- storefront key
+// What apps/storefront presents to the API. A fixed development value, printed
+// below and published in apps/storefront/.env.example, so the website works on
+// a fresh checkout without anyone issuing a key by hand. Real keys are issued
+// from the back office, shown once, and stored only as a hash -- as this one is.
+const DEV_SHOP_KEY = 'shop_dev_only_not_a_secret';
+await client.query(
+  `insert into storefront_clients (org_id, store_id, name, key_hash, key_prefix)
+   values ($1, $2, 'Development website', $3, $4)`,
+  [org.id, store.id, createHash('sha256').update(DEV_SHOP_KEY).digest('hex'), DEV_SHOP_KEY.slice(0, 8)],
+);
 
 // -------------------------------------------------------------------- taxonomy
 const brandIds = {};
@@ -393,6 +407,9 @@ console.log(`
   development sign in (password is the same for all three)
     password   ${DEV_PASSWORD}
 ${staff.map((m) => `    ${m.roleKey.padEnd(10)} ${m.email.padEnd(26)} PIN ${m.pin}`).join(String.fromCharCode(10))}
+
+  development storefront key
+    SHOP_API_KEY ${DEV_SHOP_KEY}
 `);
 
 await client.end();

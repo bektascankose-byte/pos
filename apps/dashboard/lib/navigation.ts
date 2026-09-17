@@ -58,6 +58,15 @@ export const NAV_ENTRIES: NavEntry[] = [
     keywords: ["online", "web", "pickup", "collection", "queue", "website", "ecommerce"],
   },
   {
+    id: "website",
+    label: "Website",
+    href: "/website",
+    group: "Overview",
+    surfaces: ["setup"],
+    icon: "🌐",
+    keywords: ["storefront", "shop key", "selling rules", "compliance", "sell online", "allow"],
+  },
+  {
     id: "reports",
     label: "Reports",
     href: "/reports",

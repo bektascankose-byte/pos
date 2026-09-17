@@ -125,6 +125,8 @@ export const consentChannel = z.enum(['sms', 'email']);
 export const consentSource = z.enum([
   'register',
   'web_signup',
+  /** A signed-in customer changing it themselves, on the website. */
+  'web_account',
   'sms_stop',
   'import',
   'back_office',

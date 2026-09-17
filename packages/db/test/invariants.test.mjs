@@ -365,4 +365,243 @@ await expectOk('the order status vocabulary is the one the state machine was wri
   if (labels !== expected) throw new Error(`order_status is\n  ${labels}\nexpected\n  ${expected}`);
 });
 
+// ------------------------------------------------ 16. carts, shop keys, customer sessions
+//
+// The website's own rows. Each check is a rule that holds no matter which code
+// path writes: one order per cart is what turns a double-clicked Place Order
+// into one order, and a revoked shop key must stop resolving the moment it is
+// revoked, not whenever a cache happens to notice.
+const [cart] = await q(
+  `insert into carts (org_id, store_id, token_hash, expires_at)
+   values ($1,$2,'cart-hash-1', now() + interval '30 days') returning id`,
+  [org.id, store.id]);
+
+await expectOk('a cart holds an item', () =>
+  q(`insert into cart_lines (org_id, cart_id, variant_id, quantity) values ($1,$2,$3,2)`, [org.id, cart.id, v1.id]));
+
+await expectReject('adding the same item again changes the quantity, not the line count',
+  () => q(`insert into cart_lines (org_id, cart_id, variant_id, quantity) values ($1,$2,$3,1)`, [org.id, cart.id, v1.id]),
+  'cart_lines_cart_id_variant_id_key');
+
+await expectReject('a cart line must be for at least something',
+  () => q(`update cart_lines set quantity = 0 where cart_id = $1`, [cart.id]),
+  'cart_lines_quantity_check');
+
+await expectOk('checkout marks the cart with the order it became', () =>
+  q(`update carts set converted_order_id = $1 where id = $2`, [order.id, cart.id]));
+
+await expectReject('two carts cannot become the same order',
+  async () => {
+    const [second] = await q(
+      `insert into carts (org_id, store_id, token_hash, expires_at)
+       values ($1,$2,'cart-hash-2', now() + interval '30 days') returning id`, [org.id, store.id]);
+    await q(`update carts set converted_order_id = $1 where id = $2`, [order.id, second.id]);
+  },
+  'carts_converted_order_key');
+
+await expectReject('an order says where it came from, in words the system knows',
+  () => q(`update orders set placed_via = 'fax' where id = $1`, [order.id]),
+  'orders_placed_via_known');
+
+const [shopper] = await q(
+  `insert into customers (org_id, first_name, email) values ($1,'Dana','dana@example.test') returning id`, [org.id]);
+
+await expectReject('a session cannot end before it began',
+  () => q(`insert into customer_sessions (org_id, customer_id, token_hash, created_at, expires_at)
+           values ($1,$2,'session-hash-1', now(), now() - interval '1 minute')`, [org.id, shopper.id]),
+  'customer_sessions_expiry_after_start');
+
+await expectReject('a one-time token cannot be issued already expired',
+  () => q(`insert into customer_tokens (org_id, customer_id, purpose, token_hash, created_at, expires_at)
+           values ($1,$2,'reset_password','token-hash-1', now(), now())`, [org.id, shopper.id]),
+  'customer_tokens_expiry_after_start');
+
+await expectOk('a shop key resolves to its store until it is revoked, and not a moment after', async () => {
+  await q(`insert into storefront_clients (org_id, store_id, name, key_hash, key_prefix)
+           values ($1,$2,'Website','shop-key-hash-1','sk_live_ab')`, [org.id, store.id]);
+  const [found] = await q(`select org_id, store_id from shop_lookup_client('shop-key-hash-1')`);
+  if (found?.org_id !== org.id || found?.store_id !== store.id) {
+    throw new Error(`live key resolved to ${JSON.stringify(found)}`);
+  }
+  await q(`update storefront_clients set revoked_at = now() where key_hash = 'shop-key-hash-1'`);
+  const afterRevoke = await q(`select * from shop_lookup_client('shop-key-hash-1')`);
+  if (afterRevoke.length !== 0) throw new Error('a revoked key still resolves');
+});
+
+await expectReject('a shop key cannot be registered twice',
+  () => q(`insert into storefront_clients (org_id, store_id, name, key_hash, key_prefix)
+           values ($1,$2,'Copy','shop-key-hash-1','sk_live_ab')`, [org.id, store.id]),
+  'storefront_clients_key_hash_key');
+
+// ------------------------------------------------ 17. loyalty points are a ledger
+//
+// A balance is the sum of its history, and the history is not edited: a sale
+// earns once however often its upload is replayed, a correction is a new entry
+// with a reason, and nothing is deleted. The one change allowed is whose an
+// entry is, for when an online account and an in-store record turn out to be
+// the same person.
+await expectOk('a completed sale earns points for its customer', () =>
+  q(`insert into loyalty_ledger (org_id, customer_id, kind, points, sale_id, basis_minor, rate)
+     values ($1,$2,'earn',39,$3,3998,1)`, [org.id, shopper.id, saleId]));
+
+await expectReject('a sale earns once, however often its upload is replayed',
+  () => q(`insert into loyalty_ledger (org_id, customer_id, kind, points, sale_id) values ($1,$2,'earn',39,$3)`,
+          [org.id, shopper.id, saleId]),
+  'loyalty_one_earn_per_sale');
+
+await expectReject('earning is always a positive number of points from a sale',
+  () => q(`insert into loyalty_ledger (org_id, customer_id, kind, points) values ($1,$2,'earn',10)`, [org.id, shopper.id]),
+  'loyalty_earn_from_sale');
+
+await expectReject('a person correcting a balance has to say why',
+  () => q(`insert into loyalty_ledger (org_id, customer_id, kind, points, note) values ($1,$2,'adjust',-9,' ')`,
+          [org.id, shopper.id]),
+  'loyalty_adjust_explained');
+
+await expectOk('a correction with a reason is recorded, and the balance is the sum of the history', async () => {
+  await q(`insert into loyalty_ledger (org_id, customer_id, kind, points, note) values ($1,$2,'adjust',-9,'Duplicate scan at the counter')`,
+          [org.id, shopper.id]);
+  const [balance] = await q(`select points, lifetime_earned from loyalty_balances where customer_id = $1`, [shopper.id]);
+  if (balance?.points !== 30 || balance?.lifetime_earned !== 39) {
+    throw new Error(`balance ${JSON.stringify(balance)}, expected 30 points of 39 earned`);
+  }
+});
+
+await expectReject('what an entry says cannot be edited afterwards',
+  () => q(`update loyalty_ledger set points = 500 where customer_id = $1 and kind = 'earn'`, [shopper.id]),
+  'cannot be edited');
+
+await expectReject('points history cannot be deleted',
+  () => q(`delete from loyalty_ledger where customer_id = $1`, [shopper.id]),
+  'cannot be deleted');
+
+const [inStoreMember] = await q(
+  `insert into customers (org_id, first_name, phone) values ($1,'Dana','+12545550123') returning id`, [org.id]);
+
+await expectOk('entries can move to another customer, for when two records turn out to be one person', () =>
+  q(`update loyalty_ledger set customer_id = $1 where customer_id = $2`, [inStoreMember.id, shopper.id]));
+
+await expectReject('a verified phone always says when it was verified',
+  () => q(`insert into customer_credentials (customer_id, org_id, password_hash, verified_phone)
+           values ($1,$2,'argon2-hash','+12545550123')`, [inStoreMember.id, org.id]),
+  'customer_credentials_phone_verified_pair');
+
+// ------------------------------------------------ 18. delivery and online payment
+//
+// Where an order is going, and the money held for it before it goes. A driver
+// needs a ZIP code and a phone number that dial; a webhook needs one delivery
+// per courier id; and an order can have one live payment at a time, which is
+// what stops a double-clicked checkout holding twice.
+const [deliveryOrder] = await orderInsert({ order_number: 'HH01-0917-001', fulfilment: 'delivery' });
+
+const deliveryInsert = (extra = {}) => {
+  const row = {
+    order_id: deliveryOrder.id, org_id: org.id, provider: 'simulated', recipient_name: 'Dana Ruiz',
+    recipient_phone: '+12545550123', address_line1: '100 Example Rd', city: 'Killeen', region: 'TX',
+    postal_code: '76542', ...extra,
+  };
+  const cols = Object.keys(row);
+  return q(`insert into order_deliveries (${cols.join(',')}) values (${cols.map((_, i) => `$${i + 1}`).join(',')})`,
+           Object.values(row));
+};
+
+await expectReject('a delivery needs a real five-digit ZIP code',
+  () => deliveryInsert({ postal_code: '7654' }),
+  'delivery_postal_code_format');
+
+await expectReject("a driver can only call a phone number that dials",
+  () => deliveryInsert({ recipient_phone: '254-555-0123' }),
+  'delivery_phone_e164');
+
+await expectReject('a courier cannot be recorded as requested without the id it was booked under',
+  () => deliveryInsert({ requested_at: new Date().toISOString() }),
+  'delivery_requested_has_id');
+
+await expectOk("a courier's webhook finds its delivery by the id it was booked under, and nothing else", async () => {
+  await deliveryInsert({ external_delivery_id: 'snappos-test-1', requested_at: new Date().toISOString() });
+  const [found] = await q(`select org_id, order_id from delivery_lookup_order('snappos-test-1')`);
+  if (found?.order_id !== deliveryOrder.id || found?.org_id !== org.id) {
+    throw new Error(`webhook lookup found ${JSON.stringify(found)}`);
+  }
+  const missing = await q(`select * from delivery_lookup_order('snappos-unknown')`);
+  if (missing.length !== 0) throw new Error('an unknown delivery id resolved to an order');
+});
+
+await expectReject('one courier id names one delivery',
+  async () => {
+    const [second] = await orderInsert({ order_number: 'HH01-0917-002', fulfilment: 'delivery' });
+    await q(`insert into order_deliveries (order_id, org_id, provider, recipient_name, recipient_phone, address_line1,
+               city, region, postal_code, external_delivery_id)
+             values ($1,$2,'simulated','Sam','+12545550199','1 A St','Killeen','TX','76542','snappos-test-1')`,
+            [second.id, org.id]);
+  },
+  'order_deliveries_external_id_key');
+
+await expectReject('a delivery area is a list of five-digit ZIP codes',
+  () => q(`insert into store_delivery_settings (store_id, org_id, postal_codes) values ($1,$2,'{76548,7654}')`,
+          [store.id, org.id]),
+  'delivery_postal_codes_format');
+
+await expectOk('a store delivers to the ZIP codes it lists', () =>
+  q(`insert into store_delivery_settings (store_id, org_id, enabled, postal_codes, fee_minor)
+     values ($1,$2,true,'{76542,76548}',499)`, [store.id, org.id]));
+
+const paymentInsert = (extra = {}) => {
+  const row = {
+    org_id: org.id, order_id: deliveryOrder.id, provider: 'test', provider_reference: `test_pay_${Math.random()}`,
+    amount_minor: 4328, status: 'authorized', authorized_at: new Date().toISOString(), ...extra,
+  };
+  const cols = Object.keys(row);
+  return q(`insert into order_payments (${cols.join(',')}) values (${cols.map((_, i) => `$${i + 1}`).join(',')}) returning id`,
+           Object.values(row));
+};
+
+await expectReject('a card column holds four digits and nothing more',
+  () => paymentInsert({ card_last4: '42x4' }),
+  'order_payment_last4_fmt');
+
+await expectReject('a payment taken says when it was taken',
+  () => paymentInsert({ status: 'captured' }),
+  'order_payment_captured_at');
+
+const [heldPayment] = await paymentInsert();
+
+await expectReject('an order holds money once, however often checkout is pressed',
+  () => paymentInsert(),
+  'order_payments_live_key');
+
+await expectReject('a record of money held or taken is never deleted',
+  () => q(`delete from order_payments where id = $1`, [heldPayment.id]),
+  'cannot be deleted');
+
+await expectOk('a product holds stock unless it says it does not, so every existing item still counts', async () => {
+  const [row] = await q(`select track_inventory from products where id = $1`, [prod.id]);
+  if (row?.track_inventory !== true) throw new Error('an existing product stopped tracking inventory');
+});
+
+// ------------------------------------------------ 19. website banners
+const bannerInsert = (extra = {}) => {
+  const row = {
+    org_id: org.id, placement: 'home_hero', title: 'Pulse X', link_kind: 'brand', link_value: brand.id,
+    image_key: 'banners/x/wide.jpg', image_width: 1920, image_height: 853, alt_text: 'Geek Bar Pulse X device', ...extra,
+  };
+  const cols = Object.keys(row);
+  return q(`insert into storefront_banners (${cols.join(',')}) values (${cols.map((_, i) => `$${i + 1}`).join(',')})`,
+           Object.values(row));
+};
+
+await expectReject('a banner over a brand page belongs to a brand',
+  () => bannerInsert({ placement: 'brand_header', link_kind: 'category', link_value: 'disposable' }),
+  'banner_brand_header_link');
+
+await expectReject('a banner that links somewhere says where',
+  () => bannerInsert({ link_kind: 'product', link_value: ' ' }),
+  'banner_link_has_value');
+
+await expectReject('a banner describes its picture for people who cannot see it',
+  () => bannerInsert({ alt_text: '  ' }),
+  'banner_alt_not_blank');
+
+await expectOk('a banner with a picture, a link and a description is saved', () => bannerInsert());
+
 await scratch.drop();
