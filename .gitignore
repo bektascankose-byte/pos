@@ -48,6 +48,15 @@ coverage/
 # Local database volumes
 pgdata/
 
+# The vendors' marketing kits: layered PSDs, print PDFs and video, 4GB of it,
+# and none of it is what a shopper downloads. Banner and product images live in
+# object storage and are uploaded through the back office, so nothing here is
+# on the path between a website and a customer. Git keeps every byte of every
+# version forever and GitHub refuses a single file over 100MB, so the kits
+# belong in shared storage; only the derivatives that were uploaded reach a
+# page. Keep the folder where it is -- it is ignored, not deleted.
+marketing/
+
 # Android build output
 apps/pos-android/**/build/
 apps/pos-android/.gradle/
