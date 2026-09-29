@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.snappos.data.CatalogNavigation
 import com.snappos.data.CatalogRepository
+import com.snappos.data.PinResult
+import com.snappos.data.QuickMenu
 import com.snappos.data.QuickTab
 import com.snappos.data.QuickTabKind
 import com.snappos.data.QuickTabsStore
@@ -90,6 +92,13 @@ data class RegisterUiState(
   val selectedBrandId: String? = null,
   val selectedLineId: String? = null,
   val quickTabs: List<QuickTab> = emptyList(),
+  /**
+   * The pinned products, read in full, for their photographs. Keyed by variant
+   * id. A pin with no entry here has left the catalog, and the rail says so
+   * rather than hiding it -- a pin that silently vanished would look to the
+   * cashier like the register forgot it.
+   */
+  val pinnedProducts: Map<String, ResolvedProduct> = emptyMap(),
   val storeName: String = "",
   val registerCode: String = "",
   /**
@@ -272,6 +281,7 @@ class RegisterViewModel @Inject constructor(
           selectedLineId = line,
         )
         refreshTiles()
+        refreshPinned()
       }
     }
     viewModelScope.launch {
@@ -285,6 +295,7 @@ class RegisterViewModel @Inject constructor(
       _state.map { it.cashier?.userId }.distinctUntilChanged().collectLatest { employeeId ->
         quickTabsStore.observe(employeeId).collect { tabs ->
           _state.value = _state.value.copy(quickTabs = tabs)
+          refreshPinned()
         }
       }
     }
@@ -371,6 +382,12 @@ class RegisterViewModel @Inject constructor(
   }
 
   fun openQuickTab(tab: QuickTab) {
+    // A pinned product is a key on the till, not a place: it rings the item up
+    // and leaves the cashier exactly where they were standing.
+    if (tab.kind == QuickTabKind.Product) {
+      tab.target?.let(::addPinnedProduct)
+      return
+    }
     viewModelScope.launch {
       _state.value = when (tab.kind) {
         QuickTabKind.Everything ->
@@ -386,6 +403,7 @@ class RegisterViewModel @Inject constructor(
             selectedBrandId = _state.value.navigation.brands
               .firstOrNull { b -> b.lines.any { it.id == tab.target } }?.id,
           )
+        QuickTabKind.Product -> _state.value
       }.searchCleared()
       refreshTiles()
     }
@@ -394,7 +412,72 @@ class RegisterViewModel @Inject constructor(
   /** Pin or unpin wherever the cashier is standing. The same control does both. */
   fun toggleQuickTab(kind: QuickTabKind, target: String?, label: String) {
     val employee = _state.value.cashier?.userId ?: return
-    viewModelScope.launch { quickTabsStore.toggle(employee, QuickTab(kind, target, label)) }
+    viewModelScope.launch { report(quickTabsStore.toggle(employee, QuickTab(kind, target, label))) }
+  }
+
+  /**
+   * Holding a product tile: pin it to this cashier's quick menu, or take it
+   * off if it is already there.
+   *
+   * No message on success. The item appearing in the rail, and the pin on the
+   * tile, are the confirmation, and a banner that pushes the whole screen down
+   * to say what the screen already shows would be in the way of the next tap.
+   */
+  fun togglePinnedProduct(product: ResolvedProduct) {
+    val employee = _state.value.cashier?.userId ?: return
+    val label = _state.value.navigation.label(product.variantId, product.displayName)
+    viewModelScope.launch {
+      report(quickTabsStore.toggle(employee, QuickTab(QuickTabKind.Product, product.variantId, label)))
+    }
+  }
+
+  /** The order the cashier dragged the quick menu into, by [QuickTab.key]. */
+  fun reorderQuickTabs(keys: List<String>) {
+    val employee = _state.value.cashier?.userId ?: return
+    viewModelScope.launch { quickTabsStore.reorder(employee, keys) }
+  }
+
+  fun removeQuickTab(tab: QuickTab) {
+    val employee = _state.value.cashier?.userId ?: return
+    viewModelScope.launch { quickTabsStore.remove(employee, tab.key) }
+  }
+
+  private fun report(result: PinResult) {
+    if (result == PinResult.Full) {
+      _state.value = _state.value.copy(
+        message = Toast(
+          "Your quick menu holds ${QuickMenu.MAX}. Take one off before pinning another.",
+          isError = true,
+        ),
+      )
+    }
+  }
+
+  /**
+   * Ring up a pinned product.
+   *
+   * Read fresh rather than taken from [RegisterUiState.pinnedProducts]: that
+   * map is refreshed when the menu or the product list changes, and a price
+   * change touches neither, so the copy held there can carry yesterday's price.
+   */
+  private fun addPinnedProduct(variantId: String) {
+    viewModelScope.launch {
+      val product = catalog.byIds(listOf(variantId)).firstOrNull()
+      if (product == null) {
+        _state.value = _state.value.copy(
+          message = Toast("That item is no longer in the catalog. Take it off your quick menu.", isError = true),
+        )
+        return@launch
+      }
+      addToCart(product)
+    }
+  }
+
+  /** Photos and names for the pinned products. */
+  private suspend fun refreshPinned() {
+    val ids = _state.value.quickTabs.filter { it.kind == QuickTabKind.Product }.mapNotNull { it.target }
+    val rows = if (ids.isEmpty()) emptyList() else catalog.byIds(ids)
+    _state.value = _state.value.copy(pinnedProducts = rows.associateBy { it.variantId })
   }
 
   /**

@@ -176,6 +176,10 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
   val brands = nav.brandsIn(state.selectedCategoryId)
   val lines = state.selectedBrandId?.let { nav.linesIn(it, state.selectedCategoryId) }.orEmpty()
   val openLine = nav.line(state.selectedLineId)
+  val pinnedIds = state.quickTabs
+    .filter { it.kind == QuickTabKind.Product }
+    .mapNotNull { it.target }
+    .toSet()
 
   Surface(
     color = MaterialTheme.colorScheme.background,
@@ -218,10 +222,14 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
         Row(Modifier.fillMaxSize()) {
           NavRail(
             quickTabs = state.quickTabs,
+            pinnedProducts = state.pinnedProducts,
+            parts = nav.parts,
             categories = state.categories,
             selectedCategoryId = state.selectedCategoryId,
             hasSelection = state.selectedBrandId != null || state.selectedLineId != null,
             onQuickTab = viewModel::openQuickTab,
+            onReorderQuick = viewModel::reorderQuickTabs,
+            onRemoveQuick = viewModel::removeQuickTab,
             onCategory = viewModel::selectCategory,
             modifier = Modifier.width(railWidth).fillMaxHeight(),
           )
@@ -309,6 +317,8 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
                     onTap = { viewModel.addToCart(it) },
                     modifier = Modifier.fillMaxSize(),
                     tileWidth = if (compact) 168.dp else Touch.TILE.dp,
+                    pinnedIds = pinnedIds,
+                    onHold = viewModel::togglePinnedProduct.takeIf { state.cashier != null },
                   )
 
                 openBrand != null && openBrand.hasModelChoice ->
@@ -326,6 +336,8 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
                     onTap = { viewModel.addToCart(it) },
                     modifier = Modifier.fillMaxSize(),
                     tileWidth = if (compact) 168.dp else Touch.TILE.dp,
+                    pinnedIds = pinnedIds,
+                    onHold = viewModel::togglePinnedProduct.takeIf { state.cashier != null },
                   )
 
                 else ->
@@ -589,6 +601,8 @@ private fun QuickTab.matches(state: RegisterUiState): Boolean = when (kind) {
     state.selectedLineId == null && state.selectedBrandId == null && target == state.selectedCategoryId
   QuickTabKind.Everything ->
     state.selectedLineId == null && state.selectedBrandId == null && state.selectedCategoryId == null
+  // A product is never somewhere the cashier stands.
+  QuickTabKind.Product -> false
 }
 
 enum class SyncState { Online, Syncing, Offline, Error }

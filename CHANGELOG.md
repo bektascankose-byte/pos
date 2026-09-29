@@ -2,6 +2,43 @@
 
 Notable changes. Newest first.
 
+## Pin products to the quick menu, and drag them into order
+
+The quick menu could only hold places: a category, a brand, a model line. The
+shop asked for products. A cashier who sells the same pod forty times a shift
+wants a key for it, not a shortcut to the folder it lives in.
+
+**Hold a product tile to pin it.** It appears at the bottom of the QUICK
+section of the left rail with its photo, its flavour and its model line
+underneath ("Blue Razz Ice" over "SwitchPro KIt 30K"), because the pod and the
+kit both come in Blue Razz Ice. The tile wears an orange pin while it is
+pinned; holding it again takes it off. Tapping the rail row rings the item up
+from wherever the cashier is standing, without leaving the folder or search
+they are in. With nothing pinned the rail says "Hold any product to pin it
+here", because a hold is a gesture nobody finds by looking.
+
+**Hold a rail row and drag it to reorder.** The row lifts, follows the finger,
+and the others step aside a row at a time; letting go saves the order. Every
+row is the same height, so where the finger is resolves by arithmetic rather
+than measurement. Letting go after a drag never also rings the item up.
+
+**Edit shows an X on each row**, which is the only way to remove a pin for a
+product that has left the catalog, since there is no tile left to hold. Such a
+row says "No longer in the catalog" rather than silently vanishing.
+
+The order is the saved list itself. `QuickMenu` (pure, 13 JVM tests) owns
+toggle, remove and reorder, and every change now reads and writes inside one
+DataStore `edit`, so a pin and a drag landing together cannot lose each other.
+A full menu (12) now refuses with a message; it used to accept the thirteenth
+pin and silently drop it. Places stay pinnable exactly as before and share the
+same ordered list. Unknown kinds are skipped when reading, so an older build
+never breaks on a menu a newer one saved.
+
+Verified on the register as Sam: three pods pinned by holding their tiles,
+Blue Razz Ice dragged from third to first, the order surviving an app restart,
+a tap on its row adding it to the cart, the Kit's Blue Razz Ice pinned from
+search results, and Edit's X removing rows until the menu was empty again.
+
 ## Search the way a cashier types
 
 Four things the shop asked for together, because each one on its own still

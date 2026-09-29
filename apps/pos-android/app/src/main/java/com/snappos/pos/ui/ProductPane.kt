@@ -9,7 +9,9 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +31,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -190,6 +193,10 @@ fun ProductGrid(
   onTap: (ResolvedProduct) -> Unit,
   modifier: Modifier = Modifier,
   tileWidth: Dp = Touch.TILE.dp,
+  /** Variant ids on this cashier's quick menu. Their tiles wear a pin. */
+  pinnedIds: Set<String> = emptySet(),
+  /** Holding a tile pins or unpins it. Null where there is nobody to pin for. */
+  onHold: ((ResolvedProduct) -> Unit)? = null,
 ) {
   if (tiles.isEmpty()) {
     EmptyGrid(modifier)
@@ -207,18 +214,32 @@ fun ProductGrid(
         tile = tile,
         parts = parts[tile.variantId],
         insideLine = insideLine,
+        pinned = tile.variantId in pinnedIds,
         onTap = { onTap(tile) },
+        onHold = onHold?.let { hold -> { hold(tile) } },
       )
     }
   }
 }
 
+/**
+ * One product.
+ *
+ * A tap rings it up. **Holding it pins it** to the cashier's quick menu, and
+ * holding a pinned one takes it off. The hold lives on the tile itself rather
+ * than behind a menu because the moment a cashier thinks "I sell this all
+ * day" is the moment their finger is on it -- the same reasoning as the pin in
+ * the breadcrumb, one level down.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ProductTileCard(
   tile: ResolvedProduct,
   parts: ProductNameParts?,
   insideLine: Boolean,
+  pinned: Boolean,
   onTap: () -> Unit,
+  onHold: (() -> Unit)?,
 ) {
   // Inside a model line every tile shares the brand and the model, so showing
   // them again spends the tile on words that do not tell two tiles apart.
@@ -231,8 +252,12 @@ private fun ProductTileCard(
     Modifier
       .clip(RoundedCornerShape(Corner.CARD.dp))
       .background(MaterialTheme.colorScheme.surface)
-      .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(Corner.CARD.dp))
-      .clickable(onClick = onTap)
+      .border(
+        1.dp,
+        if (pinned) BrandOrange.copy(alpha = 0.55f) else MaterialTheme.colorScheme.outline,
+        RoundedCornerShape(Corner.CARD.dp),
+      )
+      .combinedClickable(onClick = onTap, onLongClick = onHold)
       .padding(Space.S.dp),
   ) {
     Box(
@@ -258,6 +283,20 @@ private fun ProductTileCard(
           name.take(1).uppercase(),
           style = MaterialTheme.typography.displaySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
+        )
+      }
+      if (pinned) {
+        Icon(
+          Icons.Default.PushPin,
+          contentDescription = "On your quick menu",
+          tint = Color.White,
+          modifier = Modifier
+            .align(Alignment.TopStart)
+            .padding(Space.XS.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(BrandOrange)
+            .padding(5.dp)
+            .size(14.dp),
         )
       }
       if (!tile.inStock) {
