@@ -2,6 +2,44 @@
 
 Notable changes. Newest first.
 
+## The cash drawer opens, and receipts can print on the Star printer
+
+**The drawer pops after every sale paid partly or fully in cash.** It opens
+after the sale is saved, never before, and a drawer that fails to open only
+ever becomes a message: it cannot undo or hold up a sale that already happened.
+The drawer plugs into the printer, so opening it is a one byte command sent to
+the printer.
+
+**The receipt screen has a Print button, shown only when a printer is plugged
+in.** Without one the sheet says "No printer plugged in" instead of offering a
+button that does nothing. A print that fails says why on the sheet itself
+(paper, cover, cable, busy), not in a toast hidden behind the dialog. Receipts
+print on request rather than after every sale, since most customers at the
+counter do not want one. The preview is now drawn at 80 mm, the width of the
+paper the shop's printer takes.
+
+**A driver of our own for the Star TSP143IIIU.** Star's StarXpand SDK does not
+list this model over USB on Android, and the TSP100 range has no fonts at all:
+it only prints pictures. So the new `hardware-star` module draws the receipt
+into a 576 dot wide image (the same text layout the screen preview uses) and
+sends it in Star Graphic mode straight over USB. It opens the printer for each
+job and lets go straight after, so that Modisoft, which shares the printer,
+can use it between jobs; if Modisoft is mid print, SnapPOS says the printer is
+busy rather than taking it. That Modisoft still prints afterwards has not been
+checked yet. 9 new tests for the byte format.
+
+**Verified on the till:** a cash sale opened the drawer. Android did not ask for
+USB permission on this till. Printing a receipt has **not** been tried on the
+real printer yet; the connection dropped before it could be.
+
+**Not connected, on purpose:** the PAX A35 card terminal. It is provisioned
+through Modisoft's card processing, so SnapPOS cannot take cards on it without
+Modisoft's processor or a merchant account of the shop's own. That needs a
+conversation before any code.
+
+Test sale HH01-R1-20 (one Monster Energy Ultra, $4.32 cash) was rung to test
+the drawer and is waiting to be voided with a manager PIN.
+
 ## Voice search, and search that forgives one slip
 
 **A microphone beside the keyboard button in the scan field.** Tap it and say

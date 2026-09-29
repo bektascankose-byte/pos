@@ -65,6 +65,7 @@ import com.snappos.data.QuickTabKind
 import com.snappos.domain.Cart
 import com.snappos.domain.CartLine
 import com.snappos.domain.Money
+import com.snappos.domain.PaperWidth
 
 /**
  * The register.
@@ -396,7 +397,18 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
 
   if (state.showingReceipt) {
     state.lastReceipt?.let { receipt ->
-      ReceiptSheet(receipt = receipt, onDismiss = viewModel::dismissReceipt)
+      val printer = state.printerStatus
+      ReceiptSheet(
+        receipt = receipt,
+        onDismiss = viewModel::dismissReceipt,
+        // The shop's Star TSP100 takes 80 mm paper, so the preview is drawn
+        // at the width the paper will actually be.
+        width = PaperWidth.Mm80,
+        onPrint = if (printer?.ready == true) viewModel::printReceipt else null,
+        printing = state.printing,
+        printNote = state.printProblem ?: printer?.detail,
+        printNoteIsProblem = state.printProblem != null,
+      )
     }
   }
 

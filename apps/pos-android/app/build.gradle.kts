@@ -47,6 +47,8 @@ dependencies {
   implementation(project(":core-data"))
   implementation(project(":core-sync"))
   implementation(project(":hardware:hardware-api"))
+  // Wired in only by HardwareModule. Nothing else in the app may import it.
+  implementation(project(":hardware:hardware-star"))
 
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.activity.compose)

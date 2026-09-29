@@ -33,6 +33,10 @@ import com.snappos.data.HoldRepository
 import com.snappos.data.entities.HeldCartEntity
 import com.snappos.data.Tender
 import com.snappos.domain.Cart
+import com.snappos.domain.ReceiptRenderer
+import com.snappos.hardware.PrintResult
+import com.snappos.hardware.PrinterProvider
+import com.snappos.hardware.PrinterStatus
 import com.snappos.domain.Money
 import com.snappos.domain.Uuid7
 import com.snappos.sync.CatalogSync
@@ -134,6 +138,15 @@ data class RegisterUiState(
    */
   val lastReceipt: SaleReceipt? = null,
   val showingReceipt: Boolean = false,
+  /** What the receipt printer said the last time it was asked. Null until then. */
+  val printerStatus: PrinterStatus? = null,
+  val printing: Boolean = false,
+  /**
+   * Why the last print did not come out, shown on the receipt sheet itself.
+   * Not a toast: the sheet is a dialog, and a toast underneath its scrim is a
+   * message the cashier waiting on paper never sees.
+   */
+  val printProblem: String? = null,
   val busy: Boolean = false,
   // ------------------------------------------------------------------ refunds
   val refundSale: RefundableSale? = null,
@@ -198,6 +211,7 @@ class RegisterViewModel @Inject constructor(
   private val holds: HoldRepository,
   private val customers: CustomerRepository,
   private val config: ConfigDao,
+  private val printer: PrinterProvider,
 ) : ViewModel() {
 
   private val _state = MutableStateFlow(RegisterUiState())
@@ -1331,6 +1345,11 @@ class RegisterViewModel @Inject constructor(
         // consequence of a sale existing; a sale is never a consequence of an
         // upload succeeding.
         SyncWorker.syncNow(context)
+        // The drawer opens after the sale is saved, and only when cash is part
+        // of it. Its own coroutine, and its outcome only ever becomes a
+        // message: a drawer that sticks must not be able to touch a sale that
+        // already happened.
+        if (tenders.any { it.method == "cash" }) viewModelScope.launch { kickDrawer() }
       } catch (e: Exception) {
         // A failure here means the sale did not commit, so nothing was sold and
         // the cart is deliberately left intact for the cashier to retry.
@@ -1391,7 +1410,50 @@ class RegisterViewModel @Inject constructor(
 
   fun showReceipt() {
     if (_state.value.lastReceipt != null) {
-      _state.value = _state.value.copy(showingReceipt = true)
+      _state.value = _state.value.copy(showingReceipt = true, printProblem = null)
+      // Asked fresh each time the receipt opens: a printer unplugged since the
+      // last sale should not still be offering to print.
+      viewModelScope.launch {
+        val status = printer.status()
+        _state.value = _state.value.copy(printerStatus = status)
+      }
+    }
+  }
+
+  /**
+   * Print the last sale's receipt.
+   *
+   * From the receipt sheet, on request, rather than after every sale: most
+   * customers at a smoke shop counter do not want one, and a printer that
+   * prints unasked is a roll of paper a week in the bin.
+   */
+  fun printReceipt() {
+    val receipt = _state.value.lastReceipt ?: return
+    if (_state.value.printing) return
+    viewModelScope.launch {
+      _state.value = _state.value.copy(printing = true, printProblem = null)
+      val result = printer.print(ReceiptRenderer.render(receipt))
+      _state.value = _state.value.copy(
+        printing = false,
+        printProblem = when (result) {
+          PrintResult.Printed -> null
+          PrintResult.NoPrinter -> "No receipt printer is plugged in."
+          is PrintResult.Failed -> result.reason
+        },
+      )
+      // A printer that went away mid-print should stop offering to print.
+      if (result == PrintResult.NoPrinter) {
+        _state.value = _state.value.copy(printerStatus = printer.status())
+      }
+    }
+  }
+
+  private suspend fun kickDrawer() {
+    when (val result = printer.openDrawer()) {
+      PrintResult.Printed, PrintResult.NoPrinter -> Unit
+      is PrintResult.Failed -> _state.value = _state.value.copy(
+        message = Toast("The cash drawer did not open. ${result.reason}", isError = true),
+      )
     }
   }
 

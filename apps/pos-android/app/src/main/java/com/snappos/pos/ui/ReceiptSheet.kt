@@ -47,6 +47,12 @@ fun ReceiptSheet(
   receipt: SaleReceipt,
   onDismiss: () -> Unit,
   width: PaperWidth = PaperWidth.Mm58,
+  /** Null when there is no printer to send it to; the sheet then says so. */
+  onPrint: (() -> Unit)? = null,
+  printing: Boolean = false,
+  /** What the printer said about itself, or why the last print failed. */
+  printNote: String? = null,
+  printNoteIsProblem: Boolean = false,
 ) {
   val lines = TextReceipt.render(ReceiptRenderer.render(receipt), width)
 
@@ -110,13 +116,30 @@ fun ReceiptSheet(
         ) {
           // Honest about the hardware. A "Print" button that silently does
           // nothing is worse than no button: a cashier presses it, believes a
-          // receipt is coming, and hands the customer nothing.
+          // receipt is coming, and hands the customer nothing. So Print only
+          // appears when a printer is actually plugged in, and a print that
+          // fails says why, here, where the cashier is looking.
           Text(
-            "No printer configured",
+            when {
+              printing -> "Printing…"
+              printNote != null -> printNote
+              onPrint == null -> "No printer plugged in"
+              else -> ""
+            },
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.background(MaterialTheme.colorScheme.surface),
+            color = if (printNoteIsProblem && !printing) {
+              MaterialTheme.colorScheme.error
+            } else {
+              MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            modifier = Modifier
+              .weight(1f)
+              .padding(end = Space.S.dp)
+              .background(MaterialTheme.colorScheme.surface),
           )
+          if (onPrint != null) {
+            TextButton(onClick = onPrint, enabled = !printing) { Text("Print") }
+          }
           TextButton(onClick = onDismiss) { Text("Close") }
         }
       }
