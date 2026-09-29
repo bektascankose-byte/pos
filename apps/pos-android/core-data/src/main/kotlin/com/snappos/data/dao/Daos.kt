@@ -37,6 +37,8 @@ data class CatalogIndexRow(
   val brandName: String?,
   val categoryId: String?,
   val sortOrder: Int,
+  /** Carried so a brand or model folder can wear one of its own products as its cover. */
+  val imageUrl: String?,
 )
 
 /** What a scan resolves to: everything the cart needs, in one row. */
@@ -145,7 +147,7 @@ interface CatalogDao {
    */
   @Query(
     """
-    SELECT id, productName, variantName, brandId, brandName, categoryId, sortOrder
+    SELECT id, productName, variantName, brandId, brandName, categoryId, sortOrder, imageUrl
     FROM variants
     WHERE status = 'active'
     ORDER BY brandName, productName, sortOrder

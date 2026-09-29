@@ -178,6 +178,15 @@ object Touch {
    * caption with decoration.
    */
   const val TILE = 208
+
+  /**
+   * The smallest a brand or model folder may be.
+   *
+   * Wider than a product tile on purpose. A shop has a handful of brands and
+   * dozens of flavours, so the folder screens can spend space on being
+   * unmistakable across a counter while the flavour grid has to stay dense.
+   */
+  const val FOLDER = 240
 }
 
 /**

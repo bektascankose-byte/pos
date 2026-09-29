@@ -2,6 +2,33 @@
 
 Notable changes. Newest first.
 
+## Browsing is folders now, not filters
+
+Tapping Vapes showed a hundred and thirty-four products at once, with chip rows
+above them to narrow the list down. That is a spreadsheet, and it is the wrong
+shape for somebody standing at a counter with a customer waiting.
+
+Browsing is three folders deep now, and each screen asks exactly one question:
+
+    Vapes  ->  Foger | Geek Bar | Lost Mary | Zyn | ...
+    Foger  ->  SwitchPro Disposable Pod | SwitchPro KIt 30K
+    that   ->  Blue Razz Ice | Cherry Slush | Cool Mint | ...  -> basket
+
+Every folder wears a photograph taken from one of its own products, so a
+cashier recognises Geek Bar by its packaging before reading the word. Where
+there is no photograph it falls back to the brand's initials rather than a
+folder glyph, which would be identical on every tile and so tell the eye
+nothing. Folders are wider than product tiles on purpose: a shop has a handful
+of brands and dozens of flavours, so the folder screens can spend space on
+being unmistakable across a counter while the flavour grid stays dense.
+
+A brand with only one model line skips its own folder screen and opens straight
+into the flavours, because a folder containing exactly one folder is a tap that
+buys the cashier nothing.
+
+The chip rows survive above search results only, where they are genuinely a
+filter and there is no folder to be standing inside of.
+
 ## A facelift for the counter, and the photos that never loaded
 
 The register was built and verified on a phone. On the shop's own till -- a

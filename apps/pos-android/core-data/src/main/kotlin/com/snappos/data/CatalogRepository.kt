@@ -85,6 +85,12 @@ data class LineNode(
   val brandName: String?,
   val categoryIds: Set<String>,
   val variantIds: List<String>,
+  /**
+   * A photo from inside this folder, so the folder is recognisable rather than
+   * a word in a box. The first of its products that has one: a model line's
+   * devices differ by colour, and any of them says what the line looks like.
+   */
+  val coverImageUrl: String? = null,
 )
 
 data class BrandNode(
@@ -94,6 +100,19 @@ data class BrandNode(
   val lines: List<LineNode>,
 ) {
   val itemCount: Int get() = lines.sumOf { it.variantIds.size }
+
+  /** The brand folder's cover, taken from the first of its lines that has one. */
+  val coverImageUrl: String? get() = lines.firstNotNullOfOrNull { it.coverImageUrl }
+
+  /**
+   * Whether opening this brand should show model folders or go straight to the
+   * products.
+   *
+   * A brand with one model line has nothing to choose between, and making a
+   * cashier tap through a folder containing exactly one folder is a tap that
+   * buys them nothing.
+   */
+  val hasModelChoice: Boolean get() = lines.size > 1
 }
 
 /**
@@ -214,6 +233,7 @@ class CatalogRepository @Inject constructor(
               brandName = brandName,
               categoryIds = lineRows.mapNotNull { it.categoryId }.toSet(),
               variantIds = sorted.map { it.id },
+              coverImageUrl = sorted.firstNotNullOfOrNull { it.imageUrl },
             )
           }
           .sortedWith(compareByDescending<LineNode> { it.variantIds.size }.thenBy { it.name })

@@ -325,3 +325,144 @@ private fun EmptyGrid(modifier: Modifier = Modifier) {
     )
   }
 }
+
+// ---------------------------------------------------------------- folders
+//
+// Brand, then model, then flavour -- as folders you open, not filters you
+// apply.
+//
+// The chips this replaces were a filter over a list that was always visible:
+// tapping Vapes showed a hundred and thirty-four products at once and left the
+// cashier to narrow them down. That is a spreadsheet, and it is the wrong shape
+// for someone standing at a counter with a customer waiting. A folder answers
+// one question at a time -- which brand, then which model, then which flavour --
+// and each answer is a single unambiguous tap on something the cashier can
+// recognise by its picture before they have read a word of it.
+
+/** One brand or model folder: a picture, a name, and how much is inside. */
+@Composable
+private fun FolderCard(
+  name: String,
+  count: Int,
+  sublabel: String?,
+  coverImageUrl: String?,
+  onTap: () -> Unit,
+) {
+  Column(
+    Modifier
+      .clip(RoundedCornerShape(Corner.CARD.dp))
+      .background(MaterialTheme.colorScheme.surface)
+      .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(Corner.CARD.dp))
+      .clickable(onClick = onTap)
+      .padding(Space.S.dp),
+  ) {
+    Box(
+      Modifier
+        .fillMaxWidth()
+        .aspectRatio(1.25f)
+        .clip(RoundedCornerShape(Corner.CHIP.dp))
+        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
+      contentAlignment = Alignment.Center,
+    ) {
+      if (coverImageUrl != null) {
+        AsyncImage(
+          model = productImageUrlLarge(coverImageUrl),
+          contentDescription = null,
+          contentScale = ContentScale.Fit,
+          modifier = Modifier.fillMaxSize().padding(Space.XS.dp),
+        )
+      } else {
+        // The brand's initials rather than a folder glyph. A cashier scanning
+        // the wall for Foger is looking for the word, and two big letters read
+        // from further away than an icon that is the same on every tile.
+        Text(
+          name.split(' ').filter { it.isNotBlank() }.take(2)
+            .joinToString("") { it.first().uppercase() },
+          style = MaterialTheme.typography.displaySmall,
+          fontWeight = FontWeight.Bold,
+          color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.40f),
+        )
+      }
+    }
+    Spacer(Modifier.height(Space.S.dp))
+    Text(
+      name,
+      style = MaterialTheme.typography.titleMedium,
+      fontWeight = FontWeight.Bold,
+      maxLines = 2,
+      overflow = TextOverflow.Ellipsis,
+    )
+    Text(
+      sublabel ?: if (count == 1) "1 item" else "$count items",
+      style = MaterialTheme.typography.labelMedium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      maxLines = 1,
+    )
+  }
+}
+
+/** The brand folders inside whatever category the cashier is standing in. */
+@Composable
+fun BrandFolderGrid(
+  brands: List<BrandNode>,
+  onOpen: (BrandNode) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  if (brands.isEmpty()) {
+    EmptyGrid(modifier)
+    return
+  }
+  LazyVerticalGrid(
+    columns = GridCells.Adaptive(minSize = Touch.FOLDER.dp),
+    modifier = modifier.padding(horizontal = Space.M.dp),
+    horizontalArrangement = Arrangement.spacedBy(Space.S.dp),
+    verticalArrangement = Arrangement.spacedBy(Space.S.dp),
+    contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = Space.M.dp),
+  ) {
+    items(brands, key = { it.id }) { brand ->
+      FolderCard(
+        name = brand.name,
+        count = brand.itemCount,
+        // Say how many models are inside, because that is what the next tap
+        // will be choosing between.
+        sublabel = if (brand.hasModelChoice) {
+          "${brand.lines.size} models · ${brand.itemCount} items"
+        } else {
+          null
+        },
+        coverImageUrl = brand.coverImageUrl,
+        onTap = { onOpen(brand) },
+      )
+    }
+  }
+}
+
+/** The model folders inside one brand. */
+@Composable
+fun LineFolderGrid(
+  lines: List<LineNode>,
+  onOpen: (LineNode) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  if (lines.isEmpty()) {
+    EmptyGrid(modifier)
+    return
+  }
+  LazyVerticalGrid(
+    columns = GridCells.Adaptive(minSize = Touch.FOLDER.dp),
+    modifier = modifier.padding(horizontal = Space.M.dp),
+    horizontalArrangement = Arrangement.spacedBy(Space.S.dp),
+    verticalArrangement = Arrangement.spacedBy(Space.S.dp),
+    contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = Space.M.dp),
+  ) {
+    items(lines, key = { it.id }) { line ->
+      FolderCard(
+        name = line.name,
+        count = line.variantIds.size,
+        sublabel = null,
+        coverImageUrl = line.coverImageUrl,
+        onTap = { onOpen(line) },
+      )
+    }
+  }
+}

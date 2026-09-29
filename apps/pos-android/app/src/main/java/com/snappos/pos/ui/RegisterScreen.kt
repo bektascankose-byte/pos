@@ -229,11 +229,18 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
             Column(Modifier.fillMaxSize()) {
               ScanField(onQueryChange = viewModel::onSearch, onSubmit = viewModel::onScan)
 
-              ChipRow(visible = brands.isNotEmpty() && state.searchQuery.isBlank()) {
+              // The chip rows are gone from the browse path on purpose.
+              //
+              // A chip is a filter over a list that is already on screen, and
+              // it left the cashier looking at a hundred and thirty-four
+              // products the moment they touched a category. Browsing is
+              // folders now -- brand, then model, then flavour -- and the
+              // grid below shows exactly one of those three levels.
+              //
+              // The chips survive only above search results, where they are
+              // genuinely a filter and there is no folder to be inside of.
+              ChipRow(visible = brands.isNotEmpty() && state.searchQuery.isNotBlank()) {
                 BrandChips(brands, state.selectedBrandId, viewModel::selectBrand)
-              }
-              ChipRow(visible = lines.size > 1 && state.searchQuery.isBlank()) {
-                LineChips(lines, state.selectedLineId, viewModel::selectLine)
               }
 
               Breadcrumb(
@@ -266,14 +273,52 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
                 },
               )
 
-              ProductGrid(
-                tiles = state.tiles,
-                parts = nav.parts,
-                insideLine = state.selectedLineId != null && state.searchQuery.isBlank(),
-                onTap = { viewModel.addToCart(it) },
-                modifier = Modifier.fillMaxSize(),
-                tileWidth = if (compact) 168.dp else Touch.TILE.dp,
-              )
+              // One of three levels, never a mixture.
+              //
+              //   searching       -> the results, wherever they live
+              //   inside a model  -> its flavours, which is what gets rung up
+              //   inside a brand  -> its models
+              //   otherwise       -> the brands in this category
+              //
+              // A brand holding a single model line skips its own folder
+              // screen and shows the flavours directly, because a folder
+              // containing exactly one folder is a tap that buys nothing.
+              val openBrand = brands.firstOrNull { it.id == state.selectedBrandId }
+              when {
+                state.searchQuery.isNotBlank() || state.selectedLineId != null ->
+                  ProductGrid(
+                    tiles = state.tiles,
+                    parts = nav.parts,
+                    insideLine = state.selectedLineId != null && state.searchQuery.isBlank(),
+                    onTap = { viewModel.addToCart(it) },
+                    modifier = Modifier.fillMaxSize(),
+                    tileWidth = if (compact) 168.dp else Touch.TILE.dp,
+                  )
+
+                openBrand != null && openBrand.hasModelChoice ->
+                  LineFolderGrid(
+                    lines = lines,
+                    onOpen = { viewModel.selectLine(it.id) },
+                    modifier = Modifier.fillMaxSize(),
+                  )
+
+                openBrand != null ->
+                  ProductGrid(
+                    tiles = state.tiles,
+                    parts = nav.parts,
+                    insideLine = false,
+                    onTap = { viewModel.addToCart(it) },
+                    modifier = Modifier.fillMaxSize(),
+                    tileWidth = if (compact) 168.dp else Touch.TILE.dp,
+                  )
+
+                else ->
+                  BrandFolderGrid(
+                    brands = brands,
+                    onOpen = { viewModel.selectBrand(it.id) },
+                    modifier = Modifier.fillMaxSize(),
+                  )
+              }
             }
 
             IdleOverlay(
