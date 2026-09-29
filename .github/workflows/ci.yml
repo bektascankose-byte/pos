@@ -54,6 +54,19 @@ jobs:
         working-directory: apps/pos-android
         run: ./gradlew :core-domain:test
 
+      # The other half of that bargain. Because core-domain is a plain JVM
+      # module it compiles and tests against the full JDK, but its bytecode
+      # ships in the APK and runs on Android's much older `java.*`. That gap
+      # is invisible to every check above: the tests pass, and Android Lint's
+      # NewApi detector does not analyse non-Android modules. It reached a shop
+      # counter as `NoSuchFieldError: BigInteger.TWO` the first time a cashier
+      # tapped a product on an Android 11 till, while the Android 13 phone on
+      # the desk was fine. Animal Sniffer reads the compiled classes against
+      # the API 26 signature and is the only thing here that can see it.
+      - name: Kotlin engine (Android API surface)
+        working-directory: apps/pos-android
+        run: ./gradlew :core-domain:animalsnifferMain
+
   # The authoritative gate. Row level security is a no-op for a table owner, so
   # it can only be proven against a real server with a real non-owner role.
   # A green PGlite run does not mean tenancy is enforced.

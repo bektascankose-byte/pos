@@ -93,7 +93,7 @@ value class Money(val minor: Long) : Comparable<Money> {
       val cents = BigInteger(whole)
         .multiply(HUNDRED)
         .add(BigInteger(frac.padEnd(2, '0').ifEmpty { "0" }))
-      return Money((if (sign == "-") cents.negate() else cents).longValueExact())
+      return Money((if (sign == "-") cents.negate() else cents).toLongExact())
     }
 
     fun sum(values: Iterable<Money>): Money = values.fold(ZERO) { acc, v -> acc + v }
@@ -126,7 +126,7 @@ fun Money.applyRate(rate: String): Money {
     .let { if (sign == "-") it.negate() else it }
 
   val rounded = divideRoundHalfUp(BigInteger.valueOf(minor).multiply(scaledRate), scale)
-  return Money(rounded.longValueExact())
+  return Money(rounded.toLongExact())
 }
 
 /**
@@ -165,7 +165,7 @@ fun Money.allocateByWeight(weights: List<Money>): List<Money> {
   val amountValue = BigInteger.valueOf(minor)
   val totalValue = BigInteger.valueOf(total.minor)
   val shares = weights.map {
-    amountValue.multiply(BigInteger.valueOf(it.minor)).divide(totalValue).longValueExact()
+    amountValue.multiply(BigInteger.valueOf(it.minor)).divide(totalValue).toLongExact()
   }.toMutableList()
   val remainder = Math.subtractExact(minor, shares.fold(0L, Math::addExact))
 
@@ -181,14 +181,41 @@ fun Money.allocateByWeight(weights: List<Money>): List<Money> {
   return shares.map { Money(it) }
 }
 
-/** Integer division rounding half away from zero. */
+/**
+ * Integer division rounding half away from zero.
+ *
+ * `BigInteger.valueOf(2)` rather than `BigInteger.TWO`, and that is not a
+ * style choice. `TWO` is a Java 9 field and Android only carries it from API
+ * 31; this module's minSdk is 26. On Android 11 the constant does not exist,
+ * so the class loader threw `NoSuchFieldError` the first time a cart line
+ * computed its tax -- which is to say the register crashed to the home screen
+ * the first time a cashier tapped a product, on a till, while every phone in
+ * the office ran Android 13 and was fine.
+ */
+private val TWO: BigInteger = BigInteger.valueOf(2)
+
+/**
+ * `longValueExact()` for Android 11, which does not have it.
+ *
+ * The real method arrived in Java 8 and Android only carries it from API 31,
+ * so on the shop's till it threw `NoSuchMethodError` the moment a line was
+ * taxed. The check is the same one it makes: `bitLength()` excludes the sign
+ * bit, so a value fits a signed 64-bit long exactly when it is 63 or fewer
+ * bits. Throwing rather than truncating is the point -- a total that silently
+ * wrapped would be a wrong number on a receipt, which is worse than a crash.
+ */
+internal fun BigInteger.toLongExact(): Long {
+  if (bitLength() > 63) throw ArithmeticException("value does not fit in a long: $this")
+  return toLong()
+}
+
 internal fun divideRoundHalfUp(numerator: BigInteger, denominator: BigInteger): BigInteger {
   require(denominator.signum() != 0) { "denominator must not be zero" }
   val negative = numerator.signum() != denominator.signum()
   val n = numerator.abs()
   val d = denominator.abs()
   val quotient = n.divide(d)
-  val doubled = n.remainder(d).multiply(BigInteger.TWO)
+  val doubled = n.remainder(d).multiply(TWO)
   val rounded = if (doubled >= d) quotient + BigInteger.ONE else quotient
   return if (negative) rounded.negate() else rounded
 }
@@ -214,5 +241,5 @@ fun costToMinor(cost: String, quantity: Int = 1): Money {
   val minor = divideRoundHalfUp(numerator, scale).let {
     if (sign == "-") it.negate() else it
   }
-  return Money(minor.longValueExact())
+  return Money(minor.toLongExact())
 }

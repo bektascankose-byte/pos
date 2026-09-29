@@ -67,3 +67,8 @@ apps/pos-android/.kotlin/
 .media-work/
 catalog.txt
 brands.txt
+
+# Local register-loop helpers and screenshots (paths are machine specific).
+*.bat
+lint.log
+.shot/

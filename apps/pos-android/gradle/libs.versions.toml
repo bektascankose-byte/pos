@@ -24,6 +24,9 @@ sqlite-ktx = "2.4.0"
 navigation = "2.8.5"
 junit = "4.13.2"
 turbine = "1.2.0"
+animalsniffer = "2.0.1"
+# The Android API surface core-domain is allowed to touch. Must equal minSdk.
+android-signature = "8.0.0_r2"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -89,3 +92,5 @@ kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", versi
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
+# Checks compiled bytecode against a declared API surface. See core-domain.
+animalsniffer = { id = "ru.vyarus.animalsniffer", version.ref = "animalsniffer" }
