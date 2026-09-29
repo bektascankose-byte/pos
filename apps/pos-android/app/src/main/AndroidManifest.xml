@@ -8,6 +8,21 @@
          hardware-api adapters; checkout never touches them directly. -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+    <!-- Voice search. Asked for the first time the microphone is tapped, never
+         at launch, and never needed for anything else: a till that is never
+         spoken to never asks. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <!-- From Android 11 an app can only see the services it declares an
+         interest in. Without this, SpeechRecognizer.isRecognitionAvailable
+         answers false even with the Google app installed, and the microphone
+         never appears. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
 
     <application
         android:name=".SnapPosApplication"

@@ -2,6 +2,44 @@
 
 Notable changes. Newest first.
 
+## Voice search, and search that forgives one slip
+
+**A microphone beside the keyboard button in the scan field.** Tap it and say
+the product; the words fill the field as they are heard and the grid searches
+along. A second and a half after the cashier stops, the search commits as the
+chip, exactly as if it had been typed and Enter pressed. Tapping the mic again
+cancels; a scan while listening cancels too, and the scan wins.
+
+It runs on Android's own speech API, so it uses whatever recogniser the till
+has. The till had none, so the Google app was installed from the Play Store.
+The mic only appears when a recogniser exists, and Android only lets an app
+see one if the manifest declares the `RecognitionService` query, which it now
+does. When the voice input setting is empty the recogniser is named directly,
+so no system setting has to be changed. The microphone permission is asked for
+the first time the mic is tapped, never at launch.
+
+The recogniser returns up to five guesses and the register takes the first
+that matches a product, because a recogniser that has never heard of Foger may
+rank "fogger" above it.
+
+**Search now forgives one slip.** A word of four letters or more that matches
+nothing any other way may match a product word one keystroke away: a letter
+wrong, missing, extra, or two swapped. So "fogger razz" finds the Foger razzes.
+It ranks below every exact, start-of-word and inside-word match, so it only
+decides anything when nothing better was found. 7 new tests.
+
+**Not working on this till yet, and the reason is the hardware.** Google's
+recogniser opened the microphone, heard sound (the level reached the top of
+its scale), and returned no words on every attempt. The Google app's own
+voice search failed the same way, which puts the problem in what the till's
+built-in microphone records rather than in SnapPOS. A USB microphone or USB
+headset plugged into the till is the likely fix; Android records from it
+automatically. `VoiceSearch` now logs the loudest and quietest level of each
+attempt, which is how this was told apart from a silent microphone.
+
+Also fixed along the way: the silence-length extras were sent as Longs, which
+Google's recogniser reads as 0 and ignores (it said so in the log).
+
 ## Pin products to the quick menu, and drag them into order
 
 The quick menu could only hold places: a category, a brand, a model line. The

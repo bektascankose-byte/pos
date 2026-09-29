@@ -34,6 +34,13 @@ package com.snappos.domain
  *     the counter. It is kept for words of three letters or more, and ranked
  *     below every whole-word and start-of-word match, so it can only ever add
  *     results under the ones the cashier meant.
+ *   - **One slip is forgiven, as a last resort.** A word of four letters or
+ *     more that matches nothing any other way may still match a product word
+ *     one keystroke away -- one letter wrong, missing, extra, or two swapped.
+ *     This is for voice as much as for thumbs: a speech recogniser has never
+ *     heard of Foger and writes "fogger", which is one letter out. It ranks
+ *     below everything else, so it only decides anything when nothing better
+ *     was found.
  *
  * Ranking is the sum over typed words of how well each one landed -- the whole
  * word, the start of a word, or somewhere inside one -- and ties keep the order
@@ -94,7 +101,10 @@ class SearchDocument private constructor(val id: String, private val words: List
     for (word in words) {
       // Nothing left to beat once a word starts with the token.
       if (word.startsWith(token)) return PREFIX
-      if (best == MISS && token.length >= MIN_INFIX && word.contains(token)) best = INFIX
+      if (best < INFIX && token.length >= MIN_INFIX && word.contains(token)) best = INFIX
+      if (best < NEAR && token.length >= MIN_NEAR && word.length >= MIN_NEAR && withinOneEdit(token, word)) {
+        best = NEAR
+      }
     }
     return best
   }
@@ -115,9 +125,10 @@ class SearchDocument private constructor(val id: String, private val words: List
 
 /** How a typed word landed on a product. Higher is better; [MISS] disqualifies. */
 private const val MISS = 0
-private const val INFIX = 1
-private const val PREFIX = 2
-private const val EXACT = 3
+private const val NEAR = 1
+private const val INFIX = 2
+private const val PREFIX = 4
+private const val EXACT = 6
 
 /**
  * The shortest typed word allowed to match inside another word.
@@ -127,6 +138,38 @@ private const val EXACT = 3
  * where it starts to mean something.
  */
 private const val MIN_INFIX = 3
+
+/**
+ * The shortest word allowed to match with a slip in it.
+ *
+ * Below four letters, one edit away from a word is most words: "ice" is one
+ * letter from "icy", "ace", "ire" and "mice". At four it is still a real hint.
+ */
+private const val MIN_NEAR = 4
+
+/**
+ * Whether two words differ by at most one keystroke: a letter changed, added
+ * or dropped, or two neighbouring letters swapped.
+ *
+ * Linear, not a full edit-distance table, because the only question ever
+ * asked is "one or fewer", and it is asked for every word of every product on
+ * every keystroke.
+ */
+internal fun withinOneEdit(a: String, b: String): Boolean {
+  if (a == b) return true
+  val la = a.length
+  val lb = b.length
+  if (la - lb > 1 || lb - la > 1) return false
+  var i = 0
+  while (i < la && i < lb && a[i] == b[i]) i++
+  return when {
+    la == lb ->
+      a.regionMatches(i + 1, b, i + 1, la - i - 1) ||
+        (i + 1 < la && a[i] == b[i + 1] && a[i + 1] == b[i] && a.regionMatches(i + 2, b, i + 2, la - i - 2))
+    la > lb -> a.regionMatches(i + 1, b, i, lb - i)
+    else -> a.regionMatches(i, b, i + 1, la - i)
+  }
+}
 
 /** The words of a query: lowercased, deduplicated, punctuation dropped. */
 internal fun queryTokens(query: String): List<String> =

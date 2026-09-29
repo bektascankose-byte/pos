@@ -1,5 +1,9 @@
 package com.snappos.pos.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -15,12 +19,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -32,10 +38,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -114,6 +124,12 @@ private const val CR = '\r'
  * search, so the search looked for something nobody typed. Android's own
  * keyboard does not autocorrect a single-line field unless the field asks it
  * to, and Compose asks by default; this one no longer does.
+ *
+ * **The microphone beside the keyboard button searches by voice**, when the
+ * till has a speech recogniser to hear with (see [VoiceSearch]). What the
+ * cashier says fills the field as they say it and searches as it goes; a
+ * second and a half after they stop, it is handed to the register, which
+ * commits the first of the recogniser's guesses that matches a product.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -122,14 +138,68 @@ fun ScanField(
   clearSignal: Int,
   onQueryChange: (String) -> Unit,
   onSubmit: (String) -> Unit,
+  /** What the recogniser heard, best guess first, once the cashier stopped talking. */
+  onHeard: (List<String>) -> Unit,
+  /** Something about voice search went wrong in a way the cashier should be told. */
+  onVoiceProblem: (String) -> Unit,
 ) {
   val focus = remember { FocusRequester() }
   val keyboard = LocalSoftwareKeyboardController.current
   val interactions = remember { MutableInteractionSource() }
+  val context = LocalContext.current
+  val voice = rememberVoiceSearch()
+  val heard by rememberUpdatedState(onHeard)
+  val problem by rememberUpdatedState(onVoiceProblem)
+  val queryChanged by rememberUpdatedState(onQueryChange)
   var text by remember { mutableStateOf("") }
   var focused by remember { mutableStateOf(false) }
   // Set by a finger on the field or the keyboard button. Held until Enter.
   var wantsKeyboard by remember { mutableStateOf(false) }
+
+  /**
+   * Listen, showing the words in the field as they arrive so the grid searches
+   * along with the cashier, then hand every guess over once they stop.
+   */
+  fun listen() {
+    wantsKeyboard = false
+    text = ""
+    voice.start(
+      onPartial = { words ->
+        text = words
+        queryChanged(words)
+      },
+      onHeard = { guesses ->
+        text = ""
+        heard(guesses)
+      },
+      onProblem = { message ->
+        text = ""
+        queryChanged("")
+        problem(message)
+      },
+    )
+  }
+
+  // Android asks the cashier once, the first time the microphone is tapped.
+  val askForMicrophone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+    if (granted) {
+      listen()
+    } else {
+      problem("Voice search needs the microphone. Allow it for SnapPOS in Settings, Apps.")
+    }
+  }
+
+  fun toggleVoice() {
+    when {
+      voice.listening -> {
+        voice.cancel()
+        text = ""
+        queryChanged("")
+      }
+      context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED -> listen()
+      else -> askForMicrophone.launch(Manifest.permission.RECORD_AUDIO)
+    }
+  }
 
   /**
    * Hand the text over and reset for the next scan.
@@ -139,6 +209,8 @@ fun ScanField(
    * through, even when empty, so the register can drop a half-typed draft.
    */
   fun submit(value: String) {
+    // A scan while listening means the cashier moved on; the scan wins.
+    voice.cancel()
     text = ""
     wantsKeyboard = false
     focus.requestFocus()
@@ -157,7 +229,12 @@ fun ScanField(
   // released, so the request is on record before the keyboard starts rising
   // and the hide below never sees it unasked-for.
   LaunchedEffect(interactions) {
-    interactions.interactions.collect { if (it is PressInteraction.Press) wantsKeyboard = true }
+    interactions.interactions.collect {
+      // Not while listening: the microphone button sits inside the field, and
+      // a press on it must stay a press on the microphone. The way out of
+      // listening is the microphone itself, or a scan.
+      if (it is PressInteraction.Press && !voice.listening) wantsKeyboard = true
+    }
   }
 
   // Asked for: raise it. Keyed on focus as well, because a tap on a field that
@@ -202,11 +279,18 @@ fun ScanField(
     shape = RoundedCornerShape(14.dp),
     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
     trailingIcon = {
-      IconButton(onClick = { wantsKeyboard = true }) {
-        Icon(Icons.Default.Keyboard, contentDescription = "Show the keyboard")
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        // Only when there is a recogniser to talk to. A microphone that can
+        // only ever say "not available" is worse than no microphone.
+        if (voice.available) MicButton(listening = voice.listening, level = voice.level, onClick = { toggleVoice() })
+        IconButton(onClick = { wantsKeyboard = true }) {
+          Icon(Icons.Default.Keyboard, contentDescription = "Show the keyboard")
+        }
       }
     },
-    placeholder = { Text("Scan a barcode, or tap here to search") },
+    placeholder = {
+      Text(if (voice.listening) "Listening. Say the product." else "Scan a barcode, or tap here to search")
+    },
     keyboardOptions = KeyboardOptions(
       keyboardType = KeyboardType.Ascii,
       capitalization = KeyboardCapitalization.None,
@@ -267,6 +351,34 @@ fun SearchChip(term: String, count: Int, onClear: () -> Unit) {
       if (count == 1) "1 result" else "$count results",
       style = MaterialTheme.typography.labelMedium,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+  }
+}
+
+/**
+ * The microphone.
+ *
+ * Grey when idle, and red while listening, swelling with the sound it hears.
+ * The swell is the point: a cashier talking to a till needs to see that it is
+ * hearing them, and a red dot that never moves looks the same whether the
+ * microphone works or not.
+ */
+@Composable
+private fun MicButton(listening: Boolean, level: Float, onClick: () -> Unit) {
+  IconButton(onClick = onClick) {
+    Icon(
+      Icons.Default.Mic,
+      contentDescription = if (listening) "Stop listening" else "Search by voice",
+      tint = if (listening) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+      modifier = if (listening) {
+        Modifier
+          .scale(1f + level * 0.25f)
+          .clip(CircleShape)
+          .background(BrandRed)
+          .padding(6.dp)
+      } else {
+        Modifier
+      },
     )
   }
 }

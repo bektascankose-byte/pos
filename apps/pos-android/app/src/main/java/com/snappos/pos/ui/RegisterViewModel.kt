@@ -573,6 +573,40 @@ class RegisterViewModel @Inject constructor(
     }
   }
 
+  /**
+   * What the cashier said, as the recogniser's guesses, best first.
+   *
+   * The first guess that matches a product becomes the search chip, exactly as
+   * if it had been typed and Enter pressed. Not simply the first guess: a
+   * recogniser that has never heard of Foger may rank "fogger" or "Roger"
+   * above it, and the guess that finds something is the one the cashier meant.
+   * Search forgives one wrong letter as well, which rescues most of the rest.
+   */
+  fun onVoiceSearch(heard: List<String>) {
+    val guesses = heard.map { it.trim() }.filter { it.isNotEmpty() }
+    viewModelScope.launch {
+      val index = _state.value.navigation.search
+      val pick = guesses.firstOrNull { index.isEmpty || index.search(it, limit = 1).isNotEmpty() }
+      _state.value = if (pick != null) {
+        _state.value.copy(searchTerm = pick, searchDraft = "")
+      } else {
+        _state.value.copy(
+          searchDraft = "",
+          message = Toast(
+            guesses.firstOrNull()?.let { "Heard “$it”, but nothing matches it." }
+              ?: "Didn't hear a product. Tap the microphone and try again.",
+            isError = true,
+          ),
+        )
+      }
+      refreshTiles()
+    }
+  }
+
+  fun voiceProblem(message: String) {
+    _state.value = _state.value.copy(message = Toast(message, isError = true))
+  }
+
   /** The chip's X: back to whichever folder the cashier was standing in. */
   fun clearSearch() {
     viewModelScope.launch {

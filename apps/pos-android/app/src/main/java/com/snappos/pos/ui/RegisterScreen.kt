@@ -241,6 +241,8 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
                 clearSignal = state.searchEpoch,
                 onQueryChange = viewModel::onSearch,
                 onSubmit = viewModel::onSubmit,
+                onHeard = viewModel::onVoiceSearch,
+                onVoiceProblem = viewModel::voiceProblem,
               )
               val searching = state.activeSearch.isNotBlank()
 

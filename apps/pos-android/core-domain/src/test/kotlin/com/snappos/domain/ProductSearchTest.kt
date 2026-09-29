@@ -190,6 +190,57 @@ class ProductSearchTest {
     assertEquals("Foger SwitchPro Disposable Pod | Berry Bliss", foger.first())
   }
 
+  // ------------------------------------------------------ one slip
+
+  @Test
+  fun `what a speech recogniser writes for Foger still finds it`() {
+    assertEquals(listOf(podBlueRazz, kitBlueRazz), labels("fogger razz"))
+  }
+
+  @Test
+  fun `one wrong, missing or swapped letter is forgiven`() {
+    assertTrue(podBlueRazz in labels("foger rzaz"))
+    assertTrue(podBlueRazz in labels("fogr razz"))
+    assertTrue(podBlueRazz in labels("fpger razz"))
+  }
+
+  @Test
+  fun `a slip ranks below every real match`() {
+    // Listed best first, so the order that comes back is the ranking's doing.
+    val index = ProductSearchIndex(
+      listOf(
+        SearchDocument.of("slip", "Mango Tango"),
+        SearchDocument.of("inside", "Supermangos"),
+      ),
+    )
+    assertEquals(listOf("inside", "slip"), index.search("mangos"))
+  }
+
+  @Test
+  fun `short words get no slips`() {
+    // "ice" is one letter from half the dictionary.
+    val index = ProductSearchIndex(listOf(SearchDocument.of("x", "Juicy Peach Icy")))
+    assertEquals(emptyList<String>(), index.search("ace"))
+  }
+
+  @Test
+  fun `two slips are too many`() {
+    // "foogerr" is two letters longer than "foger".
+    assertEquals(emptyList<String>(), labels("foogerr razz"))
+  }
+
+  @Test
+  fun `withinOneEdit is exactly one edit`() {
+    assertTrue(withinOneEdit("foger", "fogger"))
+    assertTrue(withinOneEdit("fogger", "foger"))
+    assertTrue(withinOneEdit("razz", "razs"))
+    assertTrue(withinOneEdit("razz", "rzaz"))
+    assertTrue(withinOneEdit("mint", "mint"))
+    assertEquals(false, withinOneEdit("foger", "fooggerr"))
+    assertEquals(false, withinOneEdit("razz", "zarz"))
+    assertEquals(false, withinOneEdit("abcd", "badc"))
+  }
+
   @Test
   fun `nothing typed finds nothing`() {
     assertEquals(emptyList<String>(), labels(""))
