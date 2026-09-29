@@ -593,7 +593,8 @@ private fun ProductGrid(
 private fun ProductTileCard(tile: ResolvedProduct, onTap: () -> Unit) {
   Column(
     Modifier
-      .height(132.dp)
+      // Room for a brand line above the name and three lines of name below it.
+      .height(154.dp)
       .clip(RoundedCornerShape(16.dp))
       .background(MaterialTheme.colorScheme.surface)
       .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = .8f), RoundedCornerShape(16.dp))
@@ -618,10 +619,23 @@ private fun ProductTileCard(tile: ResolvedProduct, onTap: () -> Unit) {
         Spacer(Modifier.width(Space.S.dp))
       }
       Column(Modifier.weight(1f)) {
+        // The brand goes above, small, and the name below it has the brand
+        // taken off the front -- otherwise a supplier that names every flavour
+        // as its own product fills the screen with tiles that all read the
+        // same and differ only in the characters a narrow tile cuts off.
+        tile.brandName?.takeIf { it.isNotBlank() }?.let {
+          Text(
+            it.uppercase(),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+        }
         Text(
-          tile.productName,
+          tile.tileLabel,
           style = MaterialTheme.typography.bodyMedium,
-          maxLines = 2,
+          maxLines = 3,
           overflow = TextOverflow.Ellipsis,
         )
         tile.variantName?.let {

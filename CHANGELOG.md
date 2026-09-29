@@ -2,6 +2,57 @@
 
 Notable changes. Newest first.
 
+## The register, on a till instead of a phone
+
+Installed on the shop's own hardware for the first time — a Modisoft C8,
+1920×1080 at 184dpi, Android 11 — beside the Modisoft app it runs today. It
+synced the real catalog over `adb reverse` (152 variants, 160 barcodes, 3
+employees) and sold nothing, which was the point: this was a look at the
+screens on the glass they will actually be used on. The register had only ever
+been run on a Galaxy S22 Ultra in landscape, which is about 950×390dp. The till
+is 1670×940dp — two and a half times the height — and three things broke that
+no phone would have shown.
+
+**The on-screen keyboard covered half the product grid and would not go away.**
+`ScanField` already tried to prevent this, hiding the keyboard immediately
+after asking for focus. It reads correctly and does not work: Compose *posts*
+the show when focus arrives, so a hide issued in the same frame runs first and
+the keyboard appears a frame later regardless. Then the field takes focus again
+after every scan, so it comes back. The hide is now driven by
+`WindowInsets.isImeVisible` — whenever the keyboard is up and nobody asked for
+it, it goes down — which needs no timing at all and cannot lose a race. A
+cashier who wants to type presses the keyboard button now in the field, because
+on a register the scanner is the input and the IME is the exception.
+
+The activity also moves from `adjustResize` to `stateAlwaysHidden|adjustNothing`.
+The scan field is at the top and the grid fills the rest, so there is nothing
+below the fold for a resize to reveal — resizing only squashed the grid.
+
+**Forty-eight tiles all read "FOGER SwitchPro Di…".** Some suppliers name every
+flavour as its own product, so the names share a long prefix and differ only in
+the part a narrow tile cuts off. A cashier could not tell them apart without
+opening each one. The brand now sits above the name in small caps and is taken
+off the front of it, so the tile leads with what distinguishes it. Only a whole
+leading word is removed, so "Backwoods Cigars 5pk" keeps reading "Cigars 5pk",
+which is what the shelf calls it.
+
+**Tiles were sized for a phone.** `Touch.TILE` was 120dp, which packed seven
+columns into the grid on a 1080p screen and left each one too narrow for a
+name. It is 168dp now. A tile is a target a cashier hits at speed and reads
+before hitting; it is sized for the reading.
+
+### Known limits
+
+- Long flavours still truncate, because "SwitchPro Disposable Pod" fills two of
+  the three name lines by itself. Finishing this properly means carrying
+  `products.short_name` — which the schema already has and nothing populates —
+  down to the register and preferring it.
+- The unlock and opening-float screens are still centred phone layouts, with
+  two thirds of the till dark.
+- A duplicate open cash session is rejected by the server as a permanent
+  conflict, and the register keeps it in the outbox retrying while showing the
+  drawer as open. The constraint is right; the handling of it is not.
+
 ## The manufacturers' artwork, on the website
 
 `storefront_banners` and the back office screens for it shipped in 0032 and the

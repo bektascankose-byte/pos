@@ -121,5 +121,13 @@ object Space {
 object Touch {
   const val MIN = 56
   const val PRIMARY = 72
-  const val TILE = 120
+  /**
+   * The smallest a product tile may be, which sets how many fit across.
+   *
+   * 120 was a phone number: on a 1080p till it packed seven columns into the
+   * grid and left each tile too narrow for a product name. A tile is a target
+   * a cashier hits at speed without looking, and one they read before hitting,
+   * so it is sized for the reading.
+   */
+  const val TILE = 168
 }

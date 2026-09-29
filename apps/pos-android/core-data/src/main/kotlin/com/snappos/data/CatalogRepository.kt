@@ -21,6 +21,7 @@ data class ResolvedProduct(
   val variantId: String,
   val productName: String,
   val variantName: String?,
+  val brandName: String?,
   val sku: String,
   val price: Money?,
   val cost: String,
@@ -32,6 +33,35 @@ data class ResolvedProduct(
   val imageUrl: String?,
 ) {
   val displayName: String get() = productName
+
+  /**
+   * What to put on a tile, with the part every neighbouring tile shares taken
+   * off the front.
+   *
+   * Some suppliers name each flavour as its own product -- "FOGER SwitchPro
+   * Disposable Pod Blue Razz Ice" -- so forty-eight tiles begin with the same
+   * twenty-eight characters and the flavour, the only part that tells them
+   * apart, is the part a narrow tile cuts off. Every tile then reads "FOGER
+   * SwitchPro Di..." and a cashier cannot pick one without opening it.
+   *
+   * Dropping the brand is the safe half of the problem: the brand is shown on
+   * its own line anyway, so nothing is lost. Only a whole leading word is
+   * removed, so a brand that is genuinely part of the name ("Backwoods Cigars
+   * 5pk" for brand "Backwoods") keeps reading correctly -- it loses "Backwoods"
+   * and keeps "Cigars 5pk", which is what the shelf calls it.
+   */
+  val tileLabel: String
+    get() {
+      val brand = brandName?.trim().orEmpty()
+      if (brand.isEmpty()) return productName
+      val name = productName.trim()
+      if (!name.startsWith(brand, ignoreCase = true)) return productName
+      val rest = name.drop(brand.length).trimStart(' ', '-', ':', '\u2013')
+      // Never leave a tile with nothing on it: a product named only for its
+      // brand keeps its name.
+      return rest.ifBlank { productName }
+    }
+
   val inStock: Boolean get() = (onHand?.toDoubleOrNull() ?: 0.0) > 0.0
 }
 
@@ -70,6 +100,7 @@ class CatalogRepository @Inject constructor(
     variantId = variant.id,
     productName = variant.productName,
     variantName = variant.variantName,
+    brandName = variant.brandName,
     sku = variant.sku,
     price = priceMinor?.let { Money.ofMinor(it) },
     cost = variant.cost,

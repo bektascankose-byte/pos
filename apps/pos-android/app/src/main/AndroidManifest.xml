@@ -35,12 +35,18 @@
                 tools:node="remove" />
         </provider>
 
+        <!-- windowSoftInputMode: the scan field sits at the top and the grid
+             fills the rest, so there is nothing below the fold a resize would
+             reveal, and adjustResize only squashed the product grid.
+             stateAlwaysHidden keeps the on-screen keyboard down when the
+             window takes focus; ScanField keeps it down when the field does,
+             because a register is driven by a scanner. -->
         <activity
             android:name=".RegisterActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:screenOrientation="sensorLandscape"
-            android:windowSoftInputMode="adjustResize"
+            android:windowSoftInputMode="stateAlwaysHidden|adjustNothing"
             android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
