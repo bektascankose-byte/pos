@@ -39,6 +39,12 @@ data class CatalogIndexRow(
   val sortOrder: Int,
   /** Carried so a brand or model folder can wear one of its own products as its cover. */
   val imageUrl: String?,
+  /**
+   * Name, SKU, PLU, brand and barcodes, lowercased at sync. Carried so search
+   * can run over the same in-memory tree the folders are drawn from -- see
+   * `ProductSearchIndex` for why it no longer runs in SQL.
+   */
+  val searchText: String,
 )
 
 /** What a scan resolves to: everything the cart needs, in one row. */
@@ -82,12 +88,12 @@ interface CatalogDao {
   suspend fun resolveBarcode(barcode: String, now: Long): ScannedItem?
 
   /**
-   * Search.
+   * Search, the old way: one contiguous substring.
    *
-   * `LIKE` over a denormalized `searchText` column rather than a join across
-   * six tables on every keystroke. A single store has thousands of SKUs, not
-   * millions, and this answers in single digit milliseconds on device. FTS5 is
-   * the upgrade path when the catalog size or typo tolerance demands it.
+   * No longer what the register searches with -- `ProductSearchIndex` matches
+   * each typed word on its own, which a single `LIKE` cannot express. Kept as
+   * the fallback for the moment before the catalog tree has been built, so a
+   * search typed in the first second after launch still finds something.
    */
   @Query(
     """
@@ -147,7 +153,7 @@ interface CatalogDao {
    */
   @Query(
     """
-    SELECT id, productName, variantName, brandId, brandName, categoryId, sortOrder, imageUrl
+    SELECT id, productName, variantName, brandId, brandName, categoryId, sortOrder, imageUrl, searchText
     FROM variants
     WHERE status = 'active'
     ORDER BY brandName, productName, sortOrder

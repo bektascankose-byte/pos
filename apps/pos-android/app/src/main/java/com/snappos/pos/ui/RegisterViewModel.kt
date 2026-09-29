@@ -92,7 +92,26 @@ data class RegisterUiState(
   val quickTabs: List<QuickTab> = emptyList(),
   val storeName: String = "",
   val registerCode: String = "",
-  val searchQuery: String = "",
+  /**
+   * A search the cashier finished with Enter. It stays on screen as the chip
+   * under the scan field until they clear it or open a folder.
+   */
+  val searchTerm: String = "",
+  /**
+   * What is in the scan field right now, before Enter. Separate from
+   * [searchTerm] so that a scan rung up while a search is on screen lands in
+   * the cart and leaves the search where it was -- a scanner types into the
+   * same field, and without the split every scan would have replaced the
+   * cashier's results with its own barcode.
+   */
+  val searchDraft: String = "",
+  /**
+   * Bumped whenever the search is cleared from outside the field -- the chip's
+   * X, or opening a folder -- so the field empties with it. The field keeps its
+   * own text (a text field fed back through a flow drops keystrokes), so it has
+   * to be told.
+   */
+  val searchEpoch: Int = 0,
   val message: Toast? = null,
   val lastReceiptNo: String? = null,
   val lastChange: Money? = null,
@@ -125,7 +144,14 @@ data class RegisterUiState(
   val customerResults: List<CustomerDto> = emptyList(),
   val customerSearchBusy: Boolean = false,
   val customerError: String? = null,
-)
+) {
+  /** What the grid is searching for: the typing if there is any, otherwise the chip. */
+  val activeSearch: String get() = searchDraft.ifBlank { searchTerm }.trim()
+}
+
+/** Leaving search entirely: the chip, the typing, and the text in the field. */
+private fun RegisterUiState.searchCleared(): RegisterUiState =
+  copy(searchTerm = "", searchDraft = "", searchEpoch = searchEpoch + 1)
 
 /**
  * A price override waiting on a manager PIN.
@@ -182,6 +208,14 @@ class RegisterViewModel @Inject constructor(
     sales.deadLetters.stateIn(viewModelScope, SharingStarted.Eagerly, 0)
 
   private var taxRate: String = "0"
+
+  /**
+   * Which `refreshTiles` call is the newest. Every keystroke starts one, and a
+   * scanner types a dozen in thirty milliseconds; without this an early,
+   * slower read can land after a later one and leave the grid showing results
+   * for half a barcode.
+   */
+  private var tileGeneration = 0
 
   init {
     viewModelScope.launch {
@@ -277,9 +311,11 @@ class RegisterViewModel @Inject constructor(
    * `onSearch` for the sale that was lost learning why.
    */
   private suspend fun refreshTiles() {
+    val generation = ++tileGeneration
     val snapshot = _state.value
+    val query = snapshot.activeSearch
     val rows = when {
-      snapshot.searchQuery.isNotBlank() -> catalog.search(snapshot.searchQuery, TILE_LIMIT)
+      query.isNotBlank() -> searchRows(snapshot.navigation, query)
       snapshot.selectedLineId != null ->
         catalog.byIds(snapshot.navigation.line(snapshot.selectedLineId)?.variantIds.orEmpty())
       snapshot.selectedBrandId != null ->
@@ -290,8 +326,17 @@ class RegisterViewModel @Inject constructor(
         )
       else -> catalog.byCategory(snapshot.selectedCategoryId, limit = TILE_LIMIT)
     }
+    if (generation != tileGeneration) return
     _state.value = _state.value.copy(tiles = rows)
   }
+
+  /**
+   * Search over the catalog tree, falling back to the old substring query only
+   * in the moment after launch before the tree exists.
+   */
+  private suspend fun searchRows(nav: CatalogNavigation, query: String): List<ResolvedProduct> =
+    if (nav.search.isEmpty) catalog.search(query, TILE_LIMIT)
+    else catalog.byIds(nav.search.search(query, TILE_LIMIT))
 
   fun selectCategory(categoryId: String?) {
     viewModelScope.launch {
@@ -299,8 +344,7 @@ class RegisterViewModel @Inject constructor(
         selectedCategoryId = categoryId,
         selectedBrandId = null,
         selectedLineId = null,
-        searchQuery = "",
-      )
+      ).searchCleared()
       refreshTiles()
     }
   }
@@ -309,7 +353,7 @@ class RegisterViewModel @Inject constructor(
   fun selectBrand(brandId: String?) {
     viewModelScope.launch {
       val next = brandId.takeIf { it != _state.value.selectedBrandId }
-      _state.value = _state.value.copy(selectedBrandId = next, selectedLineId = null, searchQuery = "")
+      _state.value = _state.value.copy(selectedBrandId = next, selectedLineId = null).searchCleared()
       refreshTiles()
     }
   }
@@ -321,8 +365,7 @@ class RegisterViewModel @Inject constructor(
         selectedLineId = next,
         selectedBrandId = next?.let { id -> _state.value.navigation.brands.firstOrNull { b -> b.lines.any { it.id == id } }?.id }
           ?: _state.value.selectedBrandId,
-        searchQuery = "",
-      )
+      ).searchCleared()
       refreshTiles()
     }
   }
@@ -343,7 +386,7 @@ class RegisterViewModel @Inject constructor(
             selectedBrandId = _state.value.navigation.brands
               .firstOrNull { b -> b.lines.any { it.id == tab.target } }?.id,
           )
-      }.copy(searchQuery = "")
+      }.searchCleared()
       refreshTiles()
     }
   }
@@ -376,9 +419,10 @@ class RegisterViewModel @Inject constructor(
     }
   }
 
+  /** Every keystroke in the scan field, from a hand or a scanner. */
   fun onSearch(query: String) {
     viewModelScope.launch {
-      _state.value = _state.value.copy(searchQuery = query)
+      _state.value = _state.value.copy(searchDraft = query)
 
       // The query is resolved into a local **before** the state is read.
       //
@@ -395,6 +439,61 @@ class RegisterViewModel @Inject constructor(
       // scanning as fast as adb can drive it, and 0% with a pause between
       // scans - which is exactly the shape of a bug nobody reproduces at a desk
       // and everybody hits at a counter during a rush.
+      refreshTiles()
+    }
+  }
+
+  /**
+   * Enter in the scan field.
+   *
+   * The same key ends a scan and ends a search, and the field cannot tell which
+   * it was given, so the catalog decides, in this order:
+   *
+   *   1. **A barcode it knows** goes in the cart, and whatever search was on
+   *      screen stays there. A cashier ringing up three flavours they found by
+   *      searching should not lose the list by scanning a fourth.
+   *   2. **Words that match something** become the search chip. The results
+   *      are already on screen from the typing; Enter just keeps them there
+   *      and gives the field back to the scanner.
+   *   3. **Anything else** says so. A barcode that matches nothing gets the
+   *      same "No product for" the register has always given; words that
+   *      match nothing get told so in those terms.
+   *
+   * Barcodes are tried first because a scan is the hot path and a search term
+   * that happens to equal a barcode is a barcode.
+   */
+  fun onSubmit(text: String) {
+    val value = text.trim()
+    viewModelScope.launch {
+      val product = if (value.isEmpty()) null else catalog.scan(value)
+      // Before the tree exists the grid is searched the old way, so there is
+      // nothing here to ask; trust what the cashier typed rather than refuse it.
+      val index = _state.value.navigation.search
+      val matches = product == null && value.isNotEmpty() &&
+        (index.isEmpty || index.search(value, limit = 1).isNotEmpty())
+
+      _state.value = when {
+        product != null || value.isEmpty() -> _state.value.copy(searchDraft = "")
+        matches -> _state.value.copy(searchTerm = value, searchDraft = "")
+        else -> _state.value.copy(
+          searchDraft = "",
+          message = Toast(
+            if (value.all { it.isDigit() }) "No product for $value" else "Nothing matches \u201c$value\u201d",
+            isError = true,
+          ),
+        )
+      }
+      // Into the cart before the grid is redrawn: the scan is what the
+      // cashier is waiting on, the grid is not.
+      if (product != null) addToCart(product, scanned = value)
+      refreshTiles()
+    }
+  }
+
+  /** The chip's X: back to whichever folder the cashier was standing in. */
+  fun clearSearch() {
+    viewModelScope.launch {
+      _state.value = _state.value.searchCleared()
       refreshTiles()
     }
   }
@@ -686,7 +785,10 @@ class RegisterViewModel @Inject constructor(
 
   /** End the shift. The cart is deliberately kept: locking is not cancelling. */
   fun lock() {
-    _state.value = _state.value.copy(stage = RegisterStage.Locked, cashier = null, message = null)
+    // The search goes with the cashier. The next person to sign in should find
+    // the folders, not somebody else's half-finished lookup.
+    _state.value = _state.value.copy(stage = RegisterStage.Locked, cashier = null, message = null).searchCleared()
+    viewModelScope.launch { refreshTiles() }
   }
 
   fun openDrawer(openingFloat: Money) {

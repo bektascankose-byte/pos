@@ -2,6 +2,58 @@
 
 Notable changes. Newest first.
 
+## Search the way a cashier types
+
+Four things the shop asked for together, because each one on its own still
+left search broken at the counter.
+
+**Tapping the field keeps the keyboard up.** The scan field hides the on-screen
+keyboard whenever nobody asked for it, which is right for a scanner and was
+wrong for a person: only the little keyboard button counted as asking, so a
+cashier who tapped the field watched the keyboard rise and drop again. A press
+on the field now counts too, and the request holds until Enter, the chip's X,
+or opening a folder. A scanner never touches the glass, so it still never
+raises the keyboard.
+
+**Autocorrect is off.** The till runs Android's own keyboard (LatinIME), which
+does not autocorrect a single-line field unless the field asks, and Compose
+asks by default. It no longer does. Suggestions still appear in the strip; none
+is applied unless tapped.
+
+**A search chip under the bar.** Enter turns what was typed into a chip showing
+the term, the result count and an X. The field empties so the next scan works,
+and scanning while the chip is up puts the item in the cart and leaves the
+results where they were. The X returns to whichever folder the cashier was
+standing in. Enter on words that match nothing, or a barcode that matches
+nothing, says so instead of leaving an empty chip.
+
+**Forgiving matching.** Search was one `LIKE '%query%'`, so "fog razz" found
+nothing because those characters never appear together. Now every typed word
+must start one of the product's words, in any order: "Fog Razz", "Foger Razz"
+and "Foger Switch Razz" all find the Kit's Blue Razz Ice. Run-together words
+answer to either half ("SwitchPro" to "pro", "BM6000" to "6000"), split words to
+the joined form ("geekbar"), and the old substring behaviour survives for words
+of three letters or more (the tail of a barcode, "berry" in "Strawberry"),
+ranked below every whole-word match. `ProductSearchIndex` in `core-domain`,
+17 tests on the shop's own names.
+
+It searches the taxonomy's words, not just the catalog's: the brand given back
+to the 88 products with a blank brand field, and the model and flavour split off
+a welded name. So it is built alongside the folder tree and held in memory,
+which also means no SQL per keystroke. Before the tree exists, the first moment
+after launch, it falls back to the old query.
+
+Two smaller fixes along the way: grid refreshes are now latest-wins, so a slow
+read cannot land after a newer one and show results for half a barcode; and
+locking the register clears the search, so the next cashier finds the folders.
+
+Verified on the register: tap raises and holds the keyboard; "fog razz " typed
+on the keyboard, space included, stays as typed and finds exactly the two Foger
+Blue Razz Ice products; Enter lowers the keyboard and leaves the chip; a scan
+with the chip up adds to the cart and keeps the results; "Foger Switch Razz"
+typed inside the Foger folder, then X, lands back in the Foger folder; an
+unknown barcode still reads "No product for".
+
 ## Browsing is folders now, not filters
 
 Tapping Vapes showed a hundred and thirty-four products at once, with chip rows

@@ -8,6 +8,8 @@ import com.snappos.data.entities.CategoryEntity
 import com.snappos.domain.Money
 import com.snappos.domain.NamedItem
 import com.snappos.domain.ProductNameParts
+import com.snappos.domain.ProductSearchIndex
+import com.snappos.domain.SearchDocument
 import com.snappos.domain.taxonomize
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -126,6 +128,17 @@ data class BrandNode(
 data class CatalogNavigation(
   val brands: List<BrandNode> = emptyList(),
   val parts: Map<String, ProductNameParts> = emptyMap(),
+  /**
+   * Search over the same tree, built alongside it.
+   *
+   * Built here rather than on each keystroke because the words it matches on
+   * are the taxonomy's -- the brand a blank catalog field was given back, the
+   * model line and flavour split off a welded name -- and those only exist
+   * once `taxonomize` has run. A search that could not see them would find
+   * "Foger" products the folders call Foger only when the catalog happened to
+   * say so.
+   */
+  val search: ProductSearchIndex = ProductSearchIndex.EMPTY,
 ) {
   fun brandsIn(categoryId: String?): List<BrandNode> =
     if (categoryId == null) brands else brands.filter { categoryId in it.categoryIds }
@@ -249,7 +262,17 @@ class CatalogRepository @Inject constructor(
       // alphabetical order is.
       .sortedWith(compareByDescending<BrandNode> { it.itemCount }.thenBy { it.name })
 
-    return CatalogNavigation(brands = brands, parts = parts)
+    // Documents in menu order -- biggest brand, then its biggest line, then the
+    // line's own order -- so equally good matches arrive grouped the way the
+    // folders are rather than in whatever order the rows were read.
+    val byId = rows.associateBy { it.id }
+    val documents = brands.flatMap { it.lines }.flatMap { it.variantIds }.mapNotNull { id ->
+      val row = byId[id] ?: return@mapNotNull null
+      val p = parts[id]
+      SearchDocument.of(id, p?.brand, p?.line, p?.flavour, row.searchText)
+    }
+
+    return CatalogNavigation(brands = brands, parts = parts, search = ProductSearchIndex(documents))
   }
 
   private fun ScannedItem.toResolved() = ResolvedProduct(

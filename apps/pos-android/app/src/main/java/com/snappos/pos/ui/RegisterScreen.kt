@@ -160,7 +160,9 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
   // cannot be forgotten when a new control is added.
   var touches by remember { mutableStateOf(0) }
   val idle = rememberIdle(
-    activity = listOf(touches, state.cart.itemCount, state.selectedLineId, state.selectedCategoryId),
+    // The draft counts because typing happens on the keyboard's own window,
+    // where the tap counter below never sees it.
+    activity = listOf(touches, state.cart.itemCount, state.selectedLineId, state.selectedCategoryId, state.searchDraft),
     enabled = state.cart.isEmpty && !showPayment && !showSplitPayment,
   )
 
@@ -227,7 +229,12 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
 
           Box(Modifier.weight(1f).fillMaxHeight()) {
             Column(Modifier.fillMaxSize()) {
-              ScanField(onQueryChange = viewModel::onSearch, onSubmit = viewModel::onScan)
+              ScanField(
+                clearSignal = state.searchEpoch,
+                onQueryChange = viewModel::onSearch,
+                onSubmit = viewModel::onSubmit,
+              )
+              val searching = state.activeSearch.isNotBlank()
 
               // The chip rows are gone from the browse path on purpose.
               //
@@ -239,15 +246,24 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
               //
               // The chips survive only above search results, where they are
               // genuinely a filter and there is no folder to be inside of.
-              ChipRow(visible = brands.isNotEmpty() && state.searchQuery.isNotBlank()) {
+              // The search chip stands where the breadcrumb does, so swapping
+              // one for the other does not move the grid under a finger.
+              if (searching) {
+                SearchChip(
+                  term = state.activeSearch,
+                  count = state.tiles.size,
+                  onClear = viewModel::clearSearch,
+                )
+              }
+
+              ChipRow(visible = brands.isNotEmpty() && searching) {
                 BrandChips(brands, state.selectedBrandId, viewModel::selectBrand)
               }
 
-              Breadcrumb(
+              if (!searching) Breadcrumb(
                 categoryName = state.categories.firstOrNull { it.id == state.selectedCategoryId }?.name,
                 brandName = brands.firstOrNull { it.id == state.selectedBrandId }?.name,
                 lineName = openLine?.name,
-                searchQuery = state.searchQuery,
                 count = state.tiles.size,
                 pinnable = state.cashier != null,
                 pinned = state.quickTabs.any { it.matches(state) },
@@ -285,11 +301,11 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
               // containing exactly one folder is a tap that buys nothing.
               val openBrand = brands.firstOrNull { it.id == state.selectedBrandId }
               when {
-                state.searchQuery.isNotBlank() || state.selectedLineId != null ->
+                searching || state.selectedLineId != null ->
                   ProductGrid(
                     tiles = state.tiles,
                     parts = nav.parts,
-                    insideLine = state.selectedLineId != null && state.searchQuery.isBlank(),
+                    insideLine = state.selectedLineId != null && !searching,
                     onTap = { viewModel.addToCart(it) },
                     modifier = Modifier.fillMaxSize(),
                     tileWidth = if (compact) 168.dp else Touch.TILE.dp,
@@ -702,16 +718,12 @@ private fun Breadcrumb(
   categoryName: String?,
   brandName: String?,
   lineName: String?,
-  searchQuery: String,
   count: Int,
   pinnable: Boolean,
   pinned: Boolean,
   onPin: () -> Unit,
 ) {
-  val crumbs = when {
-    searchQuery.isNotBlank() -> listOf("Search", "“$searchQuery”")
-    else -> listOfNotNull(categoryName ?: "Everything", brandName, lineName)
-  }
+  val crumbs = listOfNotNull(categoryName ?: "Everything", brandName, lineName)
   Row(
     Modifier.fillMaxWidth().padding(horizontal = Space.M.dp, vertical = Space.XS.dp),
     verticalAlignment = Alignment.CenterVertically,
@@ -741,7 +753,7 @@ private fun Breadcrumb(
       color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Spacer(Modifier.weight(1f))
-    if (pinnable && searchQuery.isBlank()) {
+    if (pinnable) {
       PinButton(pinned = pinned, label = crumbs.last(), onClick = onPin)
     }
   }
