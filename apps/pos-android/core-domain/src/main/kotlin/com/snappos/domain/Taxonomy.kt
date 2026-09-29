@@ -88,8 +88,9 @@ data class NamedItem(
  */
 fun taxonomize(items: List<NamedItem>): Map<String, ProductNameParts> {
   val out = HashMap<String, ProductNameParts>(items.size)
+  val known = knownBrands(items)
 
-  for ((brand, group) in items.groupBy { it.brandName?.trim()?.takeIf { b -> b.isNotEmpty() } }) {
+  for ((brand, group) in items.groupBy { brandOf(it, known) }) {
     // Items that already say where the split goes are taken at their word, and
     // kept out of the inference below -- they would otherwise drag the shared
     // prefix of the whole brand down to nothing.
@@ -131,6 +132,53 @@ fun taxonomize(items: List<NamedItem>): Map<String, ProductNameParts> {
     }
   }
   return out
+}
+
+/**
+ * The brands the catalog actually names, longest first.
+ *
+ * Longest first because "Geek Bar Mate" would otherwise never be reached past
+ * "Geek Bar", and a two word brand must win over its own first word.
+ */
+private fun knownBrands(items: List<NamedItem>): List<String> =
+  items.mapNotNull { it.brandName?.trim()?.takeIf { b -> b.isNotEmpty() } }
+    .distinctBy { it.lowercase() }
+    .sortedByDescending { it.length }
+
+/**
+ * Which brand an item belongs to, believing the catalog first and reading the
+ * name only when the catalog says nothing.
+ *
+ * A POS catalog is typed in by people under time pressure, and the brand field
+ * is the one that gets skipped: in this shop 88 of 152 products carry no brand
+ * at all, including every Foger SwitchPro Kit and four of the five Geek Bar
+ * lines. Grouped by the stored field alone they collapse into one "Other" pile
+ * of eighty-eight, which is precisely the flat list this navigation exists to
+ * replace -- and no amount of model inference rescues it, because the pile has
+ * no shared prefix to find.
+ *
+ * So when the field is empty the name is read, and only when it *begins* with
+ * a brand the catalog already uses elsewhere. That restraint is the point: it
+ * can only ever move an item to a brand that genuinely exists, it matches on
+ * whole words so "Fogerty" never lands under "Foger", and it invents nothing.
+ *
+ * **This changes what the cashier sees, never what is stored.** The brand
+ * field in the catalog stays exactly as typed, because a register quietly
+ * rewriting the back office's data is a far worse problem than a missing tab.
+ * Filling the field in properly is still worth doing; this only means the till
+ * is usable before somebody does.
+ */
+private fun brandOf(item: NamedItem, known: List<String>): String? {
+  item.brandName?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+  val name = item.productName.trim()
+  return known.firstOrNull { brand -> startsWithWord(name, brand) }
+}
+
+/** Whether `name` begins with `prefix` on a whole-word boundary, ignoring case. */
+private fun startsWithWord(name: String, prefix: String): Boolean {
+  if (!name.startsWith(prefix, ignoreCase = true)) return false
+  val next = name.getOrNull(prefix.length) ?: return true
+  return !next.isLetterOrDigit()
 }
 
 /**

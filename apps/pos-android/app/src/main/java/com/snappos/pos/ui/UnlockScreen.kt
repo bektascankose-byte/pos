@@ -126,6 +126,12 @@ fun UnlockScreen(
                 "${rosterDiagnosis.total} are on this register and none can sign " +
                   "in. Reactivate someone on the server."
 
+            // Somebody can sign in, so the list being empty here is this
+            // screen catching a moment -- the seconds before the first sync
+            // lands, most often -- rather than anything a cashier can act on.
+            // Say what is happening and let it resolve itself.
+            RosterDiagnosis.Ready -> "Loading the roster." to "One moment."
+
             // The diagnosis has not arrived yet; do not guess in the meantime.
             null -> "No staff on this register yet." to "Checking why."
           }

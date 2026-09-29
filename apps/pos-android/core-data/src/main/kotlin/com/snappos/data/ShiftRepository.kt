@@ -62,9 +62,13 @@ class ShiftRepository @Inject constructor(
    * till take an hour to explain.
    */
   fun rosterDiagnosis(): Flow<RosterDiagnosis> =
-    combine(employees.countAll(), config.observe()) { total, registerConfig ->
+    combine(employees.countAll(), employees.countActive(), config.observe()) { total, active, registerConfig ->
       when {
         registerConfig == null -> RosterDiagnosis.NotProvisioned
+        // Somebody can sign in. Whatever emptied the list on screen, it was
+        // not the roster, and telling a cashier their colleagues are all
+        // deactivated would send them to fix something that is not broken.
+        active > 0 -> RosterDiagnosis.Ready
         // "0" counts as never, not as blank. Provisioning seeds the cursor
         // with "0" and a completed pull replaces it with the server's
         // watermark, which is a positive bigserial. Treating "0" as a real
@@ -74,6 +78,8 @@ class ShiftRepository @Inject constructor(
           it.isBlank() || it == "0"
         } -> RosterDiagnosis.NeverSynced
         total == 0 -> RosterDiagnosis.ServerListedNobody(registerConfig.storeCode)
+        // Rows exist and none of them is active: the one case where the old
+        // message was actually true.
         else -> RosterDiagnosis.AllInactive(total)
       }
     }
@@ -186,6 +192,17 @@ class ShiftRepository @Inject constructor(
  * than "it says no staff".
  */
 sealed interface RosterDiagnosis {
+  /**
+   * Staff can sign in. Nothing to explain.
+   *
+   * Present because the absence of a complaint has to be a state of its own:
+   * the screen previously chose between four ways of saying "no staff" with
+   * no way of saying "the roster is fine", so any moment the list was briefly
+   * empty -- the seconds between launch and the first sync, most of all --
+   * announced that every member of staff had been deactivated.
+   */
+  data object Ready : RosterDiagnosis
+
   /** No config row: this device has never been claimed by a store. */
   data object NotProvisioned : RosterDiagnosis
 

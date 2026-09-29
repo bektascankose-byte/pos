@@ -58,14 +58,49 @@ because the same split names the line on the customer's receipt.
 A tile inside a model line shows only the flavour. The cart and the receipt
 show the whole thing: `Foger SwitchPro Disposable Pod | Mexico Mango`.
 
+### The brand field nobody fills in
+
+Browsing by brand worked and found almost nothing, because **88 of this shop's
+152 products carry no brand at all** -- every Foger SwitchPro Kit, and four of
+the five Geek Bar lines. Grouped by the stored column they collapsed into one
+"Other" pile of eighty-eight, which is the flat list this navigation exists to
+replace, and no amount of model inference rescues a pile with no shared prefix.
+
+The brand is now read off the product name when the field is empty, and only
+when the name *begins* with a brand the catalog already uses elsewhere. That
+restraint is the point: it can only move an item to a brand that genuinely
+exists, it matches whole words so "Fogerty" never lands under "Foger", a stored
+brand always wins over the name, and it invents nothing. Six tests cover those
+edges.
+
+It changes what the cashier sees and never what is stored. A register quietly
+rewriting the back office's data would be a worse problem than a missing tab;
+the field still wants filling in properly, this only means the till is usable
+first. Other went from 88 items to 6, Foger from 48 to 89 -- and with the Kits
+returned to it, Foger has two model lines, so the submenu the shop asked for
+appears: `Foger > SwitchPro Disposable Pod | SwitchPro KIt 30K > flavour`.
+
+The navigation tree now groups on the taxonomy's answer rather than the raw
+column, so the tree and the labels inside it cannot disagree.
+
+### Fixed
+
+- **"Every member of staff here is inactive" was asserted, never checked.**
+  `RosterDiagnosis` chose between four ways of saying "no staff" from the total
+  row count alone, with no way of saying the roster is fine -- so any moment
+  the list was briefly empty, most of all the seconds between launch and the
+  first sync, told the cashier every colleague had been deactivated and sent
+  them to fix something that was not broken. It now counts the active rows and
+  says so.
+
 ### Known limits
 
 - The idle screen, the customer-facing second display and per-cashier Quick Nav
   are written and compile, but are not yet verified on the hardware.
-- `RosterDiagnosis` reports "every member of staff is inactive" from a total
-  count alone, without checking whether any are active. During the few seconds
-  between launch and the first sync it therefore tells a cashier something
-  alarming and untrue.
+- On the first launch after a data wipe the roster list can stay empty until
+  the app is restarted, while the count behind it is already correct. It
+  self-heals on relaunch and only happens on a fresh install, but the Room flow
+  feeding that list is not reliably picking up the first sync's write.
 
 ## The register, on a till instead of a phone
 

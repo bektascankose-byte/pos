@@ -182,11 +182,22 @@ class CatalogRepository @Inject constructor(
       rows.map { NamedItem(it.id, it.productName, it.variantName, it.brandName) },
     )
 
-    // Grouped on the brand's *name*, not its id, so a catalog that carries the
-    // same brand under two ids -- which happens when a feed is re-imported --
-    // shows one tab rather than two identical ones side by side.
+    // Grouped on the brand the taxonomy resolved, not the raw column, and on
+    // the *name* rather than the id.
+    //
+    // The name, because a catalog that carries one brand under two ids -- which
+    // happens whenever a feed is re-imported -- would otherwise show two
+    // identical tabs side by side.
+    //
+    // The taxonomy's answer, because it is the one the tiles and the receipt
+    // already use, and a tree that disagreed with the labels inside it would
+    // file "FOGER SwitchPro Kit 30K" under Other while the tile above it read
+    // Foger. It also recovers the products whose brand column was never filled
+    // in: in this shop that is 88 of 152, and grouped by the raw column they
+    // collapse into a single "Other" pile of eighty-eight, which is exactly
+    // the flat list this navigation exists to replace.
     val brands = rows
-      .groupBy { it.brandName?.trim()?.takeIf { name -> name.isNotEmpty() } }
+      .groupBy { parts[it.id]?.brand ?: it.brandName?.trim()?.takeIf { name -> name.isNotEmpty() } }
       .map { (brandName, brandRows) ->
         val lines = brandRows
           .groupBy { parts[it.id]?.line?.takeIf { line -> line.isNotBlank() } }

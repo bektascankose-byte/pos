@@ -218,6 +218,16 @@ interface EmployeeDao {
   @Query("SELECT count(*) FROM employees")
   fun countAll(): Flow<Int>
 
+  /**
+   * How many can actually sign in.
+   *
+   * Counted rather than inferred from the roster list being empty. The screen
+   * used to conclude "every member of staff is inactive" from the total alone,
+   * which is a different question and has a different remedy.
+   */
+  @Query("SELECT count(*) FROM employees WHERE status = 'active'")
+  fun countActive(): Flow<Int>
+
   @Query("SELECT * FROM employees WHERE id = :id")
   suspend fun byId(id: String): EmployeeEntity?
 

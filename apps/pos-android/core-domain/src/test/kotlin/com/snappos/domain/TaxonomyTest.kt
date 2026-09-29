@@ -189,6 +189,77 @@ class TaxonomyTest {
     }
   }
 
+  // ---------------------------------------------------------------------
+  // Brand inferred from the name when the catalog leaves the field empty.
+  // This is the shop's real situation: 88 of 152 products carry no brand.
+  // ---------------------------------------------------------------------
+
+  @Test
+  fun `an unbranded product joins the brand its name starts with`() {
+    val items = listOf(
+      item("Foger", "FOGER SwitchPro Disposable Pod Blue Razz Ice"),
+      item(null, "FOGER SwitchPro KIt 30K Watermelon Ice"),
+      item(null, "FOGER SwitchPro KIt 30K White Gummy"),
+    )
+    val parts = taxonomize(items)
+    assertEquals(setOf("Foger"), parts.values.map { it.brand }.toSet())
+  }
+
+  @Test
+  fun `the longest matching brand wins over its own first word`() {
+    val items = listOf(
+      item("Geek Bar", "Geek Bar Pulse X Miami Mint"),
+      item("Geek Bar Mate", "Geek Bar Mate Pod Cool Mint"),
+      item(null, "Geek Bar Mate Kit Blue Razz"),
+    )
+    val inferred = taxonomize(items).values.single { it.fullName.contains("Mate Kit") }
+    assertEquals("Geek Bar Mate", inferred.brand)
+  }
+
+  @Test
+  fun `a name that merely begins with the same letters is not adopted`() {
+    val items = listOf(
+      item("Foger", "FOGER SwitchPro Disposable Pod Blue Razz Ice"),
+      item(null, "Fogerty Signature Blend"),
+    )
+    val stray = taxonomize(items).values.single { it.fullName.startsWith("Fogerty") }
+    assertEquals(null, stray.brand)
+  }
+
+  @Test
+  fun `an unbranded product matching nothing keeps no brand`() {
+    val items = listOf(
+      item("Foger", "FOGER SwitchPro Disposable Pod Blue Razz Ice"),
+      item(null, "SHERPA THC SELTZER 100MG Mango"),
+    )
+    val stray = taxonomize(items).values.single { it.fullName.startsWith("SHERPA") }
+    assertEquals(null, stray.brand)
+  }
+
+  @Test
+  fun `a stored brand is always believed over the name`() {
+    // The name says Foger and the catalog says Geek Bar. The catalog wins:
+    // somebody typed that deliberately and the register does not overrule it.
+    val items = listOf(
+      item("Foger", "FOGER SwitchPro Disposable Pod Blue Razz Ice"),
+      item("Geek Bar", "FOGER co-branded oddity"),
+    )
+    val odd = taxonomize(items).values.single { it.fullName.contains("oddity") }
+    assertEquals("Geek Bar", odd.brand)
+  }
+
+  @Test
+  fun `inferring the brand also recovers the model line beneath it`() {
+    // The point of the whole exercise: once the Kits join Foger, Foger has two
+    // model lines and the cashier gets a submenu instead of one flat list.
+    val items = fogerPodFlavours.map { item("Foger", "FOGER SwitchPro Disposable Pod $it") } +
+      listOf("Watermelon Ice", "White Gummy", "Wildberry Mix", "Banana Ice", "Cherry Cola")
+        .map { item(null, "FOGER SwitchPro KIt 30K $it") }
+    val parts = taxonomize(items)
+    val lines = parts.values.mapNotNull { it.line }.toSet()
+    assertEquals("expected at least two Foger lines, got $lines", true, lines.size >= 2)
+  }
+
   @Test
   fun `empty catalog is empty`() {
     assertEquals(emptyMap<String, ProductNameParts>(), taxonomize(emptyList()))
