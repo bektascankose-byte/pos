@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark icons on the system navigation bar. Split out because the
+         attribute is API 27 and this module builds to API 26; on an older
+         device the bar simply keeps its own icons. -->
+    <style name="Theme.SnapPos" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@color/snappos_canvas</item>
+        <item name="android:navigationBarColor">@color/snappos_canvas</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>

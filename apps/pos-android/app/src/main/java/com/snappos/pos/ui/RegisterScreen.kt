@@ -1,7 +1,8 @@
 package com.snappos.pos.ui
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,19 +15,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -36,16 +39,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.PointOfSale
-import androidx.compose.material.icons.automirrored.filled.ReceiptLong
-import androidx.compose.material.icons.filled.RestartAlt
-import androidx.compose.material.icons.filled.Percent
-import androidx.compose.material.icons.filled.AttachMoney
-import androidx.compose.material.icons.filled.PauseCircle
-import androidx.compose.material.icons.filled.LocalOffer
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,17 +47,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil.compose.AsyncImage
-import com.snappos.data.ResolvedProduct
-import com.snappos.pos.productImageUrl
+import com.snappos.data.QuickTab
+import com.snappos.data.QuickTabKind
 import com.snappos.domain.Cart
 import com.snappos.domain.CartLine
 import com.snappos.domain.Money
@@ -72,12 +69,16 @@ import com.snappos.domain.Money
 /**
  * The register.
  *
- * Layout from architecture section O: categories left, products centre, cart
- * right. Two rules here are load bearing and easy to erode later:
+ * Four columns, left to right: where you are, what you are picking from, what
+ * the customer is buying, what you can do to it. The order is the order a sale
+ * happens in and a cashier's hand travels it once per item.
+ *
+ * Two rules here are load bearing and easy to erode later:
  *
  *  - **Zero animation on the scan-to-cart path.** A row that animates in is a
  *    row the cashier waits for. The budget is 120ms from HID input to rendered
- *    row.
+ *    row. Everything that does move on this screen moves because the cashier
+ *    asked it to.
  *  - **Tabular numerals on every money figure**, so price columns align and a
  *    changing total does not shimmer as digits change width.
  */
@@ -154,17 +155,43 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
   var showLineActions by remember { mutableStateOf(false) }
   var confirmClear by remember { mutableStateOf(false) }
 
+  // Any tap anywhere counts as the counter being busy. Bumping a counter is
+  // cruder than tracking real gestures and it is also the only version that
+  // cannot be forgotten when a new control is added.
+  var touches by remember { mutableStateOf(0) }
+  val idle = rememberIdle(
+    activity = listOf(touches, state.cart.itemCount, state.selectedLineId, state.selectedCategoryId),
+    enabled = state.cart.isEmpty && !showPayment && !showSplitPayment,
+  )
+
   val syncState = when {
     dead > 0 -> SyncState.Error
     pending > 0 -> SyncState.Offline
     else -> SyncState.Online
   }
 
-  Surface(color = MaterialTheme.colorScheme.background) {
+  val nav = state.navigation
+  val brands = nav.brandsIn(state.selectedCategoryId)
+  val lines = state.selectedBrandId?.let { nav.linesIn(it, state.selectedCategoryId) }.orEmpty()
+  val openLine = nav.line(state.selectedLineId)
+
+  Surface(
+    color = MaterialTheme.colorScheme.background,
+    // Observed in the initial pass and never consumed, so this counts taps
+    // without becoming a giant invisible button over the whole register.
+    modifier = Modifier.pointerInput(Unit) {
+      awaitPointerEventScope {
+        while (true) {
+          awaitPointerEvent(PointerEventPass.Initial)
+          touches++
+        }
+      }
+    },
+  ) {
     Column(Modifier.fillMaxSize().safeDrawingPadding()) {
       RegisterHeader(
         cashier = state.cashier?.displayName ?: "",
-        register = "Register 1",
+        storeName = state.storeName.ifBlank { "Register" },
         state = syncState,
         pending = pending,
         onLock = viewModel::lock,
@@ -175,37 +202,92 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
         heldCount = state.heldCarts.size,
         onHeldSales = { showHeldSales = true },
       )
-      HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 
       state.message?.let { message ->
         MessageBar(message, onDismiss = viewModel::dismissMessage)
       }
 
       BoxWithConstraints(Modifier.fillMaxSize()) {
-        val compact = maxWidth < 900.dp
-        val short = maxHeight < 520.dp
+        val compact = maxWidth < 1100.dp
+        val cartWidth = if (compact) 300.dp else 372.dp
+        val railWidth = if (compact) 150.dp else 190.dp
+        val actionWidth = if (compact) 78.dp else 92.dp
 
         Row(Modifier.fillMaxSize()) {
-          CategoryRail(
+          NavRail(
+            quickTabs = state.quickTabs,
             categories = state.categories,
-            selectedId = state.selectedCategoryId,
-            onSelect = viewModel::selectCategory,
-            modifier = Modifier.width(if (compact) 116.dp else 160.dp).fillMaxHeight(),
+            selectedCategoryId = state.selectedCategoryId,
+            hasSelection = state.selectedBrandId != null || state.selectedLineId != null,
+            onQuickTab = viewModel::openQuickTab,
+            onCategory = viewModel::selectCategory,
+            modifier = Modifier.width(railWidth).fillMaxHeight(),
           )
           VerticalLine()
-          Column(Modifier.weight(1f).fillMaxHeight()) {
-            ScanField(onQueryChange = viewModel::onSearch, onSubmit = viewModel::onScan)
-            ProductGrid(
-              tiles = state.tiles,
-              onTap = { viewModel.addToCart(it) },
+
+          Box(Modifier.weight(1f).fillMaxHeight()) {
+            Column(Modifier.fillMaxSize()) {
+              ScanField(onQueryChange = viewModel::onSearch, onSubmit = viewModel::onScan)
+
+              ChipRow(visible = brands.isNotEmpty() && state.searchQuery.isBlank()) {
+                BrandChips(brands, state.selectedBrandId, viewModel::selectBrand)
+              }
+              ChipRow(visible = lines.size > 1 && state.searchQuery.isBlank()) {
+                LineChips(lines, state.selectedLineId, viewModel::selectLine)
+              }
+
+              Breadcrumb(
+                categoryName = state.categories.firstOrNull { it.id == state.selectedCategoryId }?.name,
+                brandName = brands.firstOrNull { it.id == state.selectedBrandId }?.name,
+                lineName = openLine?.name,
+                searchQuery = state.searchQuery,
+                count = state.tiles.size,
+                pinnable = state.cashier != null,
+                pinned = state.quickTabs.any { it.matches(state) },
+                onPin = {
+                  when {
+                    state.selectedLineId != null -> viewModel.toggleQuickTab(
+                      QuickTabKind.Line,
+                      state.selectedLineId,
+                      listOfNotNull(openLine?.brandName, openLine?.name).joinToString(" "),
+                    )
+                    state.selectedBrandId != null -> viewModel.toggleQuickTab(
+                      QuickTabKind.Brand,
+                      state.selectedBrandId,
+                      brands.firstOrNull { it.id == state.selectedBrandId }?.name.orEmpty(),
+                    )
+                    state.selectedCategoryId != null -> viewModel.toggleQuickTab(
+                      QuickTabKind.Category,
+                      state.selectedCategoryId,
+                      state.categories.firstOrNull { it.id == state.selectedCategoryId }?.name.orEmpty(),
+                    )
+                    else -> viewModel.toggleQuickTab(QuickTabKind.Everything, null, "Everything")
+                  }
+                },
+              )
+
+              ProductGrid(
+                tiles = state.tiles,
+                parts = nav.parts,
+                insideLine = state.selectedLineId != null && state.searchQuery.isBlank(),
+                onTap = { viewModel.addToCart(it) },
+                modifier = Modifier.fillMaxSize(),
+                tileWidth = if (compact) 168.dp else Touch.TILE.dp,
+              )
+            }
+
+            IdleOverlay(
+              visible = idle,
+              storeName = state.storeName.ifBlank { "SnapPOS" },
+              heldCount = state.heldCarts.size,
+              onDismiss = { touches++ },
               modifier = Modifier.fillMaxSize(),
-              tileWidth = if (compact) 104.dp else 140.dp,
             )
           }
+
           VerticalLine()
           CartPanel(
             cart = state.cart,
-            compact = short,
             busy = state.busy,
             onRemove = viewModel::removeLine,
             onQuantity = viewModel::setQuantity,
@@ -216,15 +298,21 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
               selectedLineId = it
               showLineActions = true
             },
-            onDiscount = { showDiscount = true },
-            onCartDiscount = { showCartDiscount = true },
-            onOverridePrice = { showOverridePrice = true },
-            onClear = { confirmClear = true },
-            onHold = { showHold = true },
-            onSaleDetails = { showSaleDetails = true },
             customerName = state.attachedCustomer?.displayName,
             onOpenCustomer = { showCustomer = true },
-            modifier = Modifier.width(if (compact) 280.dp else 340.dp).fillMaxHeight(),
+            modifier = Modifier.width(cartWidth).fillMaxHeight(),
+          )
+          VerticalLine()
+          ActionRail(
+            cartEmpty = state.cart.isEmpty,
+            lineSelected = selectedLineId != null,
+            onHold = { showHold = true },
+            onDiscountLine = { showDiscount = true },
+            onDiscountCart = { showCartDiscount = true },
+            onOverride = { showOverridePrice = true },
+            onClear = { confirmClear = true },
+            onDetails = { showSaleDetails = true },
+            modifier = Modifier.width(actionWidth).fillMaxHeight(),
           )
         }
       }
@@ -417,7 +505,7 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
   if (confirmClear) {
     AlertDialog(
       onDismissRequest = { confirmClear = false },
-      shape = RoundedCornerShape(20.dp),
+      shape = RoundedCornerShape(Corner.PANEL.dp),
       title = { Text("Clear this sale?") },
       text = { Text("Every item and discount in the current cart will be removed.") },
       confirmButton = {
@@ -432,12 +520,22 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
   }
 }
 
+/** Does this pinned tab point at wherever the cashier is standing right now? */
+private fun QuickTab.matches(state: RegisterUiState): Boolean = when (kind) {
+  QuickTabKind.Line -> state.selectedLineId != null && target == state.selectedLineId
+  QuickTabKind.Brand -> state.selectedLineId == null && target == state.selectedBrandId
+  QuickTabKind.Category ->
+    state.selectedLineId == null && state.selectedBrandId == null && target == state.selectedCategoryId
+  QuickTabKind.Everything ->
+    state.selectedLineId == null && state.selectedBrandId == null && state.selectedCategoryId == null
+}
+
 enum class SyncState { Online, Syncing, Offline, Error }
 
 @Composable
 private fun RegisterHeader(
   cashier: String,
-  register: String,
+  storeName: String,
   state: SyncState,
   pending: Int,
   onLock: () -> Unit,
@@ -448,41 +546,51 @@ private fun RegisterHeader(
   heldCount: Int,
   onHeldSales: () -> Unit,
 ) {
-  Row(
-    Modifier
-      .fillMaxWidth()
-      .background(MaterialTheme.colorScheme.surface)
-      .padding(horizontal = Space.M.dp, vertical = Space.XS.dp),
-    verticalAlignment = Alignment.CenterVertically,
-  ) {
-    Surface(
-      color = MaterialTheme.colorScheme.primary,
-      shape = RoundedCornerShape(10.dp),
-      modifier = Modifier.size(42.dp),
-    ) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.PointOfSale, "SnapPOS") } }
-    Spacer(Modifier.width(Space.S.dp))
-    Column {
-      Text("SnapPOS", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-      Text(register, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+  Column {
+    Row(
+      Modifier
+        .fillMaxWidth()
+        .background(MaterialTheme.colorScheme.surface)
+        .padding(horizontal = Space.M.dp, vertical = Space.S.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      SnapPosMark(size = 34.dp)
+      Spacer(Modifier.width(Space.S.dp + 2.dp))
+      BrandLockup(caption = storeName)
+      Spacer(Modifier.width(Space.L.dp))
+      SyncPill(state, pending)
+      Spacer(Modifier.weight(1f))
+
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+          .clip(RoundedCornerShape(999.dp))
+          .background(MaterialTheme.colorScheme.surfaceVariant)
+          .padding(horizontal = Space.S.dp + 2.dp, vertical = 6.dp),
+      ) {
+        Icon(
+          Icons.Default.Person,
+          null,
+          tint = MaterialTheme.colorScheme.onSurfaceVariant,
+          modifier = Modifier.size(15.dp),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(cashier, style = MaterialTheme.typography.labelLarge)
+      }
+      Spacer(Modifier.width(Space.S.dp))
+
+      // Only once there is a sale to show one for. A receipt button that opens
+      // nothing teaches a cashier to stop trusting the button.
+      if (hasReceipt) {
+        IconButton(onClick = onReceipt) { Icon(Icons.AutoMirrored.Filled.ReceiptLong, "Last receipt") }
+      }
+      TextButton(onClick = onHeldSales) { Text("Holds${if (heldCount > 0) " ($heldCount)" else ""}") }
+      TextButton(onClick = onRefund) { Text("Returns") }
+      TextButton(onClick = onCloseDrawer) { Text("Close shift") }
+      IconButton(onClick = onLock) { Icon(Icons.Default.Lock, "Lock register") }
     }
-    Spacer(Modifier.width(Space.L.dp))
-    SyncPill(state, pending)
-    Spacer(Modifier.width(Space.M.dp))
-    Text(
-      cashier,
-      style = MaterialTheme.typography.bodyMedium,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    Spacer(Modifier.weight(1f))
-    // Only once there is a sale to show one for. A receipt button that opens
-    // nothing teaches a cashier to stop trusting the button.
-    if (hasReceipt) {
-      IconButton(onClick = onReceipt) { Icon(Icons.AutoMirrored.Filled.ReceiptLong, "Last receipt") }
-    }
-    TextButton(onClick = onHeldSales) { Text("Holds${if (heldCount > 0) " ($heldCount)" else ""}") }
-    TextButton(onClick = onRefund) { Text("Returns") }
-    TextButton(onClick = onCloseDrawer) { Text("Close shift") }
-    IconButton(onClick = onLock) { Icon(Icons.Default.Lock, "Lock register") }
+    // The only decoration on the screen, and it is the brand's own gradient.
+    Box(Modifier.fillMaxWidth().height(2.dp).background(BrandHairline))
   }
 }
 
@@ -500,10 +608,16 @@ private fun SyncPill(state: SyncState, pending: Int) {
     SyncState.Online -> "Online" to MaterialTheme.colorScheme.tertiary
     SyncState.Syncing -> "Syncing" to MaterialTheme.colorScheme.primary
     SyncState.Offline -> "$pending pending" to MaterialTheme.colorScheme.secondary
-    SyncState.Error -> "Sync Error" to MaterialTheme.colorScheme.error
+    SyncState.Error -> "Sync error" to MaterialTheme.colorScheme.error
   }
-  Row(verticalAlignment = Alignment.CenterVertically) {
-    Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+  Row(
+    verticalAlignment = Alignment.CenterVertically,
+    modifier = Modifier
+      .clip(RoundedCornerShape(999.dp))
+      .background(color.copy(alpha = 0.10f))
+      .padding(horizontal = Space.S.dp + 2.dp, vertical = 6.dp),
+  ) {
+    Box(Modifier.size(7.dp).clip(CircleShape).background(color))
     Spacer(Modifier.width(Space.S.dp))
     Text(label, style = MaterialTheme.typography.labelMedium, color = color)
   }
@@ -517,7 +631,7 @@ private fun MessageBar(message: Toast, onDismiss: () -> Unit) {
   Row(
     Modifier
       .fillMaxWidth()
-      .background(foreground.copy(alpha = 0.15f))
+      .background(foreground.copy(alpha = 0.10f))
       .padding(horizontal = Space.M.dp, vertical = Space.S.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
@@ -531,147 +645,59 @@ private fun MessageBar(message: Toast, onDismiss: () -> Unit) {
   }
 }
 
+/**
+ * Where you are, and the control that pins it.
+ *
+ * The pin lives here rather than in a settings screen because the moment a
+ * cashier knows they want a shortcut is the moment they are standing on the
+ * thing they want it to.
+ */
 @Composable
-private fun CategoryRail(
-  categories: List<CategoryTile>,
-  selectedId: String?,
-  onSelect: (String?) -> Unit,
-  modifier: Modifier = Modifier,
+private fun Breadcrumb(
+  categoryName: String?,
+  brandName: String?,
+  lineName: String?,
+  searchQuery: String,
+  count: Int,
+  pinnable: Boolean,
+  pinned: Boolean,
+  onPin: () -> Unit,
 ) {
-  LazyColumn(modifier.background(MaterialTheme.colorScheme.surface).padding(Space.S.dp)) {
-    item { SectionLabel("SHOP") }
-    item { RailRow("All", selectedId == null) { onSelect(null) } }
-    items(categories) { category ->
-      RailRow(category.name, selectedId == category.id) { onSelect(category.id) }
-    }
+  val crumbs = when {
+    searchQuery.isNotBlank() -> listOf("Search", "“$searchQuery”")
+    else -> listOfNotNull(categoryName ?: "Everything", brandName, lineName)
   }
-}
-
-@Composable
-private fun RailRow(label: String, selected: Boolean, onClick: () -> Unit) {
-  Box(
-    Modifier
-      .fillMaxWidth()
-      .height(Touch.MIN.dp)
-      .clip(RoundedCornerShape(12.dp))
-      .background(
-        if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-        else Color.Transparent,
-      )
-      .clickable(onClick = onClick)
-      .padding(horizontal = Space.M.dp),
-    contentAlignment = Alignment.CenterStart,
+  Row(
+    Modifier.fillMaxWidth().padding(horizontal = Space.M.dp, vertical = Space.XS.dp),
+    verticalAlignment = Alignment.CenterVertically,
   ) {
-    Text(
-      label,
-      style = MaterialTheme.typography.bodyLarge,
-      color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
-    )
-  }
-}
-
-@Composable
-private fun ProductGrid(
-  tiles: List<ResolvedProduct>,
-  onTap: (ResolvedProduct) -> Unit,
-  modifier: Modifier = Modifier,
-  tileWidth: Dp = Touch.TILE.dp,
-) {
-  LazyVerticalGrid(
-    columns = GridCells.Adaptive(minSize = tileWidth),
-    modifier = modifier.padding(horizontal = Space.M.dp),
-    horizontalArrangement = Arrangement.spacedBy(Space.S.dp),
-    verticalArrangement = Arrangement.spacedBy(Space.S.dp),
-  ) {
-    items(tiles, key = { it.variantId }) { tile -> ProductTileCard(tile) { onTap(tile) } }
-  }
-}
-
-@Composable
-private fun ProductTileCard(tile: ResolvedProduct, onTap: () -> Unit) {
-  Column(
-    Modifier
-      // Room for a brand line above the name and three lines of name below it.
-      .height(154.dp)
-      .clip(RoundedCornerShape(16.dp))
-      .background(MaterialTheme.colorScheme.surface)
-      .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = .8f), RoundedCornerShape(16.dp))
-      .clickable(onClick = onTap)
-      .padding(Space.S.dp),
-    verticalArrangement = Arrangement.SpaceBetween,
-  ) {
-    Row(verticalAlignment = Alignment.Top) {
-      // Only takes room when there is a photo. An empty placeholder on every
-      // unphotographed tile would shrink the name on all of them to make space
-      // for nothing, and most of a real shop's catalog has no picture.
-      tile.imageUrl?.let { path ->
-        AsyncImage(
-          model = productImageUrl(path),
-          contentDescription = null,
-          contentScale = ContentScale.Fit,
-          modifier = Modifier
-            .size(40.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant),
+    crumbs.forEachIndexed { index, crumb ->
+      if (index > 0) {
+        Icon(
+          Icons.Default.ChevronRight,
+          null,
+          tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+          modifier = Modifier.size(15.dp),
         )
-        Spacer(Modifier.width(Space.S.dp))
       }
-      Column(Modifier.weight(1f)) {
-        // The brand goes above, small, and the name below it has the brand
-        // taken off the front -- otherwise a supplier that names every flavour
-        // as its own product fills the screen with tiles that all read the
-        // same and differ only in the characters a narrow tile cuts off.
-        tile.brandName?.takeIf { it.isNotBlank() }?.let {
-          Text(
-            it.uppercase(),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
-        Text(
-          tile.tileLabel,
-          style = MaterialTheme.typography.bodyMedium,
-          maxLines = 3,
-          overflow = TextOverflow.Ellipsis,
-        )
-        tile.variantName?.let {
-          Text(
-            it,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-        }
-      }
-    }
-    Row(
-      Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.SpaceBetween,
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
       Text(
-        tile.price?.let { "$${it.toMajorString()}" } ?: "No price",
-        style = MaterialTheme.typography.titleLarge.merge(MoneyTextStyle),
-        color = if (tile.price == null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+        crumb,
+        style = MaterialTheme.typography.labelMedium,
+        color = if (index == crumbs.lastIndex) MaterialTheme.colorScheme.onSurface
+        else MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
       )
-      // A bare red "0" beside the price read as "24.990". An out of stock
-      // marker has to be unmistakably not part of the number.
-      if (!tile.inStock) {
-        Text(
-          "OUT",
-          style = MaterialTheme.typography.labelMedium,
-          color = MaterialTheme.colorScheme.error,
-          modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(MaterialTheme.colorScheme.error.copy(alpha = 0.15f))
-            .padding(horizontal = Space.S.dp, vertical = 2.dp),
-        )
-      }
+    }
+    Spacer(Modifier.width(Space.S.dp))
+    Text(
+      "$count",
+      style = MaterialTheme.typography.labelSmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.weight(1f))
+    if (pinnable && searchQuery.isBlank()) {
+      PinButton(pinned = pinned, label = crumbs.last(), onClick = onPin)
     }
   }
 }
@@ -679,7 +705,6 @@ private fun ProductTileCard(tile: ResolvedProduct, onTap: () -> Unit) {
 @Composable
 private fun CartPanel(
   cart: Cart,
-  compact: Boolean,
   busy: Boolean,
   onRemove: (String) -> Unit,
   onQuantity: (String, Int) -> Unit,
@@ -687,120 +712,26 @@ private fun CartPanel(
   onPay: () -> Unit,
   selectedLineId: String?,
   onSelectLine: (String) -> Unit,
-  onDiscount: () -> Unit,
-  onCartDiscount: () -> Unit,
-  onOverridePrice: () -> Unit,
-  onClear: () -> Unit,
-  onHold: () -> Unit,
-  onSaleDetails: () -> Unit,
   customerName: String?,
   onOpenCustomer: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   Column(modifier.background(MaterialTheme.colorScheme.surface)) {
-    Row(
-      Modifier.fillMaxWidth().padding(if (compact) Space.S.dp else Space.M.dp),
-      horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-      Column {
-        Text("Current sale", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-        // The existing subtitle line made clickable rather than a new row
-        // added beside it — the compact layout has no vertical room to spare
-        // for one, the same lesson the header overflow above already taught.
-        Text(
-          "${customerName ?: "Walk-in customer"}  •  ${cart.itemCount} ${if (cart.itemCount == 1) "item" else "items"}",
-          style = MaterialTheme.typography.labelMedium,
-          color = if (customerName != null) MaterialTheme.colorScheme.primary
-          else MaterialTheme.colorScheme.onSurfaceVariant,
-          modifier = Modifier.clickable(onClick = onOpenCustomer),
-        )
-      }
-    }
-    if (compact) {
-      // A row of its own, not squeezed onto the title's line. Four 48dp
-      // minimum touch targets plus the title text do not both fit inside a
-      // 280dp panel: crammed onto one line, the last icon silently clipped
-      // off the edge of the screen with no error and no way to reach it —
-      // "Sale notes and tax exemption" was unreachable on every compact
-      // device before this. Splitting the rows costs one line of height and
-      // guarantees every action stays reachable regardless of how many are
-      // ever added.
-      Row(
-        Modifier.fillMaxWidth().padding(horizontal = Space.S.dp, vertical = Space.XS.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-      ) {
-        IconButton(onClick = onHold, enabled = !cart.isEmpty) {
-          Icon(Icons.Default.PauseCircle, "Hold current sale")
-        }
-        IconButton(onClick = onCartDiscount, enabled = !cart.isEmpty) {
-          Icon(Icons.Default.LocalOffer, "Discount entire sale")
-        }
-        IconButton(onClick = onClear, enabled = !cart.isEmpty) {
-          Icon(Icons.Default.RestartAlt, "Clear sale")
-        }
-        IconButton(onClick = onSaleDetails) {
-          Icon(Icons.Default.MoreVert, "Sale notes and tax exemption")
-        }
-      }
+    Column(Modifier.fillMaxWidth().padding(horizontal = Space.M.dp, vertical = Space.S.dp)) {
+      Text("Current sale", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+      Text(
+        "${customerName ?: "Walk-in customer"}  ·  ${cart.itemCount} ${if (cart.itemCount == 1) "item" else "items"}",
+        style = MaterialTheme.typography.labelMedium,
+        color = if (customerName != null) BrandRed else MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.clickable(onClick = onOpenCustomer),
+      )
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-
-    if (!compact) {
-      Row(
-        Modifier.fillMaxWidth().padding(horizontal = Space.S.dp, vertical = Space.XS.dp),
-        horizontalArrangement = Arrangement.spacedBy(Space.XS.dp),
-      ) {
-        RegisterAction(
-          label = "Hold",
-          icon = { Icon(Icons.Default.PauseCircle, null) },
-          enabled = !cart.isEmpty,
-          onClick = onHold,
-          modifier = Modifier.weight(1f),
-        )
-        RegisterAction(
-          label = "Discount",
-          icon = { Icon(Icons.Default.Percent, null) },
-          enabled = selectedLineId != null,
-          onClick = onDiscount,
-          modifier = Modifier.weight(1f),
-        )
-        RegisterAction(
-          label = "Cart off",
-          icon = { Icon(Icons.Default.LocalOffer, null) },
-          enabled = !cart.isEmpty,
-          onClick = onCartDiscount,
-          modifier = Modifier.weight(1f),
-        )
-        RegisterAction(
-          label = "Override",
-          icon = { Icon(Icons.Default.AttachMoney, null) },
-          enabled = selectedLineId != null,
-          onClick = onOverridePrice,
-          modifier = Modifier.weight(1f),
-        )
-        RegisterAction(
-          label = "Clear",
-          icon = { Icon(Icons.Default.RestartAlt, null) },
-          enabled = !cart.isEmpty,
-          onClick = onClear,
-          modifier = Modifier.weight(1f),
-        )
-        RegisterAction(
-          label = "Details",
-          icon = { Icon(Icons.Default.MoreVert, null) },
-          enabled = true,
-          onClick = onSaleDetails,
-          modifier = Modifier.weight(1f),
-        )
-      }
-      HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-    }
 
     LazyColumn(Modifier.weight(1f).heightIn(min = 88.dp)) {
       items(cart.effectiveLines, key = { it.id }) { line ->
         CartRow(
           line,
-          compact = compact,
           selected = selectedLineId == line.id,
           onSelect = { onSelectLine(line.id) },
           onRemove = { onRemove(line.id) },
@@ -812,145 +743,141 @@ private fun CartPanel(
 
     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
 
-    if (cart.requiresAgeVerification && !compact) {
-      AgeGate(cart.minimumAgeRequired ?: 21, compact, onVerifyAge)
+    if (cart.requiresAgeVerification) {
+      AgeGate(cart.minimumAgeRequired ?: 21, onVerifyAge)
     }
 
-    Column(Modifier.padding(if (compact) Space.S.dp else Space.M.dp)) {
+    Column(Modifier.padding(Space.M.dp)) {
       TotalRow("Subtotal", cart.subtotal)
       if (!cart.discountTotal.isZero) TotalRow("Discount", -cart.discountTotal)
       TotalRow("Tax", cart.taxTotal)
       Spacer(Modifier.height(Space.S.dp))
+      HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+      Spacer(Modifier.height(Space.S.dp))
       TotalRow("TOTAL", cart.total, emphasised = true)
-      Spacer(Modifier.height(if (compact) Space.S.dp else Space.M.dp))
-      Button(
-        onClick = if (cart.requiresAgeVerification) onVerifyAge else onPay,
-        enabled = !cart.isEmpty && !busy,
-        // Never below the 56dp minimum even when squeezed: PAY is the most
-        // pressed control in the building.
-        modifier = Modifier
-          .fillMaxWidth()
-          .height(if (compact) Touch.MIN.dp else Touch.PRIMARY.dp),
-        shape = RoundedCornerShape(14.dp),
-        colors = ButtonDefaults.buttonColors(
-          containerColor = if (cart.requiresAgeVerification) MaterialTheme.colorScheme.secondary
-          else MaterialTheme.colorScheme.primary,
-        ),
-      ) {
-        Text(
-          if (cart.requiresAgeVerification) {
-            "VERIFY ${cart.minimumAgeRequired ?: 21}+ ID"
-          } else {
-            "CHARGE  $${cart.total.toMajorString()}"
-          },
-          style = MaterialTheme.typography.titleLarge.merge(MoneyTextStyle),
-          fontWeight = FontWeight.Bold,
-        )
-      }
+      Spacer(Modifier.height(Space.M.dp))
+      ChargeButton(cart = cart, busy = busy, onPay = onPay, onVerifyAge = onVerifyAge)
     }
+  }
+}
+
+/**
+ * CHARGE.
+ *
+ * The one control on the register painted in the shop's own gradient, because
+ * it is the one moment in a sale that belongs to the shop. Everything else here
+ * is grey on purpose so that this is unmissable from across the counter.
+ */
+@Composable
+private fun ChargeButton(cart: Cart, busy: Boolean, onPay: () -> Unit, onVerifyAge: () -> Unit) {
+  val gated = cart.requiresAgeVerification
+  val enabled = !cart.isEmpty && !busy
+  val fill: Brush = when {
+    !enabled -> Brush.linearGradient(
+      listOf(
+        MaterialTheme.colorScheme.surfaceVariant,
+        MaterialTheme.colorScheme.surfaceVariant,
+      ),
+    )
+    gated -> Brush.linearGradient(listOf(MaterialTheme.colorScheme.secondary, Color(0xFFCE8A0B)))
+    else -> BrandGradient
+  }
+  val label by animateColorAsState(
+    if (enabled) Color.White else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+    tween(Motion.NORMAL, easing = Motion.Ease),
+    label = "charge-label",
+  )
+
+  Box(
+    Modifier
+      .fillMaxWidth()
+      .height(Touch.PRIMARY.dp)
+      .clip(RoundedCornerShape(Corner.CONTROL.dp))
+      .background(fill)
+      .clickable(enabled = enabled, onClick = if (gated) onVerifyAge else onPay),
+    contentAlignment = Alignment.Center,
+  ) {
+    Text(
+      if (gated) "VERIFY ${cart.minimumAgeRequired ?: 21}+ ID" else "CHARGE  $${cart.total.toMajorString()}",
+      style = MaterialTheme.typography.headlineSmall.merge(MoneyTextStyle),
+      fontWeight = FontWeight.Bold,
+      color = label,
+    )
   }
 }
 
 /**
  * The age gate.
  *
- * Blocks PAY rather than warning beside it. A prompt a cashier can tap past
+ * Blocks CHARGE rather than warning beside it. A prompt a cashier can tap past
  * during a rush is not a compliance control, it is a suggestion.
  */
 @Composable
-private fun AgeGate(minimumAge: Int, compact: Boolean, onVerify: () -> Unit) {
-  val background = Modifier
-    .fillMaxWidth()
-    .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f))
-    .padding(if (compact) Space.S.dp else Space.M.dp)
-
-  if (compact) {
-    Row(background, verticalAlignment = Alignment.CenterVertically) {
+private fun AgeGate(minimumAge: Int, onVerify: () -> Unit) {
+  Row(
+    Modifier
+      .fillMaxWidth()
+      .background(MaterialTheme.colorScheme.secondaryContainer)
+      .padding(horizontal = Space.M.dp, vertical = Space.S.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Column(Modifier.weight(1f)) {
       Text(
         "$minimumAge+ ID REQUIRED",
-        style = MaterialTheme.typography.titleLarge,
-        color = MaterialTheme.colorScheme.secondary,
-        modifier = Modifier.weight(1f),
+        style = MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.onSecondaryContainer,
       )
-      Button(
-        onClick = onVerify,
-        modifier = Modifier.height(Touch.MIN.dp),
-        shape = RoundedCornerShape(10.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-      ) { Text("ID CHECKED", fontWeight = FontWeight.SemiBold) }
-    }
-  } else {
-    Column(background) {
       Text(
-        "$minimumAge+ ID REQUIRED",
-        style = MaterialTheme.typography.titleLarge,
-        color = MaterialTheme.colorScheme.secondary,
+        "Check the customer's ID before charging.",
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f),
       )
-      Spacer(Modifier.height(Space.S.dp))
-      Button(
-        onClick = onVerify,
-        modifier = Modifier.fillMaxWidth().height(Touch.MIN.dp),
-        shape = RoundedCornerShape(10.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-      ) {
-        Text("ID CHECKED", fontWeight = FontWeight.SemiBold)
-      }
     }
+    Button(
+      onClick = onVerify,
+      modifier = Modifier.height(Touch.MIN.dp),
+      shape = RoundedCornerShape(Corner.CONTROL.dp),
+      colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
+    ) { Text("ID CHECKED", fontWeight = FontWeight.Bold) }
   }
 }
 
+/**
+ * One cart row.
+ *
+ * The description arrives as "Foger SwitchPro Disposable Pod | Mexico Mango" --
+ * the same string the receipt will carry -- and is drawn with the model quiet
+ * and the flavour bold. Every row in a vape sale shares the first five words,
+ * so setting them all in the same weight makes a cart of six pods look like one
+ * paragraph, and the cashier checking the screen against the counter has to
+ * read to the end of every line to tell them apart.
+ */
 @Composable
 private fun CartRow(
   line: CartLine,
-  compact: Boolean,
   selected: Boolean,
   onSelect: () -> Unit,
   onRemove: () -> Unit,
   onQuantity: (Int) -> Unit,
 ) {
-  if (compact) {
-    Row(
-      Modifier.fillMaxWidth()
-        .height(Touch.MIN.dp)
-        .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .10f) else MaterialTheme.colorScheme.surface)
-        .clickable(onClick = onSelect)
-        .padding(horizontal = Space.S.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Column(Modifier.weight(1f)) {
-        Text(line.description, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(
-          "${line.quantity} × ${line.unitPrice.toMajorString()}",
-          style = MaterialTheme.typography.labelMedium.merge(MoneyTextStyle),
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-      }
-      QuantityButton("−") { onQuantity(line.quantity - 1) }
-      Spacer(Modifier.width(Space.XS.dp))
-      QuantityButton("+") { onQuantity(line.quantity + 1) }
-      Spacer(Modifier.width(Space.S.dp))
-      Text(line.total.toMajorString(), style = MaterialTheme.typography.bodyLarge.merge(MoneyTextStyle))
-      TextButton(onClick = onRemove) { Text("×", style = MaterialTheme.typography.titleLarge) }
-    }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
-    return
-  }
-
   Column(
-    Modifier.fillMaxWidth()
-      .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .10f) else MaterialTheme.colorScheme.surface)
+    Modifier
+      .fillMaxWidth()
+      .background(if (selected) BrandOrange.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surface)
       .clickable(onClick = onSelect)
       .padding(horizontal = Space.M.dp, vertical = Space.S.dp),
   ) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
       Text(
-        line.description,
-        style = MaterialTheme.typography.bodyLarge,
-        maxLines = 1,
+        splitDescription(line.description),
+        style = MaterialTheme.typography.bodyMedium,
+        maxLines = 2,
         overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.weight(1f),
+        modifier = Modifier.weight(1f).padding(top = 6.dp),
       )
-      TextButton(onClick = onRemove) { Text("×", style = MaterialTheme.typography.titleLarge) }
+      TextButton(onClick = onRemove) {
+        Text("×", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+      }
     }
     Row(
       Modifier.fillMaxWidth(),
@@ -967,26 +894,45 @@ private fun CartRow(
         )
         QuantityButton("+") { onQuantity(line.quantity + 1) }
       }
-      Text(line.total.toMajorString(), style = MaterialTheme.typography.bodyLarge.merge(MoneyTextStyle))
+      Text(line.total.toMajorString(), style = MaterialTheme.typography.titleMedium.merge(MoneyTextStyle))
     }
     line.minimumAge?.let { age ->
       Text(
         if (line.ageVerified) "$age+ verified" else "$age+ ID required",
-        style = MaterialTheme.typography.labelMedium,
+        style = MaterialTheme.typography.labelSmall,
         color = if (line.ageVerified) MaterialTheme.colorScheme.tertiary
         else MaterialTheme.colorScheme.secondary,
       )
     }
   }
-  HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+  HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+}
+
+/** "Brand Model | Flavour" with the flavour carrying the weight. */
+@Composable
+private fun splitDescription(description: String): AnnotatedString {
+  // Read outside the builder: its lambda is not a composable scope.
+  val muted = MaterialTheme.colorScheme.onSurfaceVariant
+  return remember(description, muted) {
+    buildAnnotatedString {
+      val pipe = description.indexOf('|')
+      if (pipe <= 0) {
+        withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(description) }
+      } else {
+        withStyle(SpanStyle(color = muted)) { append(description.take(pipe).trimEnd()) }
+        append("  ")
+        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(description.drop(pipe + 1).trim()) }
+      }
+    }
+  }
 }
 
 @Composable
 private fun QuantityButton(label: String, onClick: () -> Unit) {
   Box(
     Modifier
-      .size(36.dp)
-      .clip(RoundedCornerShape(6.dp))
+      .size(38.dp)
+      .clip(RoundedCornerShape(10.dp))
       .background(MaterialTheme.colorScheme.surfaceVariant)
       .clickable(onClick = onClick),
     contentAlignment = Alignment.Center,
@@ -996,39 +942,12 @@ private fun QuantityButton(label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun RegisterAction(
-  label: String,
-  icon: @Composable () -> Unit,
-  enabled: Boolean,
-  onClick: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  OutlinedButton(
-    onClick = onClick,
-    enabled = enabled,
-    modifier = modifier.height(Touch.MIN.dp),
-    shape = RoundedCornerShape(12.dp),
-    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = Space.S.dp),
-  ) {
-    icon()
-    Spacer(Modifier.width(Space.XS.dp))
-    Text(label, maxLines = 1)
-  }
-}
-
-@Composable
 private fun EmptyCart() {
   Column(
     Modifier.fillMaxWidth().padding(horizontal = Space.L.dp, vertical = Space.XL.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
   ) {
-    Icon(
-      Icons.Default.PointOfSale,
-      contentDescription = null,
-      tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .45f),
-      modifier = Modifier.size(42.dp),
-    )
-    Spacer(Modifier.height(Space.S.dp))
+    SnapPosMark(size = 44.dp, modifier = Modifier.padding(bottom = Space.S.dp))
     Text("Ready to ring", style = MaterialTheme.typography.titleLarge)
     Text(
       "Scan a barcode or tap a product",
@@ -1040,10 +959,14 @@ private fun EmptyCart() {
 
 @Composable
 private fun TotalRow(label: String, amount: Money, emphasised: Boolean = false) {
-  Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+  Row(
+    Modifier.fillMaxWidth().padding(vertical = 1.dp),
+    horizontalArrangement = Arrangement.SpaceBetween,
+  ) {
     Text(
       label,
       style = if (emphasised) MaterialTheme.typography.titleLarge else MaterialTheme.typography.bodyMedium,
+      fontWeight = if (emphasised) FontWeight.Bold else FontWeight.Normal,
       color = if (emphasised) MaterialTheme.colorScheme.onSurface
       else MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -1051,18 +974,9 @@ private fun TotalRow(label: String, amount: Money, emphasised: Boolean = false) 
       amount.toMajorString(),
       style = (if (emphasised) MaterialTheme.typography.titleLarge else MaterialTheme.typography.bodyMedium)
         .merge(MoneyTextStyle),
+      fontWeight = if (emphasised) FontWeight.Bold else FontWeight.Medium,
     )
   }
-}
-
-@Composable
-private fun SectionLabel(text: String) {
-  Text(
-    text,
-    style = MaterialTheme.typography.labelMedium,
-    color = MaterialTheme.colorScheme.onSurfaceVariant,
-    modifier = Modifier.padding(horizontal = Space.M.dp, vertical = Space.S.dp),
-  )
 }
 
 @Composable

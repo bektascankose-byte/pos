@@ -239,7 +239,8 @@ class CatalogSync @Inject constructor(
 
     Log.i(
       TAG,
-      "catalog: ${snapshot.variants.size} variants, ${snapshot.barcodes.size} barcodes, " +
+      "catalog: ${snapshot.variants.size} variants (${snapshot.variants.count { it.image_url != null }} with photos), " +
+        "${snapshot.barcodes.size} barcodes, " +
         "${snapshot.employees.size} employees, cursor ${snapshot.cursor}",
     )
 

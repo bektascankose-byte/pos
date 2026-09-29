@@ -3,6 +3,7 @@ package com.snappos.pos
 import android.content.Context
 import coil.ImageLoader
 import coil.disk.DiskCache
+import coil.util.DebugLogger
 import coil.memory.MemoryCache
 import com.snappos.sync.BaseUrlInterceptor
 import dagger.Module
@@ -58,6 +59,10 @@ object ProductImageModule {
       // it lands: a tile that pops a picture in under a cashier's finger is
       // worse than one that quietly gains it.
       .crossfade(false)
+      // Debug builds only: a photo that never arrives is otherwise completely
+      // silent, and "the tile shows a letter" is the same symptom for a null
+      // path, a 401 and a dead host.
+      .apply { if (com.snappos.pos.BuildConfig.DEBUG) logger(DebugLogger()) }
       .build()
 }
 
@@ -72,3 +77,18 @@ object ProductImageModule {
  * the register was pointed somewhere else.
  */
 fun productImageUrl(path: String): String = BaseUrlInterceptor.PLACEHOLDER.trimEnd('/') + path
+
+/**
+ * The same photo at display size rather than thumbnail size.
+ *
+ * The server hands the register `?size=thumb`, which is 256px on its longest
+ * side -- right for the list row it was written for, and soft on a product
+ * tile big enough to recognise a flavour by its packaging across a counter.
+ * `full` is the 1400px copy the back office uploaded.
+ *
+ * Swapped here rather than asked for differently at the source, because the
+ * one path the catalog carries has to keep working for every older register
+ * that is already caching it.
+ */
+fun productImageUrlLarge(path: String): String =
+  productImageUrl(if (path.contains("size=thumb")) path.replace("size=thumb", "size=full") else path)

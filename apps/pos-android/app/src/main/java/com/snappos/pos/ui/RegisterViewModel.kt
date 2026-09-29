@@ -2,7 +2,11 @@ package com.snappos.pos.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.snappos.data.CatalogNavigation
 import com.snappos.data.CatalogRepository
+import com.snappos.data.QuickTab
+import com.snappos.data.QuickTabKind
+import com.snappos.data.QuickTabsStore
 import com.snappos.data.Cashier
 import com.snappos.data.CashRepository
 import com.snappos.data.DevProvisioning
@@ -40,6 +44,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import android.content.Context
@@ -71,6 +78,20 @@ data class RegisterUiState(
   val tiles: List<ResolvedProduct> = emptyList(),
   val categories: List<CategoryTile> = emptyList(),
   val selectedCategoryId: String? = null,
+  /**
+   * The brand and model tree, and the names derived from it.
+   *
+   * Held in the state rather than read where it is needed so that a tile, the
+   * cart row it becomes and the receipt that gets printed all read the same
+   * map. Three call sites each deriving a name is three chances for the
+   * customer's receipt to disagree with the screen they watched.
+   */
+  val navigation: CatalogNavigation = CatalogNavigation(),
+  val selectedBrandId: String? = null,
+  val selectedLineId: String? = null,
+  val quickTabs: List<QuickTab> = emptyList(),
+  val storeName: String = "",
+  val registerCode: String = "",
   val searchQuery: String = "",
   val message: Toast? = null,
   val lastReceiptNo: String? = null,
@@ -114,12 +135,23 @@ data class RegisterUiState(
  * name attached is indistinguishable from a mispriced product after the fact.
  */
 
+/**
+ * How many tiles one grid may hold.
+ *
+ * Raised from 60 when the grid gained model lines: a cashier who drills into
+ * "SwitchPro Disposable Pod" must see all forty-eight flavours, and a cut-off
+ * at sixty that silently hides the last few is worse than a long scroll --
+ * the cashier concludes the shop does not stock it.
+ */
+private const val TILE_LIMIT = 300
+
 data class CategoryTile(val id: String, val name: String)
 
 @HiltViewModel
 class RegisterViewModel @Inject constructor(
   @ApplicationContext private val context: Context,
   private val catalog: CatalogRepository,
+  private val quickTabsStore: QuickTabsStore,
   private val sales: SaleRepository,
   private val provisioning: DevProvisioning,
   private val devSignIn: DevSignIn,
@@ -158,7 +190,8 @@ class RegisterViewModel @Inject constructor(
       // two rows with different ids, which is why DevSeed was deleted.
       provisioning.ensureProvisioned()
       taxRate = catalog.taxRate()
-      loadTiles(null)
+      _state.value = _state.value.copy(storeName = catalog.storeName().orEmpty())
+      refreshTiles()
 
       if (catalog.isEmpty()) {
         _state.value = _state.value.copy(
@@ -171,7 +204,8 @@ class RegisterViewModel @Inject constructor(
         val pulled = catalogSync.pull()
         if (pulled.ok) {
           taxRate = catalog.taxRate()
-          loadTiles(_state.value.selectedCategoryId)
+          _state.value = _state.value.copy(storeName = catalog.storeName().orEmpty())
+          refreshTiles()
           _state.value = _state.value.copy(message = null)
         } else if (catalog.isEmpty()) {
           _state.value = _state.value.copy(
@@ -192,8 +226,32 @@ class RegisterViewModel @Inject constructor(
       }
     }
     viewModelScope.launch {
+      catalog.navigation().collect { nav ->
+        // A selection that no longer exists is dropped rather than left
+        // pointing at nothing: a sync that retires a product line must not
+        // leave the cashier looking at an empty grid with a highlighted tab.
+        val brand = _state.value.selectedBrandId?.takeIf { id -> nav.brands.any { it.id == id } }
+        val line = _state.value.selectedLineId?.takeIf { nav.line(it) != null }
+        _state.value = _state.value.copy(
+          navigation = nav,
+          selectedBrandId = brand,
+          selectedLineId = line,
+        )
+        refreshTiles()
+      }
+    }
+    viewModelScope.launch {
       holds.observe().collect { held ->
         _state.value = _state.value.copy(heldCarts = held)
+      }
+    }
+    viewModelScope.launch {
+      // Re-subscribed whenever the cashier changes, so a shift handover swaps
+      // the front page over with it.
+      _state.map { it.cashier?.userId }.distinctUntilChanged().collectLatest { employeeId ->
+        quickTabsStore.observe(employeeId).collect { tabs ->
+          _state.value = _state.value.copy(quickTabs = tabs)
+        }
       }
     }
     viewModelScope.launch {
@@ -208,17 +266,92 @@ class RegisterViewModel @Inject constructor(
     }
   }
 
-  private suspend fun loadTiles(categoryId: String?) {
-    // Resolved before the state is touched. See onSearch for why.
-    val rows = catalog.byCategory(categoryId, limit = 60)
+  /**
+   * What the grid shows, for whatever is currently selected.
+   *
+   * One function for every route into the grid -- category, brand, model line,
+   * search -- because the four used to be four assignments to `tiles` in four
+   * places, and the narrowest of them quietly won whenever two arrived at once.
+   *
+   * The rows are resolved into a local **before** the state is touched. See
+   * `onSearch` for the sale that was lost learning why.
+   */
+  private suspend fun refreshTiles() {
+    val snapshot = _state.value
+    val rows = when {
+      snapshot.searchQuery.isNotBlank() -> catalog.search(snapshot.searchQuery, TILE_LIMIT)
+      snapshot.selectedLineId != null ->
+        catalog.byIds(snapshot.navigation.line(snapshot.selectedLineId)?.variantIds.orEmpty())
+      snapshot.selectedBrandId != null ->
+        catalog.byIds(
+          snapshot.navigation
+            .linesIn(snapshot.selectedBrandId, snapshot.selectedCategoryId)
+            .flatMap { it.variantIds },
+        )
+      else -> catalog.byCategory(snapshot.selectedCategoryId, limit = TILE_LIMIT)
+    }
     _state.value = _state.value.copy(tiles = rows)
   }
 
   fun selectCategory(categoryId: String?) {
     viewModelScope.launch {
-      _state.value = _state.value.copy(selectedCategoryId = categoryId, searchQuery = "")
-      loadTiles(categoryId)
+      _state.value = _state.value.copy(
+        selectedCategoryId = categoryId,
+        selectedBrandId = null,
+        selectedLineId = null,
+        searchQuery = "",
+      )
+      refreshTiles()
     }
+  }
+
+  /** Tapping the brand that is already open closes it, which is how a chip row should behave. */
+  fun selectBrand(brandId: String?) {
+    viewModelScope.launch {
+      val next = brandId.takeIf { it != _state.value.selectedBrandId }
+      _state.value = _state.value.copy(selectedBrandId = next, selectedLineId = null, searchQuery = "")
+      refreshTiles()
+    }
+  }
+
+  fun selectLine(lineId: String?) {
+    viewModelScope.launch {
+      val next = lineId.takeIf { it != _state.value.selectedLineId }
+      _state.value = _state.value.copy(
+        selectedLineId = next,
+        selectedBrandId = next?.let { id -> _state.value.navigation.brands.firstOrNull { b -> b.lines.any { it.id == id } }?.id }
+          ?: _state.value.selectedBrandId,
+        searchQuery = "",
+      )
+      refreshTiles()
+    }
+  }
+
+  fun openQuickTab(tab: QuickTab) {
+    viewModelScope.launch {
+      _state.value = when (tab.kind) {
+        QuickTabKind.Everything ->
+          _state.value.copy(selectedCategoryId = null, selectedBrandId = null, selectedLineId = null)
+        QuickTabKind.Category ->
+          _state.value.copy(selectedCategoryId = tab.target, selectedBrandId = null, selectedLineId = null)
+        QuickTabKind.Brand ->
+          _state.value.copy(selectedCategoryId = null, selectedBrandId = tab.target, selectedLineId = null)
+        QuickTabKind.Line ->
+          _state.value.copy(
+            selectedCategoryId = null,
+            selectedLineId = tab.target,
+            selectedBrandId = _state.value.navigation.brands
+              .firstOrNull { b -> b.lines.any { it.id == tab.target } }?.id,
+          )
+      }.copy(searchQuery = "")
+      refreshTiles()
+    }
+  }
+
+  /** Pin or unpin wherever the cashier is standing. The same control does both. */
+  fun toggleQuickTab(kind: QuickTabKind, target: String?, label: String) {
+    val employee = _state.value.cashier?.userId ?: return
+    viewModelScope.launch { quickTabsStore.toggle(employee, QuickTab(kind, target, label)) }
   }
 
   /**
@@ -262,9 +395,7 @@ class RegisterViewModel @Inject constructor(
       // scanning as fast as adb can drive it, and 0% with a pause between
       // scans - which is exactly the shape of a bug nobody reproduces at a desk
       // and everybody hits at a counter during a rush.
-      val rows = if (query.isBlank()) catalog.byCategory(_state.value.selectedCategoryId, 60)
-      else catalog.search(query, 60)
-      _state.value = _state.value.copy(tiles = rows)
+      refreshTiles()
     }
   }
 
@@ -283,7 +414,11 @@ class RegisterViewModel @Inject constructor(
       cart = _state.value.cart.addItem(
         id = Uuid7.generate(),
         variantId = product.variantId,
-        description = product.displayName,
+        // The one place a product becomes words a customer will read. It comes
+        // from the shared taxonomy rather than the raw catalog name, so the
+        // receipt says "Foger SwitchPro Disposable Pod | Mexico Mango" and not
+        // the forty character supplier string the screen never showed anyone.
+        description = _state.value.navigation.label(product.variantId, product.displayName),
         sku = product.sku,
         unitPrice = price,
         quantity = product.units,

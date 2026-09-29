@@ -1,11 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Dark by default. Not a stylistic preference: a bright screen behind a
-         counter for a ten hour shift is fatiguing, and a dark surface makes the
-         cart the brightest thing in the room, which is where the cashier's eyes
-         should be. -->
-    <style name="Theme.SnapPos" parent="android:Theme.Material.NoActionBar">
-        <item name="android:statusBarColor">#0B0F14</item>
-        <item name="android:navigationBarColor">#0B0F14</item>
+    <!-- Light, at the shop's request.
+
+         The original note here argued for dark on a ten hour shift, and that
+         argument is real, but it was made about a screen nobody had stood in
+         front of yet. On the counter the dark register read as heavy and
+         crowded next to the till beside it, and the person who works the
+         counter asked for light. They are the one looking at it. Dark is still
+         built and still selectable per device. -->
+    <style name="Theme.SnapPos" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@color/snappos_canvas</item>
+        <item name="android:navigationBarColor">@color/snappos_canvas</item>
+        <item name="android:windowLightStatusBar">true</item>
     </style>
 </resources>

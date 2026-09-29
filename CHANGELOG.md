@@ -2,6 +2,71 @@
 
 Notable changes. Newest first.
 
+## A facelift for the counter, and the photos that never loaded
+
+The register was built and verified on a phone. On the shop's own till -- a
+Modisoft C8, 1920x1080 at 184dpi -- it read as dark, crowded and unfinished,
+and the person who works that counter asked for light. This is that pass,
+together with three bugs the bigger screen and a real catalog exposed.
+
+**EVERY PRODUCT PHOTO HAD ALWAYS FAILED, SILENTLY.** `ProductImageModule`
+builds an `ImageLoader` on the register's own `OkHttpClient` -- the one
+carrying the bearer token and the host rewriting -- and provides it to the
+dependency graph. Coil never asked the graph. `AsyncImage` resolves
+`Coil.imageLoader(context)`, and with no `ImageLoaderFactory` on the
+Application, Coil quietly builds its own default with a stock client: no
+token, and no `BaseUrlInterceptor`, so every request went to the literal
+placeholder host `register.invalid` and failed name resolution.
+
+Nothing reported it, and that is the part worth keeping in mind. Coil folds a
+failed load into its error drawable, which here is the monogram a product
+without a photograph is supposed to show -- so a catalog with photos and a
+catalog whose photos all fail looked *identical* on the grid. The server had
+been serving them correctly the whole time.
+
+`SnapPosApplication` now implements `ImageLoaderFactory`. Tiles also ask for
+`size=full` rather than the 256px `size=thumb` the catalog carries, because a
+tile big enough to recognise a flavour by its packaging deserves better than a
+thumbnail; the swap happens on the register so the one path the catalog sends
+keeps working for older ones.
+
+### Light, and one accent
+
+The palette is cool grey with a single warm accent sampled from the shop's own
+mark, so the header, the CHARGE button and the logo are provably the same
+colour. One accent is the whole discipline: when something on this screen is
+orange it is either the brand or the thing to press. The dark scheme is still
+built and still selectable.
+
+### Actions on the right, where there is room
+
+The sale's actions were an icon row above the cart, and on a real till the row
+ran out of width and clipped -- Hold, Discount and the rest were simply not
+reachable. They are a labelled vertical rail down the right edge now, which is
+also where a right-handed cashier's thumb already is.
+
+### Brand, then model, then flavour
+
+A vape catalog arrives as one flat string per item: forty-eight Foger products
+whose names share the same twenty-nine characters and differ in the last two
+words -- the part a tile cuts off. `Taxonomy` derives brand, model line and
+flavour from those names, believing `variantName` where it exists, splitting on
+a pipe where someone already drew the line, and inferring only where it must.
+It gives up and returns the name unchanged rather than inventing a split,
+because the same split names the line on the customer's receipt.
+
+A tile inside a model line shows only the flavour. The cart and the receipt
+show the whole thing: `Foger SwitchPro Disposable Pod | Mexico Mango`.
+
+### Known limits
+
+- The idle screen, the customer-facing second display and per-cashier Quick Nav
+  are written and compile, but are not yet verified on the hardware.
+- `RosterDiagnosis` reports "every member of staff is inactive" from a total
+  count alone, without checking whether any are active. During the few seconds
+  between launch and the first sync it therefore tells a cashier something
+  alarming and untrue.
+
 ## The register, on a till instead of a phone
 
 Installed on the shop's own hardware for the first time — a Modisoft C8,

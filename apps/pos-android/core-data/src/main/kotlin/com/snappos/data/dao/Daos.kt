@@ -21,6 +21,24 @@ import com.snappos.data.entities.SaleLineEntity
 import com.snappos.data.entities.VariantEntity
 import kotlinx.coroutines.flow.Flow
 
+/**
+ * One row of the navigation index.
+ *
+ * Deliberately thin. The register rebuilds its brand and model tree whenever
+ * the catalog changes, and that needs names and nothing else -- no price, no
+ * stock, no compliance. Pulling whole variant rows for a five thousand SKU shop
+ * to read four columns off each is work the till does not have time for.
+ */
+data class CatalogIndexRow(
+  val id: String,
+  val productName: String,
+  val variantName: String?,
+  val brandId: String?,
+  val brandName: String?,
+  val categoryId: String?,
+  val sortOrder: Int,
+)
+
 /** What a scan resolves to: everything the cart needs, in one row. */
 data class ScannedItem(
   @Embedded val variant: VariantEntity,
@@ -116,6 +134,46 @@ interface CatalogDao {
     """,
   )
   suspend fun byCategory(categoryId: String?, now: Long, limit: Int = 200): List<ScannedItem>
+
+  /**
+   * Everything sellable, names only, as a Flow.
+   *
+   * A Flow rather than a one-shot read so the tree repairs itself the moment a
+   * sync lands. A cashier who watches a new line appear mid-shift without
+   * touching anything trusts the till; one who has to be told to restart it
+   * does not.
+   */
+  @Query(
+    """
+    SELECT id, productName, variantName, brandId, brandName, categoryId, sortOrder
+    FROM variants
+    WHERE status = 'active'
+    ORDER BY brandName, productName, sortOrder
+    """,
+  )
+  fun catalogIndex(): Flow<List<CatalogIndexRow>>
+
+  /**
+   * Full rows for an explicit set of variants, for the tiles of one model line.
+   *
+   * Ordered by the caller's list rather than by name: the navigation tree
+   * already decided what order flavours go in, and re-sorting here would
+   * silently disagree with it.
+   */
+  @Query(
+    """
+    SELECT v.*, '1' AS scanUnits,
+           (SELECT p.priceMinor FROM prices p
+             WHERE p.variantId = v.id AND p.kind = 'regular'
+               AND p.effectiveFrom <= :now
+               AND (p.effectiveTo IS NULL OR p.effectiveTo > :now)
+             ORDER BY p.effectiveFrom DESC LIMIT 1) AS priceMinor,
+           (SELECT i.onHand FROM inventory i WHERE i.variantId = v.id) AS onHand
+    FROM variants v
+    WHERE v.status = 'active' AND v.id IN (:ids)
+    """,
+  )
+  suspend fun byIds(ids: List<String>, now: Long): List<ScannedItem>
 
   @Query("SELECT * FROM categories ORDER BY sortOrder, name")
   fun categories(): Flow<List<CategoryEntity>>

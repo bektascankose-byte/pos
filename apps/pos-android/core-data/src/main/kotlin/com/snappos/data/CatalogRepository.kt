@@ -1,11 +1,16 @@
 package com.snappos.data
 
 import com.snappos.data.dao.CatalogDao
+import com.snappos.data.dao.CatalogIndexRow
 import com.snappos.data.dao.ConfigDao
 import com.snappos.data.dao.ScannedItem
 import com.snappos.data.entities.CategoryEntity
 import com.snappos.domain.Money
+import com.snappos.domain.NamedItem
+import com.snappos.domain.ProductNameParts
+import com.snappos.domain.taxonomize
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -65,6 +70,59 @@ data class ResolvedProduct(
   val inStock: Boolean get() = (onHand?.toDoubleOrNull() ?: 0.0) > 0.0
 }
 
+
+/**
+ * One model line: the thing a cashier taps to see flavours.
+ *
+ * Holds variant ids rather than whole products. The tree is rebuilt on every
+ * catalog change and a shop carries thousands of SKUs; keeping prices and
+ * stock in it would mean re-reading the whole catalog to redraw a menu.
+ */
+data class LineNode(
+  val id: String,
+  val name: String,
+  val brandId: String?,
+  val brandName: String?,
+  val categoryIds: Set<String>,
+  val variantIds: List<String>,
+)
+
+data class BrandNode(
+  val id: String,
+  val name: String,
+  val categoryIds: Set<String>,
+  val lines: List<LineNode>,
+) {
+  val itemCount: Int get() = lines.sumOf { it.variantIds.size }
+}
+
+/**
+ * The register's menu, and the names that go with it.
+ *
+ * `parts` is here rather than on each product because the split can only be
+ * worked out across a whole brand at once -- see `taxonomize`. Every place that
+ * shows a product name reads it from this one map, so a tile, a cart row and a
+ * printed receipt cannot disagree about what something is called.
+ */
+data class CatalogNavigation(
+  val brands: List<BrandNode> = emptyList(),
+  val parts: Map<String, ProductNameParts> = emptyMap(),
+) {
+  fun brandsIn(categoryId: String?): List<BrandNode> =
+    if (categoryId == null) brands else brands.filter { categoryId in it.categoryIds }
+
+  fun linesIn(brandId: String?, categoryId: String?): List<LineNode> =
+    brands.filter { brandId == null || it.id == brandId }
+      .flatMap { it.lines }
+      .filter { categoryId == null || categoryId in it.categoryIds }
+
+  fun line(id: String?): LineNode? =
+    if (id == null) null else brands.firstNotNullOfOrNull { b -> b.lines.firstOrNull { it.id == id } }
+
+  /** The label for a cart row or a receipt, falling back to the raw name. */
+  fun label(variantId: String, fallback: String): String = parts[variantId]?.label ?: fallback
+}
+
 @Singleton
 class CatalogRepository @Inject constructor(
   private val catalog: CatalogDao,
@@ -72,6 +130,26 @@ class CatalogRepository @Inject constructor(
 ) {
 
   fun categories(): Flow<List<CategoryEntity>> = catalog.categories()
+
+  /**
+   * The brand and model tree, rebuilt whenever the catalog changes.
+   *
+   * Derived on device rather than sent down from the server on purpose. The
+   * server has no more structure than the register does -- a supplier feed is
+   * flat names -- so deriving it here means one implementation to be right
+   * about, and a shop that adds a product line sees the menu reshape itself on
+   * the next sync without anyone configuring anything.
+   */
+  fun navigation(): Flow<CatalogNavigation> = catalog.catalogIndex().map(::buildNavigation)
+
+  /** Full rows for one model line's variants, in the order the tree put them. */
+  suspend fun byIds(ids: List<String>): List<ResolvedProduct> {
+    if (ids.isEmpty()) return emptyList()
+    val order = ids.withIndex().associate { (index, id) -> id to index }
+    return catalog.byIds(ids, System.currentTimeMillis())
+      .map { it.toResolved() }
+      .sortedBy { order[it.variantId] ?: Int.MAX_VALUE }
+  }
 
   suspend fun isEmpty(): Boolean = catalog.variantCount() == 0
 
@@ -93,8 +171,55 @@ class CatalogRepository @Inject constructor(
   suspend fun byCategory(categoryId: String?, limit: Int = 200): List<ResolvedProduct> =
     catalog.byCategory(categoryId, System.currentTimeMillis(), limit).map { it.toResolved() }
 
+  /** What this register calls the shop, for the header and the idle screen. */
+  suspend fun storeName(): String? = config.get()?.storeName?.takeIf { it.isNotBlank() }
+
   /** The store's tax rate, as a decimal string. Never a float. */
   suspend fun taxRate(): String = config.get()?.taxRate ?: "0"
+
+  private fun buildNavigation(rows: List<CatalogIndexRow>): CatalogNavigation {
+    val parts = taxonomize(
+      rows.map { NamedItem(it.id, it.productName, it.variantName, it.brandName) },
+    )
+
+    // Grouped on the brand's *name*, not its id, so a catalog that carries the
+    // same brand under two ids -- which happens when a feed is re-imported --
+    // shows one tab rather than two identical ones side by side.
+    val brands = rows
+      .groupBy { it.brandName?.trim()?.takeIf { name -> name.isNotEmpty() } }
+      .map { (brandName, brandRows) ->
+        val lines = brandRows
+          .groupBy { parts[it.id]?.line?.takeIf { line -> line.isNotBlank() } }
+          .map { (lineName, lineRows) ->
+            val sorted = lineRows.sortedWith(
+              compareBy({ it.sortOrder }, { parts[it.id]?.tileLabel ?: it.productName }),
+            )
+            LineNode(
+              id = "${brandName ?: "~"}/${lineName ?: "~"}",
+              // A line with no model of its own is the brand's own shelf, and
+              // "Other" reads better on a tab than an empty string does.
+              name = lineName ?: brandName ?: "Other",
+              brandId = brandRows.firstNotNullOfOrNull { it.brandId },
+              brandName = brandName,
+              categoryIds = lineRows.mapNotNull { it.categoryId }.toSet(),
+              variantIds = sorted.map { it.id },
+            )
+          }
+          .sortedWith(compareByDescending<LineNode> { it.variantIds.size }.thenBy { it.name })
+        BrandNode(
+          id = brandName ?: "~",
+          name = brandName ?: "Other",
+          categoryIds = brandRows.mapNotNull { it.categoryId }.toSet(),
+          lines = lines,
+        )
+      }
+      // Biggest brand first. A cashier's hand goes to the same place all shift,
+      // and the shop's best seller earning the first tab is worth more than
+      // alphabetical order is.
+      .sortedWith(compareByDescending<BrandNode> { it.itemCount }.thenBy { it.name })
+
+    return CatalogNavigation(brands = brands, parts = parts)
+  }
 
   private fun ScannedItem.toResolved() = ResolvedProduct(
     variantId = variant.id,
