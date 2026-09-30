@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Post, Query, Req, Res } from '@nestjs/common';
 import { reorderProductImagesSchema, uploadProductImageSchema } from '@snappos/contracts';
 import { ProductImagesService } from './product-images.service.js';
+import { StockImageService } from './stock-image.service.js';
 import { zodBody } from '../../platform/validation/zod.pipe.js';
 import { CurrentUser } from '../../platform/auth/current-user.decorator.js';
 import { RequirePermissions } from '../../platform/auth/auth.guard.js';
@@ -22,7 +23,36 @@ interface ImageResponse {
 
 @Controller({ path: 'catalog/images', version: '1' })
 export class ProductImagesController {
-  constructor(private readonly images: ProductImagesService) {}
+  constructor(
+    private readonly images: ProductImagesService,
+    private readonly stockImages: StockImageService,
+  ) {}
+
+  /**
+   * Fetch a stock photo the AI found, so the dashboard can scale it and upload
+   * it through the ordinary path.
+   *
+   * Declared before `:id` on purpose: a param route registered first would
+   * swallow "stock" as an image id.
+   *
+   * This is a server making a request to an address that came from a model
+   * reading the open web, so it takes `product.update` -- the right to edit the
+   * catalog, not merely to look at it -- and everything about where that
+   * address may point is decided in `StockImageService`.
+   */
+  @Get('stock')
+  @RequirePermissions('product.update')
+  async stock(@Query('url') url: string, @Res() res: ImageResponse) {
+    if (!url) {
+      throw new ApiException('validation_failed', 'an address is required', { retryable: false });
+    }
+    const { buffer, contentType } = await this.stockImages.fetch(url);
+    res.header('Content-Type', contentType);
+    // Never cached. This is somebody else's image at an address nobody owns;
+    // the copy worth keeping is the one that gets uploaded.
+    res.header('Cache-Control', 'no-store');
+    res.send(buffer);
+  }
 
   /**
    * Serve the bytes.

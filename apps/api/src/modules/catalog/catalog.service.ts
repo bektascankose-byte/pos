@@ -14,11 +14,13 @@ import type {
   SuggestCompliance,
   SuggestVariants,
   RemoveVariantResult,
+  AiProductDraft,
 } from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
 import { AuditService } from '../../platform/audit/audit.service.js';
 import { ApiException } from '../../platform/errors/api-exception.js';
 import { AiService } from '../../platform/ai/ai.service.js';
+import { StockImageService } from './stock-image.service.js';
 
 const NO_STORE = '00000000-0000-0000-0000-000000000000';
 
@@ -28,6 +30,7 @@ export class CatalogService {
     private readonly db: DatabaseService,
     private readonly audit: AuditService,
     private readonly ai: AiService,
+    private readonly stockImages: StockImageService,
   ) {}
 
   /**
@@ -790,6 +793,116 @@ export class CatalogService {
    */
   async suggestVariants(input: SuggestVariants) {
     return this.ai.suggestProductVariants(input);
+  }
+
+  /**
+   * Draft this product's whole entry from the web: its name in the shop's
+   * format, receipt name, website copy, brand, category, tax category, tags,
+   * age restriction and the flavours it is actually sold in.
+   *
+   * A draft. Nothing here writes anything -- the product page fills its fields
+   * with this and the person presses Save, or does not. What this adds on top
+   * of `AiService.fillProduct` is turning the names the model answered with
+   * into this shop's own ids, which is the part that has to be exact: an
+   * unmatched name comes back null and leaves the field for a person, and a
+   * flavour the product already has comes back carrying that variant's id so
+   * the page can show it as already there rather than offering to add it twice.
+   */
+  async aiFillProduct(orgId: string, productId: string, hint?: string | undefined): Promise<AiProductDraft> {
+    const context = await this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query<{ name: string; brand_name: string | null }>(
+        `SELECT p.name, b.name AS brand_name
+         FROM products p LEFT JOIN brands b ON b.id = p.brand_id
+         WHERE p.id = $1`,
+        [productId],
+      );
+      const product = rows[0];
+      if (!product) throw ApiException.notFound('product');
+
+      const [categories, taxCategories, variants] = await Promise.all([
+        tx.query<{ id: string; name: string }>(
+          `SELECT id, name FROM categories WHERE status = 'active' ORDER BY path`,
+        ),
+        tx.query<{ id: string; code: string }>(`SELECT id, code FROM tax_categories ORDER BY code`),
+        tx.query<{ id: string; variant_name: string | null }>(
+          `SELECT id, variant_name FROM product_variants WHERE product_id = $1`,
+          [productId],
+        ),
+      ]);
+      return { product, categories: categories.rows, taxCategories: taxCategories.rows, variants: variants.rows };
+    });
+
+    const draft = await this.ai.fillProduct({
+      product_name: context.product.name,
+      brand_name: context.product.brand_name,
+      categories: context.categories.map((c) => c.name),
+      tax_category_codes: context.taxCategories.map((c) => c.code),
+      ...(hint ? { hint } : {}),
+    });
+
+    const byLowerName = <T extends { id: string }>(rows: T[], key: (row: T) => string) =>
+      new Map(rows.map((row) => [key(row).trim().toLowerCase(), row.id]));
+    const categoryIds = byLowerName(context.categories, (c) => c.name);
+    const taxIds = byLowerName(context.taxCategories, (c) => c.code);
+    const existingVariants = new Map(
+      context.variants
+        .filter((v): v is { id: string; variant_name: string } => Boolean(v.variant_name))
+        .map((v) => [v.variant_name.trim().toLowerCase(), v.id]),
+    );
+
+    // The brand is matched but never created here. Creating one would leave a
+    // brand row behind for a draft the person then discarded; `createProduct`
+    // already creates a brand from free text when they do save.
+    const brandId = draft.brand
+      ? await this.db.withOrg(orgId, async (tx) => {
+          const { rows } = await tx.query<{ id: string }>(
+            `SELECT id FROM brands WHERE lower(name) = lower($1) AND status = 'active' LIMIT 1`,
+            [draft.brand],
+          );
+          return rows[0]?.id ?? null;
+        })
+      : null;
+
+    return {
+      ...draft,
+      brand_id: brandId,
+      category_id: draft.category ? (categoryIds.get(draft.category.trim().toLowerCase()) ?? null) : null,
+      tax_category_id: draft.tax_category_code
+        ? (taxIds.get(draft.tax_category_code.trim().toLowerCase()) ?? null)
+        : null,
+      variants: draft.variants.map((name) => ({
+        name,
+        existing_variant_id: existingVariants.get(name.trim().toLowerCase()) ?? null,
+      })),
+    };
+  }
+
+  /**
+   * Look for a stock photo of each flavour.
+   *
+   * Addresses, not photos: what comes back is offered to the person, who keeps
+   * the ones that show the right thing. The dashboard is what actually fetches
+   * and stores them, because it is already where a product photo gets resized
+   * -- see `ImagePanel`.
+   */
+  async aiFindImages(orgId: string, productId: string, variantNames: string[]) {
+    const product = await this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query<{ name: string; brand_name: string | null }>(
+        `SELECT p.name, b.name AS brand_name
+         FROM products p LEFT JOIN brands b ON b.id = p.brand_id
+         WHERE p.id = $1`,
+        [productId],
+      );
+      if (!rows[0]) throw ApiException.notFound('product');
+      return rows[0];
+    });
+
+    const found = await this.ai.findProductImages({
+      product_name: product.name,
+      brand_name: product.brand_name,
+      variants: variantNames,
+    });
+    return { images: await this.stockImages.resolveAll(found.images) };
   }
 
   async listTaxCategories(orgId: string) {

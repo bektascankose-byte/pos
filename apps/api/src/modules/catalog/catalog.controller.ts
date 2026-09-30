@@ -18,6 +18,8 @@ import {
   updatePriceCategorySchema,
   addPriceCategoryMembersSchema,
   scanPriceCategoryMemberSchema,
+  aiProductFillRequestSchema,
+  aiImageSearchRequestSchema,
 } from '@snappos/contracts';
 import { CatalogService } from './catalog.service.js';
 import { zodBody } from '../../platform/validation/zod.pipe.js';
@@ -210,6 +212,35 @@ export class CatalogController {
   @RequirePermissions('product.update')
   removeVariant(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.catalog.removeVariant(user.orgId, user.userId, id);
+  }
+
+  /**
+   * Draft this product's whole entry from the web. A draft only: the page fills
+   * its fields with it and nothing is written until someone presses Save. Takes
+   * the right to edit the catalog rather than to view it, because it is the
+   * first half of an edit and it spends money at a model provider.
+   */
+  @Post('products/:id/ai-fill')
+  @HttpCode(200)
+  @RequirePermissions('product.update')
+  aiFillProduct(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(zodBody(aiProductFillRequestSchema)) body: ReturnType<typeof aiProductFillRequestSchema.parse>,
+  ) {
+    return this.catalog.aiFillProduct(user.orgId, id, body.hint);
+  }
+
+  /** Addresses of stock photos for these flavours. Nothing is fetched or stored -- see the service. */
+  @Post('products/:id/ai-images')
+  @HttpCode(200)
+  @RequirePermissions('product.update')
+  aiFindImages(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(zodBody(aiImageSearchRequestSchema)) body: ReturnType<typeof aiImageSearchRequestSchema.parse>,
+  ) {
+    return this.catalog.aiFindImages(user.orgId, id, body.variants);
   }
 
   /** A suggestion only -- see `AiService.suggestProductVariants`. Nothing here persists anything. */
