@@ -56,6 +56,9 @@ interface ApplyDraft {
   /** A brand the shop does not have yet, by name. Created on save. */
   brand_name?: string;
   category_id?: string | null;
+  /** A category the shop does not have yet, by name, and where it goes. Created on save. */
+  category_name?: string;
+  category_parent_id?: string;
   tax_category_id?: string | null;
   tags?: string[];
   compliance?: AiProductDraft["compliance"];
@@ -100,6 +103,10 @@ export async function applyAiDraftAction(
     if (draft.brand_id) fields.brand_id = draft.brand_id;
     else if (draft.brand_name?.trim()) fields.brand_name = draft.brand_name.trim().slice(0, 128);
     if (draft.category_id) fields.category_id = draft.category_id;
+    else if (draft.category_name?.trim()) {
+      fields.category_name = draft.category_name.trim().slice(0, 128);
+      if (draft.category_parent_id) fields.category_parent_id = draft.category_parent_id;
+    }
     if (draft.tax_category_id) fields.tax_category_id = draft.tax_category_id;
     if (draft.tags !== undefined) fields.tags = draft.tags;
     if (draft.compliance) fields.compliance = draft.compliance;

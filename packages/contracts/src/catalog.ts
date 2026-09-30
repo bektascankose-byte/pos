@@ -239,6 +239,13 @@ export const aiProductFillSchema = z.object({
   brand: z.string().nullable(),
   /** One of the shop's own category names, exactly, or null. */
   category: z.string().nullable(),
+  /**
+   * A category to add, when none of the shop's own fits: "Energy Drinks".
+   * Only ever set when `category` is null.
+   */
+  new_category: z.string().nullable().optional(),
+  /** The shop category the new one belongs under, exactly as the shop names it, or null for the top level. */
+  new_category_parent: z.string().nullable().optional(),
   /** One of the shop's own tax category codes, exactly, or null. */
   tax_category_code: z.string().nullable(),
   tags: z.array(z.string()),
@@ -261,6 +268,8 @@ export const aiProductFillSchema = z.object({
 export const aiProductDraftSchema = aiProductFillSchema.omit({ variants: true }).extend({
   brand_id: uuid.nullable(),
   category_id: uuid.nullable(),
+  /** `new_category_parent` matched to the shop's category, when there is one. */
+  new_category_parent_id: uuid.nullable().optional(),
   tax_category_id: uuid.nullable(),
   variants: z.array(
     z.object({
@@ -401,6 +410,13 @@ export const updateProductSchema = createProductSchema
      * the catalog, search and the register instead, and can be restored.
      */
     status: entityStatus.optional(),
+    /**
+     * A category by name, found or created: how an AI draft files a product
+     * under a category the shop does not have yet. `category_id` wins when
+     * both are given. `category_parent_id` places a created one.
+     */
+    category_name: z.string().min(1).max(128).optional(),
+    category_parent_id: uuid.optional(),
   });
 
 /** Applied to every product_id in the list, in one transaction. At least one field besides the id list is required -- a bulk update that changes nothing is a mistake, not a no-op worth allowing. */
@@ -444,6 +460,28 @@ export const updateVariantSchema = z.object({
   reorder_quantity: quantity.optional(),
   status: entityStatus.optional(),
 });
+
+/**
+ * The same case costs and price for every flavor of one product, in one go.
+ * Flavors of one line nearly always share them: a case of any Celsius costs
+ * the same and every can sells for the same. Only the fields given change;
+ * each flavor keeps its own value for the rest. A price given is set the way
+ * `setVariantPriceSchema` sets one, flavor by flavor, so each keeps its own
+ * price history.
+ */
+export const applyToAllVariantsSchema = updateVariantSchema
+  .pick({ case_quantity: true, case_cost: true, case_discount: true, case_rebate: true, default_margin: true })
+  .extend({
+    price_minor: moneyNonNegative.optional(),
+    store_id: uuid.nullable().optional(),
+  })
+  .refine(
+    (v) =>
+      [v.case_quantity, v.case_cost, v.case_discount, v.case_rebate, v.default_margin, v.price_minor].some(
+        (field) => field !== undefined,
+      ),
+    { message: 'nothing to apply: give at least one field' },
+  );
 
 /**
  * Changing what a variant sells for. This always inserts a new
@@ -588,6 +626,7 @@ export type CreateProduct = z.infer<typeof createProductSchema>;
 export type UpdateProduct = z.infer<typeof updateProductSchema>;
 export type BulkUpdateProducts = z.infer<typeof bulkUpdateProductsSchema>;
 export type UpdateVariant = z.infer<typeof updateVariantSchema>;
+export type ApplyToAllVariants = z.infer<typeof applyToAllVariantsSchema>;
 export type SetVariantPrice = z.infer<typeof setVariantPriceSchema>;
 export type BulkPriceVariants = z.infer<typeof bulkPriceVariantsSchema>;
 export type CreateVariant = z.infer<typeof createVariantSchema>;

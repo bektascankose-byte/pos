@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query } fr
 import {
   createProductSchema,
   createVariantSchema,
+  applyToAllVariantsSchema,
   productSearchSchema,
   scanSchema,
   createCategorySchema,
@@ -26,6 +27,7 @@ import { zodBody } from '../../platform/validation/zod.pipe.js';
 import { CurrentUser } from '../../platform/auth/current-user.decorator.js';
 import { RequirePermissions } from '../../platform/auth/auth.guard.js';
 import type { AuthenticatedUser } from '../../platform/auth/auth.service.js';
+import { ApiException } from '../../platform/errors/api-exception.js';
 
 @Controller({ path: 'catalog', version: '1' })
 export class CatalogController {
@@ -122,6 +124,18 @@ export class CatalogController {
     return this.catalog.addVariant(user.orgId, user.userId, id, body);
   }
 
+  /** Case costs, margin and price for every flavor at once -- see `CatalogService.applyToAllVariants`. */
+  @Post('products/:id/variants/apply-all')
+  @HttpCode(200)
+  @RequirePermissions('product.update')
+  applyToAllVariants(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body(zodBody(applyToAllVariantsSchema)) body: ReturnType<typeof applyToAllVariantsSchema.parse>,
+  ) {
+    return this.catalog.applyToAllVariants(user.orgId, user.userId, id, body);
+  }
+
   /** Declared ahead of `products/:id` so Nest doesn't match "bulk" as an id. */
   @Patch('products/bulk')
   @RequirePermissions('product.bulk_update')
@@ -139,6 +153,11 @@ export class CatalogController {
     @Param('id') id: string,
     @Body(zodBody(updateProductSchema)) body: ReturnType<typeof updateProductSchema.parse>,
   ) {
+    // A brand or category given by name may be created on the way, and
+    // creating either takes the same right as the endpoints that create them.
+    if ((body.brand_name || body.category_name) && !user.permissions.includes('product.create')) {
+      throw ApiException.forbidden('product.create');
+    }
     return this.catalog.updateProduct(user.orgId, user.userId, id, body);
   }
 

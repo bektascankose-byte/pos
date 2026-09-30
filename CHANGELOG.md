@@ -2,6 +2,31 @@
 
 Notable changes. Newest first.
 
+## Price every flavor at once, and the AI draft fills in the brand
+
+**All flavors on Cost & Margin.** Flavors of one line nearly always share a
+case cost and a shelf price. The Cost & Margin tab now opens on **All
+flavors**: units per case, case cost, discount, rebate, default margin and a
+new retail price set there go to every flavor still on sale. A box keeps what
+the flavors share, says "varies" where they differ, and only what you change
+is saved, so nothing you did not touch is flattened. Each flavor still keeps
+its own price history.
+
+**Default margin starts at 50%.** A flavor with no margin of its own shows
+50%, with the price that would give it, and saves 50% when you save its
+costs. Change it on any flavor that differs.
+
+**The AI draft gives the brand.** It was never actually asked for one, so it
+came back empty. It now always names the maker, and a brand you have never
+stocked is created when you save. When none of your categories fits a
+product, the draft proposes a new one, under the right parent, and saving
+creates that too. Adding either takes the same permission as adding a brand
+or category by hand.
+
+**The item page shows what the draft saved.** The Details and Age
+restriction boxes kept showing the old values after a draft was saved,
+including an empty brand, until the page was reloaded. They now refresh.
+
 ## The AI draft finds every flavor, and flavors read A to Z
 
 **Drafting an item now brings in its whole lineup.** An item named the way

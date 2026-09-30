@@ -70,7 +70,7 @@ export function AiFillPanel({
         short_name: true,
         description: true,
         brand: Boolean(result.data.brand),
-        category: Boolean(result.data.category_id),
+        category: Boolean(result.data.category_id || result.data.new_category),
         tax: Boolean(result.data.tax_category_id),
         tags: result.data.tags.length > 0,
         compliance: true,
@@ -90,7 +90,13 @@ export function AiFillPanel({
         ...(keep.description ? { description: draft.description } : {}),
         ...(keep.brand && draft.brand_id ? { brand_id: draft.brand_id } : {}),
         ...(keep.brand && !draft.brand_id && draft.brand ? { brand_name: draft.brand } : {}),
-        ...(keep.category ? { category_id: draft.category_id } : {}),
+        ...(keep.category && draft.category_id ? { category_id: draft.category_id } : {}),
+        ...(keep.category && !draft.category_id && draft.new_category
+          ? {
+              category_name: draft.new_category,
+              ...(draft.new_category_parent_id ? { category_parent_id: draft.new_category_parent_id } : {}),
+            }
+          : {}),
         ...(keep.tax ? { tax_category_id: draft.tax_category_id } : {}),
         ...(keep.tags ? { tags: draft.tags } : {}),
         ...(keep.compliance ? { compliance: draft.compliance } : {}),
@@ -261,9 +267,15 @@ export function AiFillPanel({
           <DraftRow
             id="category"
             label="Category"
-            value={draft.category ?? "—"}
-            note={!draft.category_id ? "could not be matched to your categories" : undefined}
-            disabled={!draft.category_id}
+            value={draft.category ?? draft.new_category ?? "—"}
+            note={
+              draft.category_id
+                ? undefined
+                : draft.new_category
+                  ? `new category${draft.new_category_parent ? ` under ${draft.new_category_parent}` : ""}, added when you save`
+                  : "could not be matched to your categories"
+            }
+            disabled={!draft.category_id && !draft.new_category}
             keep={keep}
             setKeep={setKeep}
           />

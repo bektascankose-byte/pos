@@ -111,6 +111,7 @@ const PRODUCT_FILL_INSTRUCTIONS = `You are cataloguing one product for a smoke a
 The shop's naming rule, which every product follows without exception:
 
 - name: "{Brand} {Model or line} {Pack size}" -- "Backwoods Cigars 5pk", "Foger Switch Pro 25K", "Geek Bar Pulse 15K". It names the thing a customer picks up. It NEVER contains a flavour, because flavours are the variants underneath it. If the pack size is not part of how the product is sold, leave it off rather than inventing one.
+- brand: the maker's brand as printed on the package -- "Backwoods", "Celsius", "Geek Bar". Always give it for a branded product; the shop may never have stocked the brand before, and that is fine, give it anyway. null only for an unbranded item.
 - short_name: the same item in at most 24 characters, for a receipt -- "Backwoods 5pk".
 - variants: EVERY flavour the product line is currently sold in at this size, flavour names only ("Honey Berry", not "Backwoods Honey Berry 5pk"). Title Case. The full lineup, not a sample: if the brand sells fourteen flavours of this line, list all fourteen. If the product genuinely has one version, return one entry naming it, or an empty array if it has no flavour axis at all.
 - variant_axis: the word for what the variants differ by -- "flavor", "size", "color", "strength".
@@ -122,7 +123,9 @@ description: two or three short paragraphs of plain sales copy for the website. 
 
 tags: 4 to 10 short lowercase search words a customer might type -- "backwoods", "cigars", "honey berry", "natural leaf". No punctuation, no duplicates of the brand in different cases.
 
-category and tax_category_code: you are given the shop's own lists. Copy ONE value from the list exactly as it appears, or null. Never invent a name that is not on the list -- a wrong category is worse than none, because the shop can see an empty field but cannot see a wrong one.
+category and tax_category_code: you are given the shop's own lists. Copy ONE value from the list exactly as it appears, or null. Never put a name that is not on the list in these two fields -- a wrong category is worse than none, because the shop can see an empty field but cannot see a wrong one.
+
+new_category and new_category_parent: only when NONE of the shop's categories is a reasonable home for this product, leave category null and propose one instead. new_category is a short Title Case name a shop would use as a shelf section -- "Energy Drinks", "Rolling Papers", "Hookah Charcoal". new_category_parent is the shop category it belongs under, copied exactly from the list, or null for a top level section. When a listed category fits, use it and leave these two null: a broad fit on the list beats a precise new one.
 
 Age restriction, judged by US law: is_age_restricted, minimum_age (21 for vape/ENDS, tobacco and THC/cannabinoid in most states), id_scan_required (true for those three), regulated_class ("ends", "tobacco", "consumable_hemp", "kratom", or null), contains_nicotine, contains_cannabinoid, is_smokable. An ordinary snack or drink with none of those cues is not age-restricted: say so with false and null rather than guessing a restriction that is not there.
 
@@ -159,6 +162,8 @@ const productFillReplySchema = z.object({
   description: z.string().nullish(),
   brand: z.string().nullish(),
   category: z.string().nullish(),
+  new_category: z.string().nullish(),
+  new_category_parent: z.string().nullish(),
   tax_category_code: z.string().nullish(),
   tags: z.array(z.string()).nullish(),
   variant_axis: z.string().nullish(),
@@ -508,13 +513,30 @@ export class AiService {
       if (tags.length >= 12) break;
     }
 
+    // A category the shop has is always preferred. A proposed new one is
+    // kept only when no listed category was chosen, and one that turns out to
+    // be on the list after all (the model proposing "Drinks" while "Drinks"
+    // exists) is simply that category.
+    let category = pick(draft.category, input.categories);
+    let newCategory: string | null = null;
+    if (!category) {
+      const proposed = nullIfPlaceholder(draft.new_category ?? null)?.slice(0, 128) ?? null;
+      category = pick(proposed, input.categories);
+      if (!category) newCategory = proposed;
+    }
+    const newCategoryParent = newCategory ? pick(draft.new_category_parent, input.categories) : null;
+
     const ageRestricted = draft.is_age_restricted ?? false;
     return {
       name: nullIfPlaceholder(draft.name) ?? input.product_name,
       short_name: (nullIfPlaceholder(draft.short_name) ?? input.product_name).slice(0, 24),
       description: nullIfPlaceholder(draft.description) ?? '',
-      brand: nullIfPlaceholder(draft.brand),
-      category: pick(draft.category, input.categories),
+      // The brand the item already has, when the model gave none: a draft
+      // should never read as if it wants the brand cleared.
+      brand: nullIfPlaceholder(draft.brand) ?? nullIfPlaceholder(input.brand_name ?? null),
+      category,
+      new_category: newCategory,
+      new_category_parent: newCategoryParent,
       tax_category_code: pick(draft.tax_category_code, input.tax_category_codes),
       tags,
       variant_axis: nullIfPlaceholder(draft.variant_axis),

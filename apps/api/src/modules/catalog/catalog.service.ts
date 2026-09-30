@@ -15,6 +15,7 @@ import type {
   SuggestVariants,
   RemoveVariantResult,
   AiProductDraft,
+  ApplyToAllVariants,
 } from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
 import { AuditService } from '../../platform/audit/audit.service.js';
@@ -809,6 +810,68 @@ export class CatalogService {
   }
 
   /**
+   * A category named in free text, found or created. Found by name anywhere
+   * in the tree first, case-insensitive, so "energy drinks" does not become a
+   * second Energy Drinks beside the one the shop already has. Created under
+   * `parentId` when given, at the top level otherwise, with a slug made from
+   * the name.
+   */
+  private async findOrCreateCategoryTx(tx: PoolClient, name: string, parentId: string | null): Promise<string> {
+    const trimmed = name.trim();
+    const { rows: existing } = await tx.query<{ id: string }>(
+      `SELECT id FROM categories WHERE lower(name) = lower($1) AND status = 'active'
+       ORDER BY (parent_id IS NOT DISTINCT FROM $2::uuid) DESC, depth
+       LIMIT 1`,
+      [trimmed, parentId],
+    );
+    if (existing[0]) return existing[0].id;
+
+    const base =
+      trimmed
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60) || 'category';
+
+    let prefix = '';
+    let depth = 0;
+    if (parentId) {
+      const { rows } = await tx.query<{ path: string; depth: number }>(
+        `SELECT path, depth FROM categories WHERE id = $1`,
+        [parentId],
+      );
+      const parent = rows[0];
+      if (!parent) throw ApiException.notFound('parent category');
+      prefix = `${parent.path}.`;
+      depth = parent.depth + 1;
+    }
+
+    // A place already held by another category -- one the shop archived, or
+    // one whose name has no letters to make a slug from -- is never reused:
+    // the new category takes the next free slug instead ("energy-drinks-2"),
+    // so nothing archived comes back and nothing unrelated is merged into.
+    // ON CONFLICT covers two saves racing for the same slug; the loser tries
+    // the next one.
+    for (let attempt = 1; attempt <= 50; attempt += 1) {
+      const slug = attempt === 1 ? base : `${base}-${attempt}`;
+      const { rows } = await tx.query<{ id: string }>(
+        `INSERT INTO categories (org_id, parent_id, slug, name, path, depth, sort_order, is_department)
+         VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, $4, $5,
+                 COALESCE((SELECT max(sort_order) + 1 FROM categories
+                           WHERE parent_id IS NOT DISTINCT FROM $1::uuid), 0),
+                 false)
+         ON CONFLICT (org_id, path) DO NOTHING
+         RETURNING id`,
+        [parentId, slug, trimmed, `${prefix}${slug}`, depth],
+      );
+      if (rows[0]) return rows[0].id;
+    }
+    throw new ApiException('conflict', `could not find a free place for the category "${trimmed}"`, {
+      retryable: false,
+    });
+  }
+
+  /**
    * A suggestion only -- nothing here touches `product_compliance`. The
    * dashboard shows this on the create-product form for a human to review,
    * edit, and submit through the ordinary `createProduct` path.
@@ -880,9 +943,10 @@ export class CatalogService {
         .map((v) => [v.variant_name.trim().toLowerCase(), v.id]),
     );
 
-    // The brand is matched but never created here. Creating one would leave a
-    // brand row behind for a draft the person then discarded; `createProduct`
-    // already creates a brand from free text when they do save.
+    // The brand, and a proposed new category, are matched but never created
+    // here. Creating one would leave a row behind for a draft the person then
+    // discarded; saving the draft sends them by name and `updateProduct`
+    // finds or creates them then.
     const brandId = draft.brand
       ? await this.db.withOrg(orgId, async (tx) => {
           const { rows } = await tx.query<{ id: string }>(
@@ -915,6 +979,9 @@ export class CatalogService {
       ...draft,
       brand_id: brandId,
       category_id: draft.category ? (categoryIds.get(draft.category.trim().toLowerCase()) ?? null) : null,
+      new_category_parent_id: draft.new_category_parent
+        ? (categoryIds.get(draft.new_category_parent.trim().toLowerCase()) ?? null)
+        : null,
       tax_category_id: draft.tax_category_code
         ? (taxIds.get(draft.tax_category_code.trim().toLowerCase()) ?? null)
         : null,
@@ -1067,6 +1134,13 @@ export class CatalogService {
       // An id still wins when both are given.
       const brandId =
         input.brand_id ?? (input.brand_name ? await this.findOrCreateBrandTx(tx, input.brand_name) : null);
+      // Likewise a category by name, which the AI draft proposes when none of
+      // the shop's own is a home for the product.
+      const categoryId =
+        input.category_id ??
+        (input.category_name
+          ? await this.findOrCreateCategoryTx(tx, input.category_name, input.category_parent_id ?? null)
+          : null);
 
       const { rows } = await tx.query(
         `UPDATE products SET
@@ -1089,7 +1163,7 @@ export class CatalogService {
           input.short_name ?? null,
           input.description ?? null,
           brandId,
-          input.category_id ?? null,
+          categoryId,
           input.tax_category_id ?? null,
           input.unit_type ?? null,
           input.tags ?? null,
@@ -1186,62 +1260,103 @@ export class CatalogService {
    * was already on file.
    */
   async updateVariant(orgId: string, actorUserId: string, id: string, input: UpdateVariant) {
+    return this.db.withOrg(orgId, (tx) => this.updateVariantTx(tx, actorUserId, id, input));
+  }
+
+  /**
+   * Apply the same case costs, default margin and price to every flavor of a
+   * product at once, in one transaction: the "All flavors" choice on the Cost
+   * & Margin tab. Each flavor goes through exactly what editing it alone does
+   * (`updateVariantTx`, `closeAndOpenPrice`), so its cost is derived from the
+   * case the same way and its price keeps its own history.
+   *
+   * Every flavor that is not archived. A discontinued flavor keeps what it
+   * had: it is not being sold, and its figures are history.
+   */
+  async applyToAllVariants(
+    orgId: string,
+    actorUserId: string,
+    productId: string,
+    input: ApplyToAllVariants,
+  ) {
     return this.db.withOrg(orgId, async (tx) => {
-      const { rows } = await tx.query(
-        `UPDATE product_variants SET
-           variant_name     = COALESCE($2, variant_name),
-           plu              = COALESCE($13, plu),
-           cost             = CASE
-                                WHEN COALESCE($9, case_cost) IS NOT NULL
-                                  THEN (COALESCE($9, case_cost) - COALESCE($10, case_discount))
-                                       / GREATEST(COALESCE($4, case_quantity), 1)
-                                ELSE COALESCE($3, cost)
-                              END,
-           case_quantity    = COALESCE($4, case_quantity),
-           pack_quantity    = COALESCE($5, pack_quantity),
-           reorder_point    = COALESCE($6, reorder_point),
-           reorder_quantity = COALESCE($7, reorder_quantity),
-           status           = COALESCE($8, status),
-           case_cost        = COALESCE($9, case_cost),
-           case_discount    = COALESCE($10, case_discount),
-           case_rebate      = COALESCE($11, case_rebate),
-           default_margin   = COALESCE($12, default_margin)
-         WHERE id = $1
-         RETURNING id, product_id, sku, plu, variant_name, attributes, is_default, sort_order,
-                   cost::text, average_cost::text, last_cost::text, case_quantity, pack_quantity,
-                   reorder_point::text, reorder_quantity::text, status,
-                   case_cost::text, case_discount::text, case_rebate::text, default_margin::text`,
-        [
-          id,
-          input.variant_name ?? null,
-          input.cost ?? null,
-          input.case_quantity ?? null,
-          input.pack_quantity ?? null,
-          input.reorder_point ?? null,
-          input.reorder_quantity ?? null,
-          input.status ?? null,
-          input.case_cost ?? null,
-          input.case_discount ?? null,
-          input.case_rebate ?? null,
-          input.default_margin ?? null,
-          input.plu ?? null,
-        ],
+      const { rows: variantRows } = await tx.query<{ id: string }>(
+        `SELECT id FROM product_variants
+         WHERE product_id = $1 AND status <> 'archived'
+         ORDER BY sort_order`,
+        [productId],
       );
-      const variant = rows[0];
-      if (!variant) throw ApiException.notFound('variant');
+      if (variantRows.length === 0) throw ApiException.notFound('product');
 
-      await this.audit.record(tx, {
-        action: 'variant.update',
-        entityType: 'product_variant',
-        entityId: id,
-        actorUserId,
-        newValue: input,
-      });
+      const { price_minor: priceMinor, store_id: storeId, ...fields } = input;
+      const hasFields = Object.values(fields).some((value) => value !== undefined);
 
-      if (input.variant_name !== undefined) await this.sortVariantsTx(tx, variant.product_id as string);
-
-      return variant;
+      const variants = [];
+      for (const { id } of variantRows) {
+        if (hasFields) variants.push(await this.updateVariantTx(tx, actorUserId, id, fields));
+        if (priceMinor !== undefined) {
+          await this.closeAndOpenPrice(tx, actorUserId, id, storeId ?? null, priceMinor.toString());
+        }
+      }
+      return { updated: variantRows.length, variants };
     });
+  }
+
+  private async updateVariantTx(tx: PoolClient, actorUserId: string, id: string, input: UpdateVariant) {
+    const { rows } = await tx.query(
+      `UPDATE product_variants SET
+         variant_name     = COALESCE($2, variant_name),
+         plu              = COALESCE($13, plu),
+         cost             = CASE
+                              WHEN COALESCE($9, case_cost) IS NOT NULL
+                                THEN (COALESCE($9, case_cost) - COALESCE($10, case_discount))
+                                     / GREATEST(COALESCE($4, case_quantity), 1)
+                              ELSE COALESCE($3, cost)
+                            END,
+         case_quantity    = COALESCE($4, case_quantity),
+         pack_quantity    = COALESCE($5, pack_quantity),
+         reorder_point    = COALESCE($6, reorder_point),
+         reorder_quantity = COALESCE($7, reorder_quantity),
+         status           = COALESCE($8, status),
+         case_cost        = COALESCE($9, case_cost),
+         case_discount    = COALESCE($10, case_discount),
+         case_rebate      = COALESCE($11, case_rebate),
+         default_margin   = COALESCE($12, default_margin)
+       WHERE id = $1
+       RETURNING id, product_id, sku, plu, variant_name, attributes, is_default, sort_order,
+                 cost::text, average_cost::text, last_cost::text, case_quantity, pack_quantity,
+                 reorder_point::text, reorder_quantity::text, status,
+                 case_cost::text, case_discount::text, case_rebate::text, default_margin::text`,
+      [
+        id,
+        input.variant_name ?? null,
+        input.cost ?? null,
+        input.case_quantity ?? null,
+        input.pack_quantity ?? null,
+        input.reorder_point ?? null,
+        input.reorder_quantity ?? null,
+        input.status ?? null,
+        input.case_cost ?? null,
+        input.case_discount ?? null,
+        input.case_rebate ?? null,
+        input.default_margin ?? null,
+        input.plu ?? null,
+      ],
+    );
+    const variant = rows[0];
+    if (!variant) throw ApiException.notFound('variant');
+
+    await this.audit.record(tx, {
+      action: 'variant.update',
+      entityType: 'product_variant',
+      entityId: id,
+      actorUserId,
+      newValue: input,
+    });
+
+    if (input.variant_name !== undefined) await this.sortVariantsTx(tx, variant.product_id as string);
+
+    return variant;
   }
 
   /**

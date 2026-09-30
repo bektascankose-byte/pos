@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
-import { formatMinor } from "@/lib/money";
+import { formatMinor, parseMajorToMinor } from "@/lib/money";
 import {
   getPriceHistoryAction,
   getVariantMovementsAction,
@@ -11,6 +11,7 @@ import {
   type PriceHistoryRow,
 } from "../actions";
 import { addVariantBarcodeAction, removeVariantBarcodeAction } from "../../items/actions";
+import { applyToAllFlavorsAction } from "./pricing-actions";
 import {
   formatDollars,
   formatPercent,
@@ -23,18 +24,28 @@ import type { LedgerEntry, Variant } from "@snappos/contracts";
 const PURCHASE_REASONS = new Set(["receiving", "vendor_return"]);
 const SALE_REASONS = new Set(["sale", "refund", "online_order"]);
 
+/** The picker's value for "every flavor at once", which no variant id can collide with. */
+export const ALL_FLAVORS = "__all__";
+
 export function VariantPicker({
   variants,
   selectedId,
   onSelect,
+  allOption,
 }: {
   variants: Variant[];
   selectedId: string;
   onSelect: (id: string) => void;
+  /** When given, a first choice that stands for every flavor, labelled with this. */
+  allOption?: string;
 }) {
   // A single-variant product is the common case and needs no picker at all --
   // the tab simply describes the one item.
   if (variants.length < 2) return null;
+  // A to Z, the order the Variants tab lists them in.
+  const ordered = [...variants].sort((a, b) =>
+    (a.variant_name ?? a.sku).localeCompare(b.variant_name ?? b.sku, "en", { sensitivity: "base", numeric: true }),
+  );
   return (
     <label className="mb-4 flex items-center gap-2 text-sm">
       Variant
@@ -43,7 +54,8 @@ export function VariantPicker({
         onChange={(e) => onSelect(e.target.value)}
         className="rounded-md border border-[var(--color-border)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
       >
-        {variants.map((variant) => (
+        {allOption ? <option value={ALL_FLAVORS}>{allOption}</option> : null}
+        {ordered.map((variant) => (
           <option key={variant.id} value={variant.id}>
             {variant.variant_name ?? variant.sku}
           </option>
@@ -248,7 +260,9 @@ export function PricingPanel({
   const [caseDiscount, setCaseDiscount] = useState(variant.case_discount ?? "0");
   const [caseRebate, setCaseRebate] = useState(variant.case_rebate ?? "0");
   const [unitsPerCase, setUnitsPerCase] = useState(String(variant.case_quantity));
-  const [defaultMargin, setDefaultMargin] = useState(variant.default_margin ?? "");
+  // 50% unless this flavor has its own: the shop's usual target, filled in so
+  // the suggested price shows straight away. Change it here if this one differs.
+  const [defaultMargin, setDefaultMargin] = useState(trimDecimal(variant.default_margin) || DEFAULT_MARGIN);
   const [newPrice, setNewPrice] = useState("");
   const [costPending, startCostTransition] = useTransition();
   const [pricePending, startPriceTransition] = useTransition();
@@ -383,6 +397,196 @@ export function PricingPanel({
   );
 }
 
+/** The margin target a flavor starts with when it has none of its own. */
+const DEFAULT_MARGIN = "50";
+
+/** "40.000000" as "40", "0.500000" as "0.5": how a person would type it. */
+function trimDecimal(value: string | null | undefined): string {
+  if (value === null || value === undefined) return "";
+  const text = String(value).trim();
+  return text.includes(".") ? text.replace(/0+$/, "").replace(/\.$/, "") : text;
+}
+
+/** The value every flavor shares, or null when they differ. Compared as numbers, so "40" and "40.000000" agree. */
+function shared(values: (string | number | null | undefined)[]): string | null {
+  const seen = new Set(values.map((value) => trimDecimal(value === undefined || value === null ? null : String(value))));
+  return seen.size === 1 ? [...seen][0]! : null;
+}
+
+/**
+ * Cost & Margin for every flavor at once.
+ *
+ * Flavors of one line nearly always share a case cost and a shelf price, and
+ * setting fourteen of them one by one is how a price gets missed. The boxes
+ * start with what every flavor already has in common and say "varies" where
+ * they differ. Only what is changed is applied, so a box left as it was, or
+ * left blank, keeps each flavor's own value.
+ */
+export function AllFlavorsPricingPanel({
+  productId,
+  storeId,
+  variants,
+  onApplied,
+}: {
+  productId: string;
+  storeId: string | null;
+  variants: Variant[];
+  onApplied: () => Promise<void>;
+}) {
+  // What every flavor has on file now, "" where they differ or have nothing.
+  // A box is sent only when it no longer reads this.
+  const initial = {
+    case_quantity: shared(variants.map((v) => v.case_quantity)) ?? "",
+    case_cost: shared(variants.map((v) => v.case_cost)) ?? "",
+    case_discount: shared(variants.map((v) => v.case_discount)) ?? "",
+    case_rebate: shared(variants.map((v) => v.case_rebate)) ?? "",
+    default_margin: shared(variants.map((v) => v.default_margin)) ?? "",
+  };
+  // The margin box starts at 50% when no flavor has one yet, and that 50% is
+  // saved with the rest when you apply. Where flavors already differ it
+  // starts empty, so applying cannot flatten margins nobody touched.
+  const noMarginYet = variants.every((v) => !trimDecimal(v.default_margin));
+  const [values, setValues] = useState({ ...initial, default_margin: noMarginYet ? DEFAULT_MARGIN : initial.default_margin });
+  const [newPrice, setNewPrice] = useState("");
+  const [pending, startTransition] = useTransition();
+  const [message, setMessage] = useState<string | null>(null);
+
+  const currentPrice = shared(variants.map((v) => (v.price_minor == null ? null : String(v.price_minor))));
+  const sharedCost = shared(variants.map((v) => v.cost));
+  const set = (key: keyof typeof initial) => (value: string) => setValues((prev) => ({ ...prev, [key]: value }));
+  const varies = (key: keyof typeof initial) =>
+    shared(variants.map((v) => v[key] as string | number | null)) === null ? "varies" : undefined;
+
+  const typedMinor = newPrice.trim() ? parseMajorToMinor(newPrice) : null;
+  const summary = marginSummary({
+    caseCost: values.case_cost,
+    caseDiscount: values.case_discount,
+    caseRebate: values.case_rebate,
+    unitsPerCase: values.case_quantity,
+    unitCost: sharedCost,
+    priceMinor: typedMinor ?? currentPrice,
+  });
+  const suggested = retailForMargin(summary.unitCost, values.default_margin);
+
+  const run = (fields: Parameters<typeof applyToAllFlavorsAction>[2], done: string, afterwards?: () => void) => {
+    setMessage(null);
+    startTransition(async () => {
+      const outcome = await applyToAllFlavorsAction(productId, storeId, fields);
+      if (outcome.ok) {
+        afterwards?.();
+        setMessage(`${done} for all ${outcome.data.updated} flavors.`);
+        await onApplied();
+      } else {
+        setMessage(outcome.error);
+      }
+    });
+  };
+
+  const applyCosts = () => {
+    // Only what changed. Re-sending an untouched box would stamp the shared
+    // value over nothing, and a box that says "varies" was never a value.
+    const changed = Object.fromEntries(
+      (Object.keys(initial) as (keyof typeof initial)[])
+        .filter((key) => values[key].trim() !== "" && values[key].trim() !== initial[key])
+        .map((key) => [key, values[key].trim()]),
+    );
+    run(changed, "Costs saved");
+  };
+
+  return (
+    <section className="flex flex-col gap-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+      <p className="text-sm text-[var(--color-text-muted)]">
+        What you change here goes to all {variants.length} flavors. A box you leave as it is keeps
+        each flavor&apos;s own value.
+      </p>
+      {message ? <p className="text-sm text-[var(--color-text-muted)]">{message}</p> : null}
+
+      <form
+        className="flex flex-col gap-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          applyCosts();
+        }}
+      >
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <MoneyField label="Units / case" name="case_quantity" value={values.case_quantity} onChange={set("case_quantity")} placeholder={varies("case_quantity")} />
+          <MoneyField label="Case cost" name="case_cost" value={values.case_cost} onChange={set("case_cost")} placeholder={varies("case_cost") ?? "40.00"} />
+          <MoneyField label="Case discount" name="case_discount" value={values.case_discount} onChange={set("case_discount")} placeholder={varies("case_discount")} />
+          <MoneyField label="Case rebate" name="case_rebate" value={values.case_rebate} onChange={set("case_rebate")} placeholder={varies("case_rebate")} />
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 rounded-md bg-[var(--color-bg)] p-3 text-sm sm:grid-cols-4">
+          <Readout
+            label="Cost / unit"
+            value={formatDollars(summary.unitCost)}
+            note={
+              summary.isDerived
+                ? "from the case"
+                : sharedCost === null
+                  ? "varies"
+                  : summary.unitCost === null
+                    ? "not set yet"
+                    : "entered directly"
+            }
+          />
+          <Readout
+            label="Unit retail"
+            value={formatDollars(summary.retail)}
+            note={typedMinor === null && currentPrice === null ? "varies by flavor" : undefined}
+          />
+          <Readout label="Margin" value={formatPercent(summary.margin)} />
+          <Readout label="After rebate" value={formatPercent(summary.marginAfterRebate)} />
+        </div>
+
+        {summary.belowCost ? (
+          <p className="text-sm font-medium text-[var(--color-error)]">⚠ This is selling below what it costs.</p>
+        ) : null}
+
+        <div className="flex flex-wrap items-end gap-4">
+          <MoneyField label="Default margin %" name="default_margin" value={values.default_margin} onChange={set("default_margin")} placeholder={varies("default_margin")} />
+          {suggested !== null ? (
+            <p className="pb-2 text-sm text-[var(--color-text-muted)]">
+              At that margin they would sell for{" "}
+              <button
+                type="button"
+                onClick={() => setNewPrice(suggested.toFixed(2))}
+                className="font-medium text-[var(--color-accent)] underline"
+              >
+                {formatDollars(suggested)}
+              </button>
+            </p>
+          ) : null}
+        </div>
+
+        <button
+          type="submit"
+          disabled={pending}
+          className="self-start rounded-md bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-[var(--color-accent-contrast)] disabled:opacity-60"
+        >
+          {pending ? "Saving..." : `Save costs for all ${variants.length} flavors`}
+        </button>
+      </form>
+
+      <form
+        className="flex flex-wrap items-end gap-3 border-t border-[var(--color-border)] pt-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          run({ price: newPrice }, "Price updated", () => setNewPrice(""));
+        }}
+      >
+        <MoneyField label="New retail price" name="price" value={newPrice} onChange={setNewPrice} placeholder="24.99" />
+        <button
+          type="submit"
+          disabled={pending}
+          className="rounded-md border border-[var(--color-border)] px-4 py-2 text-sm disabled:opacity-60"
+        >
+          {pending ? "Updating..." : `Update price for all ${variants.length} flavors`}
+        </button>
+      </form>
+    </section>
+  );
+}
+
 function MoneyField({
   label,
   name,
@@ -394,7 +598,7 @@ function MoneyField({
   name: string;
   value: string;
   onChange: (value: string) => void;
-  placeholder?: string;
+  placeholder?: string | undefined;
 }) {
   return (
     <label className="flex w-32 flex-col gap-1 text-xs text-[var(--color-text-muted)]">
@@ -410,7 +614,7 @@ function MoneyField({
   );
 }
 
-function Readout({ label, value, note }: { label: string; value: string; note?: string }) {
+function Readout({ label, value, note }: { label: string; value: string; note?: string | undefined }) {
   return (
     <div>
       <div className="text-xs text-[var(--color-text-muted)]">{label}</div>

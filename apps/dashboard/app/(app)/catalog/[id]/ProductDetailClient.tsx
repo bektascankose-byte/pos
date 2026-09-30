@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { formatMinor } from "@/lib/money";
 import { Tabs } from "../_components/Tabs";
 import {
@@ -13,6 +14,8 @@ import {
   updateComplianceAction,
 } from "../actions";
 import {
+  ALL_FLAVORS,
+  AllFlavorsPricingPanel,
   CodesPanel,
   MovementsPanel,
   PriceHistoryPanel,
@@ -43,11 +46,24 @@ interface Props {
 }
 
 export function ProductDetailClient({ productId, storeId, initialProduct, brands, categories, taxCategories }: Props) {
+  const router = useRouter();
   const [product, setProduct] = useState(initialProduct);
   const [variants, setVariants] = useState<Variant[]>(initialProduct.variants ?? []);
   const [selectedVariantId, setSelectedVariantId] = useState(initialProduct.variants?.[0]?.id ?? "");
+  // Cost & Margin opens on "All flavors" for an item with several.
+  const [pricingAll, setPricingAll] = useState(true);
 
   const selected = variants.find((variant) => variant.id === selectedVariantId) ?? variants[0];
+  // What "All flavors" covers: every flavor still sold. A discontinued one
+  // keeps its figures as history, the same rule the API applies.
+  const onSale = variants.filter((variant) => variant.status !== "archived");
+  // Only worth offering when at least two flavors are on sale.
+  const showAllFlavors = pricingAll && onSale.length > 1;
+  // Bumped when an AI draft is saved: the details and age forms take their
+  // values once, when they first appear, so they start again to show it.
+  // Not tied to every product save, which would throw away what someone is
+  // typing in one form when they save the other.
+  const [draftSaves, setDraftSaves] = useState(0);
 
   const reloadProduct = async () => {
     const outcome = await getProductAction(productId, storeId);
@@ -79,6 +95,33 @@ export function ProductDetailClient({ productId, storeId, initialProduct, brands
     ),
   });
 
+  /** One flavor's Cost & Margin. Keyed by flavor, so switching flavors starts from that flavor's own figures. */
+  const pricingPanel = (variant: Variant) => (
+    <PricingPanel
+      key={variant.id}
+      productId={productId}
+      storeId={storeId}
+      variant={variant}
+      onVariantSaved={(updated) =>
+        setVariants((prev) => prev.map((v) => (v.id === updated.id ? { ...v, ...updated } : v)))
+      }
+      onPriceSaved={(priceMinor) =>
+        setVariants((prev) =>
+          prev.map((v) =>
+            v.id === variant.id
+              ? // `price_minor` types as the branded `Money` because
+                // `variantSchema` is shared with request validation,
+                // but on the wire it is the plain digit string the API
+                // sends -- the same gap bridged with `String()`
+                // wherever this response is displayed.
+                { ...v, price_minor: priceMinor as unknown as Variant["price_minor"] }
+              : v,
+          ),
+        )
+      }
+    />
+  );
+
   return (
     <div className="flex max-w-5xl flex-col gap-6">
       <div className="flex items-start justify-between gap-4">
@@ -103,16 +146,27 @@ export function ProductDetailClient({ productId, storeId, initialProduct, brands
                   productId={productId}
                   product={product}
                   variants={variants}
-                  onApplied={reloadProduct}
+                  onApplied={async () => {
+                    await reloadProduct();
+                    setDraftSaves((count) => count + 1);
+                    // Reloads the brand and category lists too, so one the
+                    // draft just created shows as chosen below.
+                    router.refresh();
+                  }}
                 />
                 <DetailsPanel
                   product={product}
                   brands={brands}
                   categories={categories}
                   taxCategories={taxCategories}
+                  formKey={`${draftSaves}:${brands.length}:${categories.length}`}
                   onSaved={(updated) => setProduct(updated)}
                 />
-                <CompliancePanel product={product} onSaved={(updated) => setProduct(updated)} />
+                <CompliancePanel
+                  product={product}
+                  formKey={String(draftSaves)}
+                  onSaved={(updated) => setProduct(updated)}
+                />
                 <ImagePanel
                   productId={productId}
                   variants={variants}
@@ -144,30 +198,37 @@ export function ProductDetailClient({ productId, storeId, initialProduct, brands
             label: "Sell Online",
             content: <SellOnlinePanel productId={productId} storeId={storeId} />,
           },
-          variantTab("pricing", "Cost & Margin", (variant) => (
-            <PricingPanel
-              productId={productId}
-              storeId={storeId}
-              variant={variant}
-              onVariantSaved={(updated) =>
-                setVariants((prev) => prev.map((v) => (v.id === updated.id ? { ...v, ...updated } : v)))
-              }
-              onPriceSaved={(priceMinor) =>
-                setVariants((prev) =>
-                  prev.map((v) =>
-                    v.id === variant.id
-                      ? // `price_minor` types as the branded `Money` because
-                        // `variantSchema` is shared with request validation,
-                        // but on the wire it is the plain digit string the API
-                        // sends -- the same gap bridged with `String()`
-                        // wherever this response is displayed.
-                        { ...v, price_minor: priceMinor as unknown as Variant["price_minor"] }
-                      : v,
-                  ),
-                )
-              }
-            />
-          )),
+          {
+            // Its own picker, with "All flavors" on top and chosen first:
+            // flavors of one line nearly always share a case cost and a price.
+            id: "pricing",
+            label: "Cost & Margin",
+            content: selected ? (
+              <div>
+                <VariantPicker
+                  variants={variants}
+                  selectedId={showAllFlavors ? ALL_FLAVORS : selected.id}
+                  {...(onSale.length > 1 ? { allOption: `All flavors (${onSale.length})` } : {})}
+                  onSelect={(id) => {
+                    setPricingAll(id === ALL_FLAVORS);
+                    if (id !== ALL_FLAVORS) setSelectedVariantId(id);
+                  }}
+                />
+                {showAllFlavors ? (
+                  <AllFlavorsPricingPanel
+                    productId={productId}
+                    storeId={storeId}
+                    variants={onSale}
+                    onApplied={reloadProduct}
+                  />
+                ) : (
+                  pricingPanel(selected)
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-[var(--color-text-muted)]">This product has no variants yet.</p>
+            ),
+          },
           variantTab("price-history", "Price History", (variant) => (
             <PriceHistoryPanel variantId={variant.id} />
           )),
@@ -229,9 +290,11 @@ function ArchiveButton({
  */
 function CompliancePanel({
   product,
+  formKey,
   onSaved,
 }: {
   product: Product;
+  formKey: string;
   onSaved: (updated: Product) => void;
 }) {
   const [pending, startTransition] = useTransition();
@@ -245,7 +308,9 @@ function CompliancePanel({
         What the register enforces before this can be sold.
       </p>
       {message ? <p className="mb-2 text-xs text-[var(--color-text-muted)]">{message}</p> : null}
+      {/* Starts again after an AI draft is saved, so an age rule it set shows here at once. */}
       <form
+        key={formKey}
         className="flex flex-col gap-4"
         onSubmit={(e) => {
           e.preventDefault();
@@ -315,12 +380,14 @@ function DetailsPanel({
   brands,
   categories,
   taxCategories,
+  formKey,
   onSaved,
 }: {
   product: Product;
   brands: Brand[];
   categories: Category[];
   taxCategories: TaxCategory[];
+  formKey: string;
   onSaved: (updated: Product) => void;
 }) {
   const [pending, startTransition] = useTransition();
@@ -335,7 +402,11 @@ function DetailsPanel({
           {message.text}
         </p>
       ) : null}
+      {/* The fields take their values once, when they first appear. After an
+          AI draft is saved, or a brand it created arrives in the list, the
+          form starts again to show them: see `draftSaves`. */}
       <form
+        key={formKey}
         className="flex flex-col gap-4"
         onSubmit={(e) => {
           e.preventDefault();
