@@ -400,15 +400,23 @@ function VariantsPanel({
   onChanged: () => Promise<void>;
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
+  // A to Z by flavor, so one is found by its name. A flavor with no name yet
+  // comes first: it is the one that needs something done to it.
+  const ordered = [...variants].sort((a, b) => {
+    const nameA = a.variant_name?.trim() ?? "";
+    const nameB = b.variant_name?.trim() ?? "";
+    if (!nameA !== !nameB) return nameA ? 1 : -1;
+    return (nameA || a.sku).localeCompare(nameB || b.sku, "en", { sensitivity: "base", numeric: true });
+  });
 
   return (
     <div className="flex flex-col gap-4">
       <p className="text-sm text-[var(--color-text-muted)]">
-        The flavors this item is sold in. Each one carries its own photo, its own barcode, and the
-        carton code that rings up a case of it — a cashier scans one of these, never the item above.
+        The flavors this item is sold in, A to Z. Each one carries its own photo, its own barcode and
+        the carton code that rings up a case of it. A cashier scans one of these, never the item above.
       </p>
 
-      {variants.map((variant) => (
+      {ordered.map((variant) => (
         <VariantRow
           key={variant.id}
           productId={productId}
@@ -524,12 +532,7 @@ function VariantRow({
           {/* The flavor as the register shows it under the product's folder.
               Imported items often have none: the flavor sat in the product
               name, one item per flavor. */}
-          <Field
-            label="Flavor name"
-            name="variant_name"
-            defaultValue={variant.variant_name ?? ""}
-            placeholder="Orange"
-          />
+          <Field label="Flavor name" name="variant_name" defaultValue={variant.variant_name ?? ""} />
           <div className="grid grid-cols-2 gap-3">
             <Field label="PLU (keypad code)" name="plu" defaultValue={variant.plu ?? ""} />
             <Field label="Cost" name="cost" defaultValue={variant.cost} />

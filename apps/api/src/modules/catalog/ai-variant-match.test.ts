@@ -41,6 +41,17 @@ test('nothing is guessed when there is more than one unnamed variant', () => {
   assert.equal(match, null);
 });
 
+test('the flavor the AI read from the name decides when the name alone does not', () => {
+  const found = flavors('Kiwi Guava', 'Orange', 'Grapefruit');
+  const match = matchUnnamedVariant('Celsius Sprk Org 12Oz', found, one, 1, 'Orange');
+  assert.equal(match?.flavor.name, 'Orange');
+});
+
+test('a flavor the AI read that is not among the flavors it found is ignored', () => {
+  const match = matchUnnamedVariant('Celsius Sparkling 12oz', flavors('Kiwi Guava', 'Grapefruit'), one, 1, 'Orange');
+  assert.equal(match, null);
+});
+
 test('a flavor already matched by its own name is left alone', () => {
   const found = [
     { name: 'Orange', existing_variant_id: 'v9' as string | null },

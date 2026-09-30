@@ -246,6 +246,12 @@ export const aiProductFillSchema = z.object({
   variant_axis: z.string().nullable(),
   /** Every variant the product is actually sold in, flavour names only. */
   variants: z.array(z.string()),
+  /**
+   * The flavour the product's current name names, when it names one: items
+   * imported one per flavour read "Celsius Sparkling Orange 12Oz". Spelled as
+   * in `variants`. How the item already on the shelf is recognised.
+   */
+  current_flavor: z.string().nullable().optional(),
   compliance: productComplianceSchema,
   /** Pages the facts came from. */
   sources: z.array(z.string()),

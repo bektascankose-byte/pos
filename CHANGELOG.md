@@ -2,6 +2,20 @@
 
 Notable changes. Newest first.
 
+## The AI draft finds every flavor, and flavors read A to Z
+
+**Drafting an item now brings in its whole lineup.** An item named the way
+the old system listed it, one flavor per item ("Celsius Sparkling Orange
+12Oz"), used to come back with just that one flavor. The draft now reads the
+name as a clue to the product line, finds every flavor the line is sold in
+at that size, and says which of them is the item you already stock, even
+when the old name spells the flavor differently.
+
+**Flavors are in A to Z order,** on the Variants tab, in the draft, and on
+the register after your next Send. Adding or renaming a flavor puts it in
+its place. A flavor with no name yet is listed first on the Variants tab,
+since it is the one that needs attention.
+
 ## Saving an AI draft no longer breaks the item page
 
 **The item page stayed blank after saving a draft.** Flavors the AI finds

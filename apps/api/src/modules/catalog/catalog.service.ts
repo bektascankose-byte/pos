@@ -254,6 +254,8 @@ export class CatalogService {
       variants.push(await this.insertVariant(tx, productId, index, v, storeId, actorUserId));
     }
 
+    if (variants.length > 1) await this.sortVariantsTx(tx, productId);
+
     return { id: productId, variants };
   }
 
@@ -309,11 +311,37 @@ export class CatalogService {
   }
 
   /**
+   * Put a product's flavors in A to Z order: the order the Variants tab lists
+   * them in and, once sent, the order the register shows them under the
+   * product's folder, so a flavor is found by its name rather than by when it
+   * happened to be added. A flavor with no name yet sorts by its SKU, which
+   * puts it with the barcodes, ahead of the names.
+   *
+   * Only rows whose position actually moves are written, so a product that is
+   * already in order produces no change for the Send page to report.
+   */
+  private async sortVariantsTx(tx: PoolClient, productId: string): Promise<void> {
+    await tx.query(
+      `UPDATE product_variants v SET sort_order = s.position
+       FROM (
+         SELECT id,
+                (row_number() OVER (
+                   ORDER BY lower(COALESCE(NULLIF(trim(variant_name), ''), sku)), id
+                 ) - 1)::int AS position
+         FROM product_variants
+         WHERE product_id = $1
+       ) s
+       WHERE v.id = s.id AND v.sort_order IS DISTINCT FROM s.position`,
+      [productId],
+    );
+  }
+
+  /**
    * Add one variant to a product that already exists -- another flavor of
    * something already on the shelf, discovered after the product itself was
    * created. Never the product's default variant (`is_default` is decided
-   * once, at the product's own creation) and always sorted after every
-   * existing variant.
+   * once, at the product's own creation), and placed in A to Z order among
+   * the others -- see `sortVariantsTx`.
    *
    * `has_variants` and `variant_axes` are recomputed from the product's own
    * variants afterward rather than trusted from the caller -- the same
@@ -344,6 +372,7 @@ export class CatalogService {
     // so this also correctly keeps `is_default` false -- `insertVariant`
     // only sets it true for index 0.
     const variant = await this.insertVariant(tx, productId, nextSort, input, null, actorUserId);
+    await this.sortVariantsTx(tx, productId);
 
     const { rows: axisRows } = await tx.query<{ axes: string[] }>(
       `SELECT COALESCE(array_agg(DISTINCT key), '{}') AS axes
@@ -864,12 +893,22 @@ export class CatalogService {
         })
       : null;
 
-    const variants = draft.variants.map((name) => ({
-      name,
-      existing_variant_id: existingVariants.get(name.trim().toLowerCase()) ?? null,
-    }));
+    // A to Z, the order the Variants tab and the register show flavors in, so
+    // the draft reads the same way as what it will become.
+    const variants = [...draft.variants]
+      .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base', numeric: true }))
+      .map((name) => ({
+        name,
+        existing_variant_id: existingVariants.get(name.trim().toLowerCase()) ?? null,
+      }));
     const unnamed = context.variants.filter((v) => !v.variant_name?.trim());
-    const current = matchUnnamedVariant(context.product.name, variants, unnamed, context.variants.length);
+    const current = matchUnnamedVariant(
+      context.product.name,
+      variants,
+      unnamed,
+      context.variants.length,
+      draft.current_flavor,
+    );
     if (current) current.flavor.existing_variant_id = current.variantId;
 
     return {
@@ -1198,6 +1237,8 @@ export class CatalogService {
         actorUserId,
         newValue: input,
       });
+
+      if (input.variant_name !== undefined) await this.sortVariantsTx(tx, variant.product_id as string);
 
       return variant;
     });

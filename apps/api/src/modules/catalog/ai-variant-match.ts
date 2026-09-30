@@ -21,6 +21,12 @@ export function matchUnnamedVariant<F extends { name: string; existing_variant_i
   flavors: F[],
   unnamed: { id: string }[],
   variantCount: number,
+  /**
+   * The flavor the AI read out of the product's name ("Orange" from "Celsius
+   * Sparkling Orange 12Oz"). Used when the name itself does not settle it, say
+   * because the flavor is abbreviated there or spelled differently.
+   */
+  currentFlavor?: string | null,
 ): { flavor: F; variantId: string } | null {
   if (unnamed.length !== 1) return null;
   const variantId = unnamed[0]!.id;
@@ -31,6 +37,10 @@ export function matchUnnamedVariant<F extends { name: string; existing_variant_i
     .filter((f) => words(f.name) && name.includes(` ${words(f.name)} `))
     .sort((a, b) => words(b.name).length - words(a.name).length);
   if (inName[0]) return { flavor: inName[0], variantId };
+
+  const read = currentFlavor ? words(currentFlavor) : '';
+  const named = read ? open.find((f) => words(f.name) === read) : undefined;
+  if (named) return { flavor: named, variantId };
 
   if (variantCount === 1 && flavors.length === 1 && open.length === 1) return { flavor: open[0]!, variantId };
   return null;

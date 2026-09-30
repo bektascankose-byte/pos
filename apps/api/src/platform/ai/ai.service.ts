@@ -112,8 +112,11 @@ The shop's naming rule, which every product follows without exception:
 
 - name: "{Brand} {Model or line} {Pack size}" -- "Backwoods Cigars 5pk", "Foger Switch Pro 25K", "Geek Bar Pulse 15K". It names the thing a customer picks up. It NEVER contains a flavour, because flavours are the variants underneath it. If the pack size is not part of how the product is sold, leave it off rather than inventing one.
 - short_name: the same item in at most 24 characters, for a receipt -- "Backwoods 5pk".
-- variants: every flavour this product is actually sold in, flavour names only ("Honey Berry", not "Backwoods Honey Berry 5pk"). Title Case. If the product genuinely has one version, return one entry naming it, or an empty array if it has no flavour axis at all.
+- variants: EVERY flavour the product line is currently sold in at this size, flavour names only ("Honey Berry", not "Backwoods Honey Berry 5pk"). Title Case. The full lineup, not a sample: if the brand sells fourteen flavours of this line, list all fourteen. If the product genuinely has one version, return one entry naming it, or an empty array if it has no flavour axis at all.
 - variant_axis: the word for what the variants differ by -- "flavor", "size", "color", "strength".
+- current_flavor: the flavour the name you were given names, spelled exactly as it appears in variants, or null if the name names none.
+
+The name you are given is often how the shop's old system listed ONE flavour of the product, flavour included: "Celsius Sparkling Orange 12Oz", "Backwoods Honey Berry 5pk". Treat that as a clue to the product line, not as the whole product. Work out the line and pack size it belongs to, catalogue that whole line (name it without the flavour, as above), and list every flavour of the line in variants, the one from the given name included. Never stop at the one flavour the name happens to mention.
 
 description: two or three short paragraphs of plain sales copy for the website. Say what it is, what it tastes or feels like, who it suits. No headings, no bullet points, no markdown, no invented awards or health claims, and never a claim that a nicotine or cannabinoid product is safe.
 
@@ -160,6 +163,7 @@ const productFillReplySchema = z.object({
   tags: z.array(z.string()).nullish(),
   variant_axis: z.string().nullish(),
   variants: z.array(z.string()).nullish(),
+  current_flavor: z.string().nullish(),
   is_age_restricted: z.boolean().nullish(),
   minimum_age: z.number().nullish(),
   id_scan_required: z.boolean().nullish(),
@@ -489,6 +493,10 @@ export class AiService {
       flavours.push(name);
       if (flavours.length >= 40) break;
     }
+    // The flavour of the item the shop already stocks is always in the list,
+    // even when the model named it but left it out of the lineup.
+    const currentFlavour = nullIfPlaceholder(draft.current_flavor ?? null);
+    if (currentFlavour && !seen.has(currentFlavour.toLowerCase())) flavours.push(currentFlavour);
 
     const tags: string[] = [];
     const seenTags = new Set<string>();
@@ -511,6 +519,7 @@ export class AiService {
       tags,
       variant_axis: nullIfPlaceholder(draft.variant_axis),
       variants: flavours,
+      current_flavor: currentFlavour,
       compliance: {
         // `minimum_age` is what carries the restriction -- there is no separate
         // flag, here or in `product_compliance`, because an age is what the
