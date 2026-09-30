@@ -141,6 +141,15 @@ export const NAV_ENTRIES: NavEntry[] = [
     keywords: ["spreadsheet", "csv", "excel", "xlsx", "price list", "migrate", "modisoft", "bulk"],
     isAction: true,
   },
+  {
+    id: "send-to-pos",
+    label: "Send to POS",
+    href: "/catalog/send-to-pos",
+    group: "Catalog",
+    surfaces: ["work"],
+    icon: "📤",
+    keywords: ["publish", "push", "release", "registers", "till", "live", "go live", "sync"],
+  },
 
   {
     id: "inventory",
