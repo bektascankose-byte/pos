@@ -11,6 +11,7 @@ export * from './money.js';
 export * from './primitives.js';
 export * from './identity.js';
 export * from './catalog.js';
+export * from './pos-release.js';
 export * from './compliance-engine.js';
 export * from './order-state.js';
 export * from './orders.js';

@@ -793,21 +793,26 @@ export async function runSalesChecks({ api, check, uuidV7, ownerToken, managerTo
   );
 
   // Write through the same non-owner role production uses. This is test setup,
-  // not a back door in the API, and it proves a price-only transaction returns
-  // prices without retransferring products, barcodes, inventory or staff.
+  // not a back door in the API: a price edited in the back office, which the
+  // registers must not see until somebody presses Send (migration 0034).
   const direct = new pg.Pool({
     connectionString: process.env.E2E_DATABASE_URL ??
       'postgres://snappos_app:dev_only_not_a_secret@localhost:5432/snappos_e2e',
   });
   const client = await direct.connect();
+  let editedProductId;
+  let editedPriceId;
   try {
     await client.query('BEGIN');
     await client.query(`SELECT set_config('app.org_id', $1, true)`, [ownerSession.body?.org_id]);
-    await client.query(
+    const { rows } = await client.query(
       `UPDATE variant_prices SET price_minor = price_minor + 1
-       WHERE id = (SELECT id FROM variant_prices WHERE variant_id = $1 LIMIT 1)`,
+       WHERE id = (SELECT id FROM variant_prices WHERE variant_id = $1 LIMIT 1)
+       RETURNING id, (SELECT product_id FROM product_variants WHERE id = $1) AS product_id`,
       [variantId],
     );
+    editedPriceId = rows[0]?.id;
+    editedProductId = rows[0]?.product_id;
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
@@ -817,23 +822,79 @@ export async function runSalesChecks({ api, check, uuidV7, ownerToken, managerTo
     await direct.end();
   }
 
+  const sentPrice = (body) => body?.prices?.find((p) => p.id === editedPriceId)?.price_minor;
+  const priceBefore = sentPrice(snapshot.body);
+
+  const heldDelta = await api(
+    `/api/v1/sync/catalog?store_id=${storeId}&since=${snapshot.body?.cursor}`,
+    { token: cashierToken },
+  );
+  check(
+    'a price edited in the back office does not reach the registers on its own',
+    heldDelta.status === 200 && heldDelta.body?.included_scopes?.length === 0,
+    JSON.stringify(heldDelta.body?.included_scopes),
+  );
+  const heldBootstrap = await api(`/api/v1/sync/catalog?store_id=${storeId}`, { token: cashierToken });
+  check(
+    'a register bootstrapping before Send still gets the price that was sent',
+    priceBefore !== undefined && sentPrice(heldBootstrap.body) === priceBefore,
+    `${priceBefore} vs ${sentPrice(heldBootstrap.body)}`,
+  );
+
+  const pending = await api('/api/v1/catalog/pos-release/pending', { token: ownerToken });
+  const waiting = pending.body?.products?.find((p) => p.product_id === editedProductId);
+  check(
+    'Send to POS lists the edited product with the price change in words',
+    pending.status === 200 && waiting?.kind === 'changed' && waiting?.sendable === true &&
+      waiting?.changes?.some((c) => /price \$\d+\.\d\d to \$\d+\.\d\d/.test(c)),
+    JSON.stringify(waiting ?? pending.body).slice(0, 300),
+  );
+
+  const cashierSend = await api('/api/v1/catalog/pos-release/send', {
+    token: cashierToken,
+    method: 'POST',
+    body: { product_ids: [editedProductId] },
+  });
+  check('a cashier cannot send catalog changes to the registers', cashierSend.status === 403, `got ${cashierSend.status}`);
+
+  const send = await api('/api/v1/catalog/pos-release/send', {
+    token: ownerToken,
+    method: 'POST',
+    body: { product_ids: [editedProductId] },
+  });
+  check(
+    'Send to POS sends the change',
+    send.status === 200 && send.body?.sent === 1 && send.body?.variants_changed === 1 &&
+      send.body?.held_back?.length === 0,
+    JSON.stringify(send.body),
+  );
+
   const priceDelta = await api(
     `/api/v1/sync/catalog?store_id=${storeId}&since=${snapshot.body?.cursor}`,
     { token: cashierToken },
   );
   check(
-    'a price-only change returns only the price projection',
+    'after Send the registers pull the catalog and prices, and nothing else',
     priceDelta.status === 200 &&
-      JSON.stringify(priceDelta.body?.included_scopes) === JSON.stringify(['prices']) &&
-      priceDelta.body?.prices?.length >= 12 &&
-      priceDelta.body?.variants?.length === 0 &&
-      priceDelta.body?.barcodes?.length === 0 &&
+      JSON.stringify(priceDelta.body?.included_scopes) === JSON.stringify(['catalog', 'prices']) &&
+      priceDelta.body?.variants?.length === snapshot.body?.variants?.length &&
       priceDelta.body?.employees?.length === 0,
     JSON.stringify({
       scopes: priceDelta.body?.included_scopes,
       prices: priceDelta.body?.prices?.length,
       variants: priceDelta.body?.variants?.length,
     }),
+  );
+  check(
+    'after Send the registers get the new price',
+    sentPrice(priceDelta.body) === String(BigInt(priceBefore ?? '0') + 1n),
+    `${priceBefore} -> ${sentPrice(priceDelta.body)}`,
+  );
+
+  const afterSend = await api('/api/v1/catalog/pos-release/pending', { token: ownerToken });
+  check(
+    'a sent product no longer waits on the Send page',
+    !afterSend.body?.products?.some((p) => p.product_id === editedProductId),
   );
 
   const aheadDelta = await api(

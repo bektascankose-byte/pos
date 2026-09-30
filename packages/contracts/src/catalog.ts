@@ -224,6 +224,71 @@ export const suggestVariantsSchema = z.object({
 });
 
 /**
+ * AI fill: a draft of a whole product page, researched on the web and written
+ * to the shop's house format (see `CatalogCopy` in the API). A draft only --
+ * the product page fills its fields with it and nothing is stored until a
+ * person presses Save.
+ */
+export const aiProductFillSchema = z.object({
+  /** "{Brand} {Line} {Size or count}": "Backwoods Cigars 5pk". Never a flavour. */
+  name: z.string(),
+  /** At most 24 characters, for the receipt: "Backwoods 5pk". */
+  short_name: z.string(),
+  /** Sales copy for the website, plain text, a few short paragraphs. */
+  description: z.string(),
+  brand: z.string().nullable(),
+  /** One of the shop's own category names, exactly, or null. */
+  category: z.string().nullable(),
+  /** One of the shop's own tax category codes, exactly, or null. */
+  tax_category_code: z.string().nullable(),
+  tags: z.array(z.string()),
+  /** What the variants differ by: flavor, size, color, strength. */
+  variant_axis: z.string().nullable(),
+  /** Every variant the product is actually sold in, flavour names only. */
+  variants: z.array(z.string()),
+  compliance: productComplianceSchema,
+  /** Pages the facts came from. */
+  sources: z.array(z.string()),
+});
+
+/** The AI draft as the API returns it: names matched to the shop's own records. */
+export const aiProductDraftSchema = aiProductFillSchema.omit({ variants: true }).extend({
+  brand_id: uuid.nullable(),
+  category_id: uuid.nullable(),
+  tax_category_id: uuid.nullable(),
+  variants: z.array(
+    z.object({
+      name: z.string(),
+      /** Set when this product already has a variant by this name. */
+      existing_variant_id: uuid.nullable(),
+    }),
+  ),
+});
+
+export const aiProductFillRequestSchema = z.object({
+  /** Anything the person wants to steer by: "the 5 pack, not the single". */
+  hint: z.string().max(500).optional(),
+});
+
+/** Product photos to look for: one per variant name, plus the product itself. */
+export const aiImageSearchRequestSchema = z.object({
+  variants: z.array(z.string().min(1).max(128)).max(40),
+});
+
+export const aiImageCandidateSchema = z.object({
+  /** Null for the product's own photo. */
+  variant_name: z.string().nullable(),
+  /** A direct image address when one was found. */
+  image_url: z.string().nullable(),
+  /** The page it is on, kept as the photo's source either way. */
+  page_url: z.string().nullable(),
+});
+
+export const aiImageSearchResultSchema = z.object({
+  images: z.array(aiImageCandidateSchema),
+});
+
+/**
  * A photo of a product, or of one specific variant of it.
  *
  * `url` and `thumb_url` are **storage keys, not addresses** — the bucket is
@@ -243,6 +308,8 @@ export const productImageSchema = z.object({
   sort_order: z.number().int(),
   /** True for the image a list or a register tile should show. The lowest sort_order wins. */
   is_primary: z.boolean(),
+  /** The page a found photo was taken from. Null for photos someone uploaded themselves. */
+  source_url: z.string().nullable().optional(),
   created_at: timestamp,
 });
 
@@ -251,6 +318,7 @@ export const uploadProductImageSchema = z.object({
   product_id: uuid.optional(),
   variant_id: uuid.optional(),
   alt_text: z.string().max(256).optional(),
+  source_url: z.string().url().max(2048).optional(),
 });
 
 export const reorderProductImagesSchema = z.object({
@@ -524,6 +592,12 @@ export type AiComplianceSuggestion = z.infer<typeof aiComplianceSuggestionSchema
 export type SuggestCompliance = z.infer<typeof suggestComplianceSchema>;
 export type ProductVariantSuggestion = z.infer<typeof productVariantSuggestionSchema>;
 export type SuggestVariants = z.infer<typeof suggestVariantsSchema>;
+export type AiProductFill = z.infer<typeof aiProductFillSchema>;
+export type AiProductDraft = z.infer<typeof aiProductDraftSchema>;
+export type AiProductFillRequest = z.infer<typeof aiProductFillRequestSchema>;
+export type AiImageSearchRequest = z.infer<typeof aiImageSearchRequestSchema>;
+export type AiImageCandidate = z.infer<typeof aiImageCandidateSchema>;
+export type AiImageSearchResult = z.infer<typeof aiImageSearchResultSchema>;
 export type CreatePriceCategory = z.infer<typeof createPriceCategorySchema>;
 export type UpdatePriceCategory = z.infer<typeof updatePriceCategorySchema>;
 export type DeletePriceCategoryResult = z.infer<typeof deletePriceCategoryResultSchema>;

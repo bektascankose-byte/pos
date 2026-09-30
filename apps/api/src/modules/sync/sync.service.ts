@@ -600,7 +600,20 @@ export class SyncService {
              AND (store_id IS NULL OR store_id = $3)`,
           [since, watermark, storeId],
         );
-        const scopes = new Set(changedRows.map((row) => scopeFor(row.entity_type)));
+        // Catalog edits are held for Send to POS (migration 0034): a product,
+        // barcode or price saved in the back office changes nothing a register
+        // is served until it is sent, so on its own it is not a reason to
+        // pull. A send is, and it can carry catalog rows and prices both.
+        const scopes = new Set<string>();
+        for (const row of changedRows) {
+          if (HELD_FOR_SEND.has(row.entity_type)) continue;
+          if (row.entity_type === 'pos_release') {
+            scopes.add('catalog');
+            scopes.add('prices');
+            continue;
+          }
+          scopes.add(scopeFor(row.entity_type));
+        }
         // Compliance is embedded in the variant projection. Register/store
         // configuration is rare and safest as a complete refresh.
         if (scopes.has('register_config')) {
@@ -623,54 +636,59 @@ export class SyncService {
                   is_department
            FROM categories WHERE status = 'active' ORDER BY path`,
         ) : empty,
+        // Variants, barcodes and prices come from what was last sent
+        // (`pos_catalog_variants`, migration 0034), never from the live
+        // catalog: an edit reaches a register when someone presses Send.
+        //
+        // `image_url` in the sent row is a path, not the bytes. The register
+        // fetches the image itself and keeps it: an image's address never
+        // changes meaning -- replacing a photo makes a new row with a new id --
+        // so whatever a register has already downloaded stays valid forever,
+        // and the snapshot stays small enough to sync over a shop's uplink.
+        //
+        // Cost is joined live, because it is not held: it moves with every
+        // invoice and only feeds the register's below-cost warning.
+        //
+        // The age check is joined live too, but only ever in the stricter
+        // direction. Marking an item 21+ in the back office protects the shop
+        // the moment it is saved; relaxing a check waits for Send like any
+        // other edit. A register never asks for less ID than the back office
+        // says it should.
         includes('catalog') ? tx.query(
-          `SELECT v.id, v.product_id, p.name AS product_name, v.variant_name, v.sku, v.plu,
-                  p.brand_id, b.name AS brand_name, p.category_id, p.tax_category_id,
-                  v.cost::text, v.case_quantity, v.sort_order, v.is_default, v.status,
-                  pc.minimum_age, COALESCE(pc.id_scan_required, false) AS id_scan_required,
-                  pc.regulated_class,
-                  -- A path, not the bytes. The register fetches the image
-                  -- itself and keeps it: an image's address never changes
-                  -- meaning -- replacing a photo makes a new row with a new
-                  -- id -- so whatever a register has already downloaded stays
-                  -- valid forever, and the snapshot stays small enough to sync
-                  -- over a shop's uplink.
-                  img.path AS image_url
-           FROM product_variants v
-           JOIN products p ON p.id = v.product_id
-           LEFT JOIN brands b ON b.id = p.brand_id
-           LEFT JOIN product_compliance pc ON pc.product_id = p.id
-           -- The variant's own photo wins; failing that the product's, which is
-           -- the right picture for a flavour nobody photographed separately.
-           LEFT JOIN LATERAL (
-             SELECT '/api/v1/catalog/images/' || i.id || '?size=thumb' AS path
-             FROM product_images i
-             WHERE i.variant_id = v.id OR i.product_id = p.id
-             ORDER BY (i.variant_id IS NULL), i.sort_order, i.created_at
-             LIMIT 1
-           ) img ON true
-           WHERE v.status = 'active' AND p.status = 'active'`,
+          `SELECT r.payload || jsonb_build_object(
+                    'cost', COALESCE(v.cost, 0)::text,
+                    'minimum_age', GREATEST((r.payload->>'minimum_age')::int, pc.minimum_age),
+                    'id_scan_required',
+                      COALESCE((r.payload->>'id_scan_required')::boolean, false)
+                      OR COALESCE(pc.id_scan_required, false),
+                    'regulated_class',
+                      COALESCE(r.payload->>'regulated_class', pc.regulated_class::text)
+                  ) AS row
+           FROM pos_catalog_variants r
+           LEFT JOIN product_variants v ON v.id = r.variant_id
+           LEFT JOIN product_compliance pc ON pc.product_id = r.product_id`,
         ) : empty,
         includes('catalog') ? tx.query(
-          `SELECT vb.id, vb.variant_id, vb.barcode, vb.kind, vb.units::text, vb.is_primary
-           FROM variant_barcodes vb
-           JOIN product_variants v ON v.id = vb.variant_id
-           WHERE v.status = 'active'`,
+          `SELECT b AS row
+           FROM pos_catalog_variants r, jsonb_array_elements(r.barcodes) b`,
         ) : empty,
         // Store specific prices win over the organization default, and both are
         // sent: a price scheduled for Monday has to be on the register on
         // Sunday night, because the register may be offline on Monday.
         includes('prices') ? tx.query(
-          `SELECT id, variant_id, kind, price_minor::text,
-                  effective_from, effective_to
-           FROM variant_prices
-           WHERE (store_id = $1 OR store_id IS NULL)
-             AND (effective_to IS NULL OR effective_to > now())`,
+          `SELECT p AS row
+           FROM pos_catalog_variants r, jsonb_array_elements(r.prices) p
+           WHERE (p->>'store_id' IS NULL OR (p->>'store_id')::uuid = $1)
+             AND (p->>'effective_to' IS NULL OR (p->>'effective_to')::timestamptz > now())`,
           [storeId],
         ) : empty,
+        // Only for what the register holds. Stock for an item that has not
+        // been sent yet has nothing on the till to attach to.
         includes('inventory') ? tx.query(
           `SELECT variant_id, on_hand::text, available::text, updated_at
-           FROM inventory_levels WHERE store_id = $1`,
+           FROM inventory_levels
+           WHERE store_id = $1
+             AND variant_id IN (SELECT variant_id FROM pos_catalog_variants)`,
           [storeId],
         ) : empty,
         includes('tax') ? tx.query(
@@ -721,9 +739,19 @@ export class SyncService {
       // a change already in the snapshot is harmless, skipping one is not.
       return {
         categories,
-        variants,
-        barcodes,
-        prices,
+        variants: variants.map((r: { row: Record<string, unknown> }) => r.row),
+        barcodes: barcodes.map((r: { row: Record<string, unknown> }) => r.row),
+        // Rebuilt field by field rather than passed through: the sent copy
+        // stores Postgres's own timestamp text ("...+00:00", microseconds),
+        // and the register parses the ISO form the API has always sent.
+        prices: prices.map((r: { row: SentPrice }) => ({
+          id: r.row.id,
+          variant_id: r.row.variant_id,
+          kind: r.row.kind,
+          price_minor: r.row.price_minor,
+          effective_from: new Date(r.row.effective_from).toISOString(),
+          effective_to: r.row.effective_to ? new Date(r.row.effective_to).toISOString() : null,
+        })),
         inventory: levels,
         tax_rates: taxRates,
         employees,
@@ -826,6 +854,35 @@ const SCOPE_BY_ENTITY: Record<string, Change['scope']> = {
   store: 'register_config',
   customer: 'customers',
 };
+
+/**
+ * Catalog tables whose edits wait for Send to POS (migration 0034). Their
+ * change_log rows still exist -- the back office and `/sync/changes` see them
+ * -- but they no longer tell a register to pull: what a register is served
+ * only changes when a `pos_release` is written.
+ *
+ * `product_compliance` is deliberately not here: a stricter age check is
+ * served live (see the variants query), so saving one has to make the
+ * registers pull.
+ */
+const HELD_FOR_SEND = new Set([
+  'product',
+  'product_variant',
+  'variant_barcode',
+  'variant_price',
+  'brand',
+]);
+
+/** One price as `pos_catalog_variants.prices` stores it. */
+interface SentPrice {
+  id: string;
+  variant_id: string;
+  store_id: string | null;
+  kind: string;
+  price_minor: string;
+  effective_from: string;
+  effective_to: string | null;
+}
 
 function scopeFor(entityType: string): Change['scope'] {
   return SCOPE_BY_ENTITY[entityType] ?? 'catalog';

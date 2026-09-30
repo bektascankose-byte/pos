@@ -13,6 +13,7 @@ import type {
   BulkPriceVariants,
   SuggestCompliance,
   SuggestVariants,
+  RemoveVariantResult,
 } from '@snappos/contracts';
 import { DatabaseService } from '../../platform/database/database.service.js';
 import { AuditService } from '../../platform/audit/audit.service.js';
@@ -390,23 +391,46 @@ export class CatalogService {
     variantId: string,
     input: CreateBarcode,
   ) {
-    const { rows: variantRows } = await tx.query(`SELECT id FROM product_variants WHERE id = $1`, [
-      variantId,
-    ]);
-    if (!variantRows[0]) throw ApiException.notFound('variant');
+    const { rows: variantRows } = await tx.query<{ id: string; sku: string; has_primary: boolean }>(
+      `SELECT v.id, v.sku,
+              EXISTS (SELECT 1 FROM variant_barcodes b
+                      WHERE b.variant_id = v.id AND b.is_primary) AS has_primary
+       FROM product_variants v WHERE v.id = $1`,
+      [variantId],
+    );
+    const variant = variantRows[0];
+    if (!variant) throw ApiException.notFound('variant');
+
+    // A flavor added without a barcode (typed in by hand, or found by the AI
+    // fill) gets its first single unit code as its primary: that is the code
+    // the register scans, and without a primary the item cannot be sent.
+    const units = input.units ?? '1';
+    const makePrimary = input.is_primary ?? (!variant.has_primary && Number(units) === 1);
+    if (makePrimary && variant.has_primary) {
+      await tx.query(`UPDATE variant_barcodes SET is_primary = false WHERE variant_id = $1 AND is_primary`, [
+        variantId,
+      ]);
+    }
 
     const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO variant_barcodes (org_id, variant_id, barcode, kind, units, is_primary)
        VALUES (current_setting('app.org_id')::uuid, $1, $2, $3, $4, $5)
        RETURNING id`,
-      [
-        variantId,
-        input.barcode,
-        input.kind ?? 'upc',
-        input.units ?? '1',
-        input.is_primary ?? false,
-      ],
+      [variantId, input.barcode, input.kind ?? 'upc', units, makePrimary],
     );
+
+    // A placeholder SKU (TMP-..., given to flavors created before anyone had
+    // the package in hand) becomes the barcode itself once there is one, the
+    // same convention every imported item already follows. Only while that
+    // code is not already some other item's SKU.
+    if (makePrimary && variant.sku.startsWith('TMP-')) {
+      await tx.query(
+        `UPDATE product_variants SET sku = upper($2)
+         WHERE id = $1
+           AND NOT EXISTS (SELECT 1 FROM product_variants WHERE upper(sku) = upper($2))`,
+        [variantId, input.barcode],
+      );
+    }
 
     await this.audit.record(tx, {
       action: 'product.barcode_add',
@@ -420,11 +444,14 @@ export class CatalogService {
   }
 
   /**
-   * Drop an alternate or carton code. The primary is deliberately not
-   * removable here: a variant whose primary code is gone still appears in
-   * search and still fails at the counter, which is the exact state
-   * `createProduct` above refuses to create in the first place. Changing which
-   * code is primary is a different operation than deleting one.
+   * Drop a code: an alternate, a carton, or a mistyped primary.
+   *
+   * A variant is never left without a primary while it still has a single
+   * unit code: removing the primary hands the role to the next one. What is
+   * refused is removing the last code an item already on the registers scans
+   * by: once sent, it would still appear in search and fail at the counter,
+   * the state `createProduct` refuses to create in the first place. The fix
+   * for a wrong barcode there is add the right one, then remove this.
    */
   async removeBarcodeFromVariant(orgId: string, actorUserId: string, barcodeId: string) {
     return this.db.withOrg(orgId, async (tx) => {
@@ -434,15 +461,36 @@ export class CatalogService {
       );
       const existing = rows[0];
       if (!existing) throw ApiException.notFound('barcode');
+
+      let successor: string | null = null;
       if (existing.is_primary) {
-        throw new ApiException(
-          'validation_failed',
-          "that is this item's primary code -- it can't be removed",
-          { retryable: false },
+        const { rows: others } = await tx.query<{ id: string }>(
+          `SELECT id FROM variant_barcodes
+           WHERE variant_id = $1 AND id <> $2 AND units = 1
+           ORDER BY created_at, barcode
+           LIMIT 1`,
+          [existing.variant_id, barcodeId],
         );
+        successor = others[0]?.id ?? null;
+        // A flavor that has never been sent to the registers can lose its
+        // only code: nothing scans it yet, and it cannot be sent without one.
+        const { rows: onRegisters } = await tx.query(
+          `SELECT 1 FROM pos_catalog_variants WHERE variant_id = $1`,
+          [existing.variant_id],
+        );
+        if (!successor && onRegisters[0]) {
+          throw new ApiException(
+            'validation_failed',
+            'That is the only barcode this item scans by. Add the right one first, then remove this one.',
+            { retryable: false },
+          );
+        }
       }
 
       await tx.query(`DELETE FROM variant_barcodes WHERE id = $1`, [barcodeId]);
+      if (successor) {
+        await tx.query(`UPDATE variant_barcodes SET is_primary = true WHERE id = $1`, [successor]);
+      }
 
       await this.audit.record(tx, {
         action: 'product.barcode_remove',
@@ -453,6 +501,105 @@ export class CatalogService {
       });
 
       return { id: barcodeId, variant_id: existing.variant_id };
+    });
+  }
+
+  /**
+   * Remove a flavor the shop no longer sells.
+   *
+   * Deleted outright when nothing refers to it: a flavor added by mistake,
+   * or found by the AI fill and never stocked. Otherwise discontinued
+   * (archived) instead, because past sales, receipts, stock counts and
+   * invoices all name the variant and have to keep naming it. The database
+   * decides which: every table holding history references the variant with
+   * ON DELETE RESTRICT, so the delete is simply tried and, if refused,
+   * turned into an archive.
+   *
+   * A flavor still on the registers is always discontinued, never deleted:
+   * the registers keep selling it until the next Send, and a sale of an item
+   * that no longer exists would be refused when it uploads. Either way it
+   * comes off the registers with that Send.
+   */
+  async removeVariant(orgId: string, actorUserId: string, variantId: string): Promise<RemoveVariantResult> {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query<{
+        id: string;
+        product_id: string;
+        sku: string;
+        variant_name: string | null;
+        is_default: boolean;
+      }>(
+        `SELECT id, product_id, sku, variant_name, is_default
+         FROM product_variants WHERE id = $1 FOR UPDATE`,
+        [variantId],
+      );
+      const variant = rows[0];
+      if (!variant) throw ApiException.notFound('variant');
+
+      const { rows: onRegisters } = await tx.query(
+        `SELECT 1 FROM pos_catalog_variants WHERE variant_id = $1`,
+        [variantId],
+      );
+      let reason: string | null = onRegisters[0]
+        ? 'It is on the registers, so it stays on record and comes off them with the next Send.'
+        : null;
+
+      if (!reason) {
+        await tx.query('SAVEPOINT remove_variant');
+        try {
+          await tx.query(`DELETE FROM product_variants WHERE id = $1`, [variantId]);
+          await tx.query('RELEASE SAVEPOINT remove_variant');
+        } catch (error) {
+          if ((error as { code?: string }).code !== '23503') throw error;
+          await tx.query('ROLLBACK TO SAVEPOINT remove_variant');
+          reason = 'It has sales, stock or purchase history, so it stays on record as discontinued.';
+        }
+      }
+
+      if (reason) {
+        await tx.query(
+          `UPDATE product_variants SET status = 'archived', is_default = false WHERE id = $1`,
+          [variantId],
+        );
+      }
+
+      // The product keeps a default flavor while it has any left on sale:
+      // the register opens a multi flavor tile on it.
+      if (variant.is_default) {
+        await tx.query(
+          `UPDATE product_variants SET is_default = true
+           WHERE id = (SELECT id FROM product_variants
+                       WHERE product_id = $1 AND status = 'active'
+                       ORDER BY sort_order, created_at LIMIT 1)`,
+          [variant.product_id],
+        );
+      }
+
+      const { rows: remaining } = await tx.query<{ count: number; axes: string[] }>(
+        `SELECT count(*)::int AS count,
+                COALESCE((SELECT array_agg(DISTINCT key)
+                          FROM product_variants v2, jsonb_object_keys(v2.attributes) AS key
+                          WHERE v2.product_id = $1 AND v2.status = 'active'), '{}') AS axes
+         FROM product_variants WHERE product_id = $1 AND status = 'active'`,
+        [variant.product_id],
+      );
+      const left = remaining[0]!;
+      await tx.query(
+        `UPDATE products SET has_variants = $2, variant_axes = CASE WHEN $2 THEN $3 ELSE variant_axes END
+         WHERE id = $1`,
+        [variant.product_id, left.count > 1, left.axes],
+      );
+
+      await this.audit.record(tx, {
+        action: reason ? 'product.variant_discontinue' : 'product.variant_delete',
+        entityType: 'product_variant',
+        entityId: variantId,
+        actorUserId,
+        oldValue: { product_id: variant.product_id, sku: variant.sku, variant_name: variant.variant_name },
+        reason: reason ?? undefined,
+      });
+
+      return { outcome: reason ? 'discontinued' : 'deleted', reason };
     });
   }
 
@@ -725,7 +872,7 @@ export class CatalogService {
       // together, and a photo arriving a beat after the name it belongs to is
       // the flicker every product page in the world gets wrong.
       const { rows: imageRows } = await tx.query(
-        `SELECT i.id, i.product_id, i.variant_id, i.alt_text, i.sort_order,
+        `SELECT i.id, i.product_id, i.variant_id, i.alt_text, i.source_url, i.sort_order,
                 (i.sort_order = (SELECT min(i2.sort_order) FROM product_images i2
                                   WHERE i2.product_id IS NOT DISTINCT FROM i.product_id
                                     AND i2.variant_id IS NOT DISTINCT FROM i.variant_id))

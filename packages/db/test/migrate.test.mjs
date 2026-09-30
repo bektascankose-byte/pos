@@ -18,21 +18,23 @@ const db = scratch.db;
 const n = async (sql) => Number((await db.query(sql))[0].n);
 
 test(`all ${migrationFiles().length} migrations applied on ${scratch.engine}`, () => {
-  assert.equal(migrationFiles().length, 33);
+  assert.equal(migrationFiles().length, 34);
 });
 
 test('migrations are numbered contiguously from 0001', () => {
   const prefixes = migrationFiles().map((f) => Number(f.name.slice(0, 4)));
-  assert.deepEqual(prefixes, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33]);
+  assert.deepEqual(prefixes, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34]);
 });
 
-test('98 base tables exist', async () => {
+// 0034 adds two: pos_catalog_variants (what the registers were last sent) and
+// pos_releases (each press of Send).
+test('100 base tables exist', async () => {
   assert.equal(
     await n(`select count(*) n from pg_class c
              join pg_namespace ns on ns.oid = c.relnamespace
              where ns.nspname='public' and c.relkind in ('r','p')
                and not c.relispartition`),
-    98,
+    100,
   );
 });
 
@@ -45,7 +47,7 @@ test('inventory_ledger and audit_log are range partitioned', async () => {
   assert.deepEqual(rows.map((r) => r.relname), ['audit_log', 'inventory_ledger']);
 });
 
-test('155 foreign keys, 35 enums, 142 table level checks', async () => {
+test('157 foreign keys, 35 enums, 142 table level checks', async () => {
   // 0027 accounts for the last move: seven foreign keys (four off `orders`,
   // two off `order_lines`, one off `order_events`), the order_fulfilment and
   // order_status enums, and six checks -- four on `orders` including the one
@@ -67,10 +69,13 @@ test('155 foreign keys, 35 enums, 142 table level checks', async () => {
   // from under a record of what was traded under it), no enum, and five checks
   // -- the withdrawal window, a permit reference and an authority note that
   // are actually filled in, a counsel review date that is not in the future,
-  // and a withdrawal that names who withdrew it.
+  // and a withdrawal that names who withdrew it. 0034 adds two foreign keys,
+  // both to organizations: the sent catalog deliberately has none to the
+  // variants it copies, since a register keeps what it was sent until the next
+  // Send even if the variant is deleted meanwhile.
   assert.equal(await n(`select count(*) n from pg_constraint c
                         join pg_namespace ns on ns.oid=c.connamespace
-                        where ns.nspname='public' and c.contype='f'`), 155);
+                        where ns.nspname='public' and c.contype='f'`), 157);
   assert.equal(await n(`select count(distinct t.typname) n from pg_type t
                         join pg_namespace ns on ns.oid=t.typnamespace
                         where ns.nspname='public' and t.typtype='e'`), 35);
@@ -81,7 +86,7 @@ test('155 foreign keys, 35 enums, 142 table level checks', async () => {
                           and not t.relispartition`), 142);
 });
 
-test('19 functions and 55 user triggers', async () => {
+test('19 functions and 56 user triggers', async () => {
   // Extensions install their own functions into public (pg_trgm adds ~20), so
   // count only what our migrations own.
   assert.equal(await n(`select count(*) n from pg_proc p
@@ -112,8 +117,9 @@ test('19 functions and 55 user triggers', async () => {
   // trigger for banners. 0033 adds guard_compliance_rule_lift, which allows a
   // lift only against a platform rule and only lets a withdrawal be written
   // afterwards, and three triggers: that guard, a touch, and a refusal to
-  // delete.
-  assert.equal(await n(`select count(*) n from pg_trigger where not tgisinternal`), 55);
+  // delete. 0034 adds the change_log trigger on pos_releases, which is how a
+  // press of Send reaches the registers.
+  assert.equal(await n(`select count(*) n from pg_trigger where not tgisinternal`), 56);
 });
 
 test('every table carrying org_id has RLS enabled and exactly one policy', async () => {

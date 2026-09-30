@@ -21,7 +21,7 @@ const ALLOWED = new Map<string, string>([
  */
 const MAX_BYTES = 6 * 1024 * 1024;
 
-const IMAGE_COLUMNS = `id, product_id, variant_id, alt_text, sort_order,
+const IMAGE_COLUMNS = `id, product_id, variant_id, alt_text, source_url, sort_order,
        (sort_order = (SELECT min(i2.sort_order) FROM product_images i2
                        WHERE i2.product_id IS NOT DISTINCT FROM product_images.product_id
                          AND i2.variant_id IS NOT DISTINCT FROM product_images.variant_id))
@@ -82,7 +82,13 @@ export class ProductImagesService {
   async upload(
     orgId: string,
     actorUserId: string,
-    input: { product_id?: string | undefined; variant_id?: string | undefined; alt_text?: string | undefined },
+    input: {
+      product_id?: string | undefined;
+      variant_id?: string | undefined;
+      alt_text?: string | undefined;
+      /** The page a stock photo was taken from. Kept so its origin is always on record. */
+      source_url?: string | undefined;
+    },
     file: { buffer: Buffer; contentType: string },
     thumb?: { buffer: Buffer; contentType: string } | undefined,
   ) {
@@ -133,13 +139,21 @@ export class ProductImagesService {
 
       const { rows } = await tx.query<{ id: string }>(
         `INSERT INTO product_images
-           (id, org_id, product_id, variant_id, url, thumb_url, alt_text, sort_order)
-         VALUES ($1, current_setting('app.org_id')::uuid, $2, $3, $4, $5, $6,
+           (id, org_id, product_id, variant_id, url, thumb_url, alt_text, source_url, sort_order)
+         VALUES ($1, current_setting('app.org_id')::uuid, $2, $3, $4, $5, $6, $7,
                  COALESCE((SELECT max(sort_order) + 1 FROM product_images
                            WHERE product_id IS NOT DISTINCT FROM $2
                              AND variant_id IS NOT DISTINCT FROM $3), 0))
          RETURNING id`,
-        [id, input.product_id ?? null, input.variant_id ?? null, key, thumbKey, input.alt_text ?? null],
+        [
+          id,
+          input.product_id ?? null,
+          input.variant_id ?? null,
+          key,
+          thumbKey,
+          input.alt_text ?? null,
+          input.source_url ?? null,
+        ],
       );
 
       await this.audit.record(tx, {

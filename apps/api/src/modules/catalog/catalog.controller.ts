@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query } from '@nestjs/common';
 import {
   createProductSchema,
   createVariantSchema,
@@ -202,6 +202,14 @@ export class CatalogController {
   @RequirePermissions('product.update')
   removeVariantBarcode(@CurrentUser() user: AuthenticatedUser, @Param('barcodeId') barcodeId: string) {
     return this.catalog.removeBarcodeFromVariant(user.orgId, user.userId, barcodeId);
+  }
+
+  /** A flavor no longer sold: deleted if it has no history, discontinued if it has. See the service. */
+  @Post('variants/:id/remove')
+  @HttpCode(200)
+  @RequirePermissions('product.update')
+  removeVariant(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.catalog.removeVariant(user.orgId, user.userId, id);
   }
 
   /** A suggestion only -- see `AiService.suggestProductVariants`. Nothing here persists anything. */

@@ -386,6 +386,20 @@ await product({
   variants: [{ sku: 'RAW-KSS', upc: '716165174233', cost: 1.1, priceMinor: 299, qty: 60, caseQty: 50 }],
 });
 
+// Registers are served what was last sent to them (migration 0034), so a
+// freshly seeded shop sends its whole catalog once, as if someone had pressed
+// Send to POS on every product. Without this the tills would sync an empty
+// catalog.
+await client.query(
+  `INSERT INTO pos_catalog_variants (variant_id, org_id, product_id, payload, barcodes, prices)
+   SELECT variant_id, org_id, product_id, payload, barcodes, prices
+   FROM pos_live_variants WHERE org_id = $1
+   ON CONFLICT (variant_id) DO UPDATE
+     SET payload = EXCLUDED.payload, barcodes = EXCLUDED.barcodes,
+         prices = EXCLUDED.prices, released_at = now()`,
+  [org.id],
+);
+
 await client.query('COMMIT');
 
 const summary = await one(
