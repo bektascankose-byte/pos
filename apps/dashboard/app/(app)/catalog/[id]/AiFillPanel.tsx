@@ -43,6 +43,14 @@ export function AiFillPanel({
 
   const working = busy || pending;
   const newFlavors = (draft?.variants ?? []).filter((v) => !v.existing_variant_id);
+  // The item already on the shelf, recognised as one of the flavors but not
+  // yet named as one (imported one item per flavor, flavor in the product
+  // name). Saving names it instead of adding a second copy beside it.
+  const isUnnamed = (variantId: string | null) =>
+    variantId !== null && !variants.find((v) => v.id === variantId)?.variant_name?.trim();
+  const toName = (draft?.variants ?? [])
+    .filter((v) => isUnnamed(v.existing_variant_id))
+    .map((v) => ({ id: v.existing_variant_id as string, name: v.name }));
 
   const run = () => {
     setError(null);
@@ -61,7 +69,7 @@ export function AiFillPanel({
         name: false,
         short_name: true,
         description: true,
-        brand: Boolean(result.data.brand_id),
+        brand: Boolean(result.data.brand),
         category: Boolean(result.data.category_id),
         tax: Boolean(result.data.tax_category_id),
         tags: result.data.tags.length > 0,
@@ -80,20 +88,23 @@ export function AiFillPanel({
         ...(keep.name ? { name: draft.name } : {}),
         ...(keep.short_name ? { short_name: draft.short_name } : {}),
         ...(keep.description ? { description: draft.description } : {}),
-        ...(keep.brand ? { brand_id: draft.brand_id } : {}),
+        ...(keep.brand && draft.brand_id ? { brand_id: draft.brand_id } : {}),
+        ...(keep.brand && !draft.brand_id && draft.brand ? { brand_name: draft.brand } : {}),
         ...(keep.category ? { category_id: draft.category_id } : {}),
         ...(keep.tax ? { tax_category_id: draft.tax_category_id } : {}),
         ...(keep.tags ? { tags: draft.tags } : {}),
         ...(keep.compliance ? { compliance: draft.compliance } : {}),
         newVariants: [...chosenFlavors],
+        nameVariants: toName,
       });
       if (!result.ok) {
         setError(result.error);
         return;
       }
-      const { created, failed } = result.data;
+      const { created, named, failed } = result.data;
       setStatus(
-        `Saved${created > 0 ? `, ${created} new ${created === 1 ? "flavor" : "flavors"} added` : ""}.` +
+        `Saved${named > 0 ? `, your current item named ${toName.map((v) => v.name).join(", ")}` : ""}` +
+          `${created > 0 ? `, ${created} new ${created === 1 ? "flavor" : "flavors"} added` : ""}.` +
           (failed.length > 0 ? ` Could not add: ${failed.join(", ")}.` : "") +
           (created > 0 ? " Each needs a barcode and a price before it can go to the registers." : ""),
       );
@@ -242,8 +253,8 @@ export function AiFillPanel({
             id="brand"
             label="Brand"
             value={draft.brand ?? "—"}
-            note={draft.brand && !draft.brand_id ? "not one of your brands, so it cannot be set here" : undefined}
-            disabled={!draft.brand_id}
+            note={draft.brand && !draft.brand_id ? "new brand, added when you save" : undefined}
+            disabled={!draft.brand}
             keep={keep}
             setKeep={setKeep}
           />
@@ -294,7 +305,7 @@ export function AiFillPanel({
                       <input
                         type="checkbox"
                         disabled={Boolean(flavor.existing_variant_id)}
-                        checked={chosenFlavors.has(flavor.name)}
+                        checked={chosenFlavors.has(flavor.name) || isUnnamed(flavor.existing_variant_id)}
                         onChange={() =>
                           setChosenFlavors((previous) => {
                             const next = new Set(previous);
@@ -306,7 +317,11 @@ export function AiFillPanel({
                         className="h-3 w-3 accent-[var(--color-accent)]"
                       />
                       {flavor.name}
-                      {flavor.existing_variant_id ? " · already have" : ""}
+                      {flavor.existing_variant_id
+                        ? isUnnamed(flavor.existing_variant_id)
+                          ? " · your current item, gets this name"
+                          : " · already have"
+                        : ""}
                     </label>
                   </li>
                 ))}

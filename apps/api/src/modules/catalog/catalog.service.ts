@@ -21,6 +21,7 @@ import { AuditService } from '../../platform/audit/audit.service.js';
 import { ApiException } from '../../platform/errors/api-exception.js';
 import { AiService } from '../../platform/ai/ai.service.js';
 import { StockImageService } from './stock-image.service.js';
+import { matchUnnamedVariant } from './ai-variant-match.js';
 
 const NO_STORE = '00000000-0000-0000-0000-000000000000';
 
@@ -760,8 +761,8 @@ export class CatalogService {
   }
 
   /**
-   * Used only from within `createProductTx`, for a brand typed as free text
-   * rather than picked from the existing list. Case-insensitive: "Sherpa"
+   * Used from `createProductTx` and `updateProduct`, for a brand typed as free
+   * text rather than picked from the existing list. Case-insensitive: "Sherpa"
    * and "sherpa" are the same brand, not two rows that both mean it.
    */
   private async findOrCreateBrandTx(tx: PoolClient, name: string): Promise<string> {
@@ -863,6 +864,14 @@ export class CatalogService {
         })
       : null;
 
+    const variants = draft.variants.map((name) => ({
+      name,
+      existing_variant_id: existingVariants.get(name.trim().toLowerCase()) ?? null,
+    }));
+    const unnamed = context.variants.filter((v) => !v.variant_name?.trim());
+    const current = matchUnnamedVariant(context.product.name, variants, unnamed, context.variants.length);
+    if (current) current.flavor.existing_variant_id = current.variantId;
+
     return {
       ...draft,
       brand_id: brandId,
@@ -870,10 +879,7 @@ export class CatalogService {
       tax_category_id: draft.tax_category_code
         ? (taxIds.get(draft.tax_category_code.trim().toLowerCase()) ?? null)
         : null,
-      variants: draft.variants.map((name) => ({
-        name,
-        existing_variant_id: existingVariants.get(name.trim().toLowerCase()) ?? null,
-      })),
+      variants,
     };
   }
 
@@ -1017,6 +1023,12 @@ export class CatalogService {
    */
   async updateProduct(orgId: string, actorUserId: string, id: string, input: UpdateProduct) {
     return this.db.withOrg(orgId, async (tx) => {
+      // A brand typed as a name (the AI draft finds "Celsius" for a shop that
+      // has never stocked one) is found or created, the same as at creation.
+      // An id still wins when both are given.
+      const brandId =
+        input.brand_id ?? (input.brand_name ? await this.findOrCreateBrandTx(tx, input.brand_name) : null);
+
       const { rows } = await tx.query(
         `UPDATE products SET
            name            = COALESCE($2, name),
@@ -1037,7 +1049,7 @@ export class CatalogService {
           input.name ?? null,
           input.short_name ?? null,
           input.description ?? null,
-          input.brand_id ?? null,
+          brandId,
           input.category_id ?? null,
           input.tax_category_id ?? null,
           input.unit_type ?? null,

@@ -2,6 +2,26 @@
 
 Notable changes. Newest first.
 
+## Saving an AI draft no longer breaks the item page
+
+**The item page stayed blank after saving a draft.** Flavors the AI finds
+arrive without a price, and the page read "no price" as the word "null" and
+failed trying to show it as money. A flavor with no price now shows as not
+priced.
+
+**The item you already stock is named, not copied.** Most items came over
+from the old system one per flavor, with the flavor in the product name:
+"Celsius Sparkling Orange 12Oz". The draft turned that into "Celsius
+Sparkling 12oz" with flavors, but did not see that the item already on the
+shelf was the Orange one, so saving added a second, empty Orange beside it.
+The draft now recognises it and says so ("your current item, gets this
+name"), and saving names it.
+
+**A new brand is added instead of dropped.** A brand the shop had never
+stocked could not be kept from a draft. It is now created when you save.
+
+**Each flavor's name can be edited** on its card on the Variants tab.
+
 ## The catalog is yours to finish before the registers see it
 
 **Nothing reaches a till until you press Send.** Until now every catalog edit

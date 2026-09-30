@@ -469,8 +469,12 @@ function VariantRow({
   // actually parsed through that schema -- it's the plain digit string the
   // API sends. `String()` bridges that gap at the boundary, same as
   // elsewhere this response crosses from server to client.
+  //
+  // A flavor that has no price yet comes back as null, not undefined: the AI
+  // draft creates flavors before anyone has priced them. `String(null)` is
+  // the text "null", which is truthy and crashed the page in `formatMinor`.
   const [priceMinor, setPriceMinor] = useState<string | null>(
-    variant.price_minor !== undefined ? String(variant.price_minor) : null,
+    variant.price_minor === undefined || variant.price_minor === null ? null : String(variant.price_minor),
   );
 
   return (
@@ -517,6 +521,15 @@ function VariantRow({
         >
           <p className="text-xs text-[var(--color-text-muted)]">Blank keeps the current value.</p>
           {fieldsMessage ? <p className="text-xs text-[var(--color-text-muted)]">{fieldsMessage}</p> : null}
+          {/* The flavor as the register shows it under the product's folder.
+              Imported items often have none: the flavor sat in the product
+              name, one item per flavor. */}
+          <Field
+            label="Flavor name"
+            name="variant_name"
+            defaultValue={variant.variant_name ?? ""}
+            placeholder="Orange"
+          />
           <div className="grid grid-cols-2 gap-3">
             <Field label="PLU (keypad code)" name="plu" defaultValue={variant.plu ?? ""} />
             <Field label="Cost" name="cost" defaultValue={variant.cost} />

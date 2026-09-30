@@ -53,12 +53,20 @@ interface ApplyDraft {
   short_name?: string;
   description?: string;
   brand_id?: string | null;
+  /** A brand the shop does not have yet, by name. Created on save. */
+  brand_name?: string;
   category_id?: string | null;
   tax_category_id?: string | null;
   tags?: string[];
   compliance?: AiProductDraft["compliance"];
   /** Flavor names to create. Ones the product already has are not passed. */
   newVariants?: string[];
+  /**
+   * Existing variants that have no flavor name yet, and the flavor the draft
+   * recognised them as: the item already on the shelf, named rather than
+   * duplicated.
+   */
+  nameVariants?: { id: string; name: string }[];
 }
 
 /**
@@ -74,20 +82,23 @@ interface ApplyDraft {
  * unfinished and cannot reach a register until somebody types them in. That is
  * the same rule the Send page enforces from the other end.
  *
- * A null brand, category or tax category is left out rather than sent: the
- * update schema takes an id or nothing, and "the AI could not place this" is
- * not an instruction to clear what somebody already set.
+ * A null brand, category or tax category is left out rather than sent: "the
+ * AI could not place this" is not an instruction to clear what somebody
+ * already set. A brand the shop has never had is the exception: it arrives
+ * by name and the API adds it, since a new product line from a new maker is
+ * exactly when that happens.
  */
 export async function applyAiDraftAction(
   productId: string,
   draft: ApplyDraft,
-): Promise<ActionResult<{ product: Product; created: number; failed: string[] }>> {
+): Promise<ActionResult<{ product: Product; created: number; named: number; failed: string[] }>> {
   try {
     const fields: Record<string, unknown> = {};
     if (draft.name !== undefined) fields.name = draft.name;
     if (draft.short_name !== undefined) fields.short_name = draft.short_name.slice(0, 64);
     if (draft.description !== undefined) fields.description = draft.description.slice(0, 4096);
     if (draft.brand_id) fields.brand_id = draft.brand_id;
+    else if (draft.brand_name?.trim()) fields.brand_name = draft.brand_name.trim().slice(0, 128);
     if (draft.category_id) fields.category_id = draft.category_id;
     if (draft.tax_category_id) fields.tax_category_id = draft.tax_category_id;
     if (draft.tags !== undefined) fields.tags = draft.tags;
@@ -107,6 +118,22 @@ export async function applyAiDraftAction(
     // not lose the rest, so each is reported rather than thrown.
     let created = 0;
     const failed: string[] = [];
+
+    // The item already on the shelf first, so it carries its flavor before
+    // the new ones arrive beside it.
+    let named = 0;
+    for (const { id, name } of draft.nameVariants ?? []) {
+      try {
+        await apiFetch(`/api/v1/catalog/variants/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ variant_name: name }),
+        });
+        named += 1;
+      } catch {
+        failed.push(name);
+      }
+    }
+
     for (const name of draft.newVariants ?? []) {
       try {
         await apiFetch(`/api/v1/catalog/products/${productId}/variants`, {
@@ -124,11 +151,11 @@ export async function applyAiDraftAction(
       }
     }
 
-    if (created > 0) product = await apiFetch<Product>(`/api/v1/catalog/products/${productId}`);
+    if (created > 0 || named > 0) product = await apiFetch<Product>(`/api/v1/catalog/products/${productId}`);
 
     revalidatePath(`/catalog/${productId}`);
     revalidatePath("/catalog");
-    return { ok: true, data: { product, created, failed } };
+    return { ok: true, data: { product, created, named, failed } };
   } catch (e) {
     return {
       ok: false,
