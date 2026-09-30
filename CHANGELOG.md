@@ -2,6 +2,55 @@
 
 Notable changes. Newest first.
 
+## The catalog is yours to finish before the registers see it
+
+**Nothing reaches a till until you press Send.** Until now every catalog edit
+was on the registers within a minute, finished or not — a product with no
+price yet, a flavor added before its barcode was known, a name half retyped.
+The registers now sell the catalog they were last sent, and a new **Send to
+POS** page under Catalog shows what is waiting: which items changed, what will
+change on the till in words ("Adds Honey Berry", "Price $6.55 to $6.99"), and
+what cannot go yet and why. Stock and cost never wait — those are always live.
+
+Send works flavor by flavor. The ones that are ready go; one still missing its
+barcode stays behind without holding up the rest, and the page names it and
+says why rather than giving you a number.
+
+**Each flavor now owns its barcodes.** The Item Codes and Carton Mapping tabs
+are gone. A flavor's own barcode and the carton code that rings up a case of
+it now sit in that flavor's card on the Variants tab, next to its price and
+cost. Setting up a flavor used to mean picking it out of a dropdown on three
+separate tabs; it is one card now — which also makes it hard to leave with a
+flavor that has no barcode, the one state that cannot be sent to a register.
+
+**You can stop selling a flavor.** There was no way to before. A flavor
+nothing refers to is deleted outright; one with sales, stock or purchase
+history is discontinued instead, so those records keep naming their item.
+The page tells you which happened, and a flavor still on the registers keeps
+selling there until your next Send.
+
+**Draft a whole item with AI.** One button on the Details tab searches the web
+for the product and drafts its name in the house format, receipt name,
+description, brand, category, tax category, tags, age restriction and the
+flavors it is actually sold in. A second button finds a photo for every flavor
+that has none. Everything is shown before anything is saved and each part can
+be dropped on its own.
+
+The naming rule is the point of it: a product is **"{Brand} {Line} {Pack
+size}"** and never carries a flavor, because the flavors are the variants
+underneath it. That is what makes "Backwoods Cigars 5pk" one folder on a
+register with Honey Berry and Rum inside, instead of five unrelated rows —
+and it is the same shape the website reads.
+
+Barcodes, costs and prices are never drafted. A guessed barcode scans as the
+wrong item at the counter and a guessed price is money, so a new flavor
+arrives visibly unfinished and cannot be sent until you fill those in.
+
+**A flavor with no photo shows its name as the picture,** on the till and in
+the back office, in a colour of its own derived from the name — so five
+unphotographed flavors of one product stop being five identical grey squares
+that a cashier has to read the caption of.
+
 ## The back office gets a new look: dark by default, light on request
 
 **A dark theme in the register's orange, with a switch for daylight.** The
