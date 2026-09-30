@@ -276,14 +276,11 @@ private fun ProductTileCard(
           modifier = Modifier.fillMaxSize().padding(Space.XS.dp),
         )
       } else {
-        // A monogram rather than an empty box. Most of a real shop's catalog
-        // has no photograph, and a grid of identical grey rectangles gives the
-        // eye nothing at all to aim at -- a letter at least differs.
-        Text(
-          name.take(1).uppercase(),
-          style = MaterialTheme.typography.displaySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
-        )
+        // The flavour's name, drawn as the picture. A monogram used to sit
+        // here, which was better than an empty box but still gave five
+        // unphotographed flavours of one product the same letter -- see
+        // `FlavorTile`.
+        FlavorTile(name)
       }
       if (pinned) {
         Icon(
