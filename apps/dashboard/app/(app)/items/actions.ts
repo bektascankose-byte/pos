@@ -1,8 +1,9 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { apiFetch, ApiError } from "@/lib/api";
 import type { ActionResult } from "@/lib/action-result";
-import type { Product, ReferenceProduct } from "@snappos/contracts";
+import type { Product, ReferenceProduct, RemoveVariantResult } from "@snappos/contracts";
 
 export interface SearchHit {
   variant_id: string;
@@ -187,5 +188,32 @@ export async function removeVariantBarcodeAction(barcodeId: string): Promise<Act
     return { ok: true, data: undefined };
   } catch (e) {
     return { ok: false, error: e instanceof ApiError ? e.message : "Could not remove that code." };
+  }
+}
+
+/**
+ * Stop selling a flavor.
+ *
+ * Which of the two things happens is the API's call, not this one's: a flavor
+ * nothing refers to is deleted, and one with sales, stock or purchase history
+ * is discontinued so those records keep naming their item. The outcome comes
+ * back so the page can say which it was -- "discontinued, it has sales
+ * history" is a different fact to the person than "deleted", and quietly
+ * showing the row gone either way would misrepresent one of them.
+ */
+export async function removeVariantAction(
+  productId: string,
+  variantId: string,
+): Promise<ActionResult<RemoveVariantResult>> {
+  try {
+    const data = await apiFetch<RemoveVariantResult>(
+      `/api/v1/catalog/variants/${variantId}/remove`,
+      { method: "POST" },
+    );
+    revalidatePath(`/catalog/${productId}`);
+    revalidatePath("/catalog");
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not remove that flavor." };
   }
 }

@@ -9,9 +9,9 @@ import {
 import type { ProductImage, Variant } from "@snappos/contracts";
 
 /** Wide enough to look sharp full-screen on a register, small enough to sync over a shop's DSL. */
-const DISPLAY_MAX = 1400;
+export const DISPLAY_MAX = 1400;
 /** Big enough for a retina list row at ~64px. */
-const THUMB_MAX = 256;
+export const THUMB_MAX = 256;
 
 /**
  * Photos of a product.
@@ -213,7 +213,7 @@ export function ImagePanel({
  * times the size for no visible gain, and a uniform output means one content
  * type to serve.
  */
-async function downscale(file: File, max: number): Promise<File> {
+export async function downscale(file: Blob, max: number): Promise<File> {
   const bitmap = await createImageBitmap(file);
   try {
     const scale = Math.min(1, max / Math.max(bitmap.width, bitmap.height));

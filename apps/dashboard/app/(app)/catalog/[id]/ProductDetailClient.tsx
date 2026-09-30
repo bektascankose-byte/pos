@@ -19,9 +19,19 @@ import {
   PricingPanel,
   VariantPicker,
 } from "./ItemDetailPanels";
+import { AiFillPanel } from "./AiFillPanel";
+import { FlavorTile } from "../_components/FlavorTile";
+import { removeVariantAction } from "../../items/actions";
 import { ImagePanel } from "./ImagePanel";
 import { SellOnlinePanel } from "./SellOnlinePanel";
-import type { Product, Variant, Brand, Category, TaxCategory } from "@snappos/contracts";
+import type {
+  Product,
+  Variant,
+  Brand,
+  Category,
+  TaxCategory,
+  ProductImage,
+} from "@snappos/contracts";
 
 interface Props {
   productId: string;
@@ -89,6 +99,12 @@ export function ProductDetailClient({ productId, storeId, initialProduct, brands
             label: "Details",
             content: (
               <div className="flex flex-col gap-4">
+                <AiFillPanel
+                  productId={productId}
+                  product={product}
+                  variants={variants}
+                  onApplied={reloadProduct}
+                />
                 <DetailsPanel
                   product={product}
                   brands={brands}
@@ -113,11 +129,13 @@ export function ProductDetailClient({ productId, storeId, initialProduct, brands
                 productId={productId}
                 storeId={storeId}
                 variants={variants}
+                images={product.images ?? []}
                 defaultAxis={product.variant_axes[0] ?? "flavor"}
                 onVariantUpdated={(updated) =>
                   setVariants((prev) => prev.map((v) => (v.id === updated.id ? { ...v, ...updated } : v)))
                 }
                 onVariantAdded={(created) => setVariants((prev) => [...prev, created])}
+                onChanged={reloadProduct}
               />
             ),
           },
@@ -149,12 +167,6 @@ export function ProductDetailClient({ productId, storeId, initialProduct, brands
                 )
               }
             />
-          )),
-          variantTab("codes", "Item Codes", (variant) => (
-            <CodesPanel variant={variant} mode="unit" onChanged={reloadProduct} />
-          )),
-          variantTab("carton", "Carton Mapping", (variant) => (
-            <CodesPanel variant={variant} mode="carton" onChanged={reloadProduct} />
           )),
           variantTab("price-history", "Price History", (variant) => (
             <PriceHistoryPanel variantId={variant.id} />
@@ -372,28 +384,39 @@ function VariantsPanel({
   productId,
   storeId,
   variants,
+  images,
   defaultAxis,
   onVariantUpdated,
   onVariantAdded,
+  onChanged,
 }: {
   productId: string;
   storeId: string | null;
   variants: Variant[];
+  images: ProductImage[];
   defaultAxis: string;
   onVariantUpdated: (updated: Variant) => void;
   onVariantAdded: (created: Variant) => void;
+  onChanged: () => Promise<void>;
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
 
   return (
     <div className="flex flex-col gap-4">
+      <p className="text-sm text-[var(--color-text-muted)]">
+        The flavors this item is sold in. Each one carries its own photo, its own barcode, and the
+        carton code that rings up a case of it — a cashier scans one of these, never the item above.
+      </p>
+
       {variants.map((variant) => (
         <VariantRow
           key={variant.id}
           productId={productId}
           storeId={storeId}
           variant={variant}
+          image={images.find((image) => image.variant_id === variant.id) ?? null}
           onUpdated={onVariantUpdated}
+          onChanged={onChanged}
         />
       ))}
 
@@ -426,12 +449,16 @@ function VariantRow({
   productId,
   storeId,
   variant,
+  image,
   onUpdated,
+  onChanged,
 }: {
   productId: string;
   storeId: string | null;
   variant: Variant;
+  image: ProductImage | null;
   onUpdated: (updated: Variant) => void;
+  onChanged: () => Promise<void>;
 }) {
   const [fieldsPending, startFieldsTransition] = useTransition();
   const [pricePending, startPriceTransition] = useTransition();
@@ -448,9 +475,27 @@ function VariantRow({
 
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <div className="font-medium">{variant.variant_name ?? variant.sku}</div>
-        <div className="text-sm text-[var(--color-text-muted)]">UPC {variant.sku}</div>
+      <div className="mb-3 flex items-center gap-3">
+        <div className="h-12 w-12 shrink-0 overflow-hidden rounded bg-[var(--color-bg)]">
+          {image ? (
+            /* eslint-disable-next-line @next/next/no-img-element -- our own proxy, not a known-size remote */
+            <img
+              src={`/api/product-images/${image.id}?size=thumb`}
+              alt={image.alt_text ?? ""}
+              className="h-full w-full object-contain"
+            />
+          ) : (
+            <FlavorTile name={variant.variant_name ?? variant.sku} />
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-medium">{variant.variant_name ?? variant.sku}</div>
+          <div className="text-xs text-[var(--color-text-muted)]">
+            {variant.sku}
+            {image ? null : " · no photo yet"}
+          </div>
+        </div>
+        <RemoveVariantButton productId={productId} variant={variant} onRemoved={onChanged} />
       </div>
 
       <div className="grid grid-cols-2 gap-6">
@@ -538,6 +583,96 @@ function VariantRow({
           </button>
         </form>
       </div>
+
+      {/*
+        The codes live with the flavor they scan, not on tabs of their own.
+        A flavor's single barcode and the carton code that rings up a case of
+        it are two facts about this one thing; keeping them on separate pages
+        behind a variant picker meant setting up one flavor took three
+        screens, and made it easy to leave with a flavor that had no barcode
+        at all -- which is the one state that cannot be sent to a register.
+      */}
+      <div className="mt-4 grid gap-4 border-t border-[var(--color-border)] pt-4 md:grid-cols-2">
+        <CodesPanel variant={variant} mode="unit" onChanged={onChanged} />
+        <CodesPanel variant={variant} mode="carton" onChanged={onChanged} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Stop selling a flavor.
+ *
+ * Confirms first, because the two outcomes are not equally reversible and the
+ * person cannot tell from here which one they will get: a flavor with no
+ * history is gone for good, while one with sales is only archived. Saying so
+ * afterwards rather than guessing beforehand keeps the message true either
+ * way -- and a flavor still on the registers keeps selling there until the
+ * next Send, which is the part most worth stating out loud.
+ */
+function RemoveVariantButton({
+  productId,
+  variant,
+  onRemoved,
+}: {
+  productId: string;
+  variant: Variant;
+  onRemoved: () => Promise<void>;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  const name = variant.variant_name ?? variant.sku;
+
+  if (message) {
+    return <span className="max-w-64 text-right text-xs text-[var(--color-text-muted)]">{message}</span>;
+  }
+
+  if (!confirming) {
+    return (
+      <button
+        type="button"
+        onClick={() => setConfirming(true)}
+        className="shrink-0 rounded border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-error)]"
+      >
+        Remove
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex shrink-0 items-center gap-2">
+      <span className="text-xs text-[var(--color-text-muted)]">Stop selling {name}?</span>
+      <button
+        type="button"
+        disabled={pending}
+        onClick={() => {
+          startTransition(async () => {
+            const result = await removeVariantAction(productId, variant.id);
+            if (!result.ok) {
+              setMessage(result.error);
+              return;
+            }
+            setMessage(
+              result.data.outcome === "deleted"
+                ? `${name} deleted.`
+                : `${name} discontinued — ${result.data.reason ?? "it has history on record."}`,
+            );
+            await onRemoved();
+          });
+        }}
+        className="rounded bg-[var(--color-error)] px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
+      >
+        {pending ? "Removing…" : "Remove"}
+      </button>
+      <button
+        type="button"
+        onClick={() => setConfirming(false)}
+        className="text-xs text-[var(--color-text-muted)] underline"
+      >
+        Keep
+      </button>
     </div>
   );
 }
