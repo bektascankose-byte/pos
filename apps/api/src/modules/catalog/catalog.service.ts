@@ -110,15 +110,21 @@ export class CatalogService {
   async search(orgId: string, params: ProductSearch) {
     return this.db.withOrg(orgId, async (tx) => {
       const { rows } = await tx.query(
-        // Brand, category and price group come back as both id and name: the
-        // name is what the list shows, the id is what an edit form has to
-        // preselect in a dropdown. Fetching the row twice to get the other
-        // half is the alternative.
+        // Brand and category come back as both id and name: the name is what
+        // the list shows, the id is what an edit form has to preselect in a
+        // dropdown. Fetching the row twice to get the other half is the
+        // alternative. Price groups come back the same way, as a list, since
+        // a flavor can be in several (0035).
         `SELECT v.id AS variant_id, v.sku, v.variant_name, v.plu,
                 p.id AS product_id, p.name AS product_name,
                 p.brand_id, br.name AS brand_name,
                 p.category_id, cat.name AS category_name,
-                v.price_group_id, pg.name AS price_group_name,
+                COALESCE((
+                  SELECT jsonb_agg(jsonb_build_object('id', g.id, 'name', g.name) ORDER BY m.added_at, g.id)
+                  FROM price_group_members m
+                  JOIN price_groups g ON g.id = m.price_group_id
+                  WHERE m.variant_id = v.id
+                ), '[]'::jsonb) AS price_groups,
                 v.cost::text,
                 pr.price_minor::text,
                 COALESCE(il.on_hand, 0)::text   AS on_hand,
@@ -137,7 +143,6 @@ export class CatalogService {
          JOIN products p ON p.id = v.product_id
          LEFT JOIN brands br ON br.id = p.brand_id
          LEFT JOIN categories cat ON cat.id = p.category_id
-         LEFT JOIN price_groups pg ON pg.id = v.price_group_id
          LEFT JOIN inventory_levels il ON il.variant_id = v.id AND il.store_id = $2
          LEFT JOIN LATERAL (
            SELECT price_minor FROM variant_prices
@@ -374,6 +379,16 @@ export class CatalogService {
     // only sets it true for index 0.
     const variant = await this.insertVariant(tx, productId, nextSort, input, null, actorUserId);
     await this.sortVariantsTx(tx, productId);
+
+    // A flavor added to a product that has a group made for its flavors
+    // (`ensureProductPriceGroup`) joins that group, so repricing "Celsius
+    // Sparkling 12oz" keeps meaning every Celsius Sparkling 12oz flavor.
+    await tx.query(
+      `INSERT INTO price_group_members (org_id, price_group_id, variant_id, added_by)
+       SELECT g.org_id, g.id, $2, $3 FROM price_groups g WHERE g.product_id = $1
+       ON CONFLICT (price_group_id, variant_id) DO NOTHING`,
+      [productId, variant.id, actorUserId],
+    );
 
     const { rows: axisRows } = await tx.query<{ axes: string[] }>(
       `SELECT COALESCE(array_agg(DISTINCT key), '{}') AS axes
@@ -1390,13 +1405,19 @@ export class CatalogService {
   /**
    * Price several variants together, in one transaction.
    *
-   * `variant_ids` forms (or reuses) a group and stamps it on every variant
-   * given -- a group is formed by pricing, not declared ahead of time.
-   * `price_group_id` reprices whichever variants currently carry that group,
-   * with no need to re-select them. Repeating the same `variant_ids`
-   * selection reuses its existing shared group rather than minting a new
-   * one each time and orphaning the last one -- the common case of
-   * "reprice this same set again" should not leave debris behind.
+   * `price_group_id` reprices every flavor in that group, with no need to
+   * re-select them. `variant_ids` prices exactly that selection and keeps it
+   * as a group so it can be repriced the same way later -- reusing a group
+   * that already holds exactly this selection, named ones first, rather than
+   * minting another each time. "Reprice this same set again" should not leave
+   * debris behind.
+   *
+   * A flavor can sit in several groups (0035), so this never takes anything
+   * out of a group. Pricing one group moves only its own members, and a
+   * member's price is whatever was set last, here or anywhere else: a group
+   * has no price of its own to disagree with. Discontinued flavors stay
+   * members but are skipped -- nobody can sell them, and a new row in each
+   * one's price history would only be noise.
    */
   async bulkSetPrice(orgId: string, actorUserId: string, input: BulkPriceVariants) {
     return this.db.withOrg(orgId, async (tx) => {
@@ -1405,43 +1426,44 @@ export class CatalogService {
 
       if (input.price_group_id) {
         priceGroupId = input.price_group_id;
+        const { rows: groupRows } = await tx.query(`SELECT id FROM price_groups WHERE id = $1`, [priceGroupId]);
+        if (!groupRows[0]) throw ApiException.notFound('price group');
+
         const { rows } = await tx.query<{ id: string }>(
-          `SELECT id FROM product_variants WHERE price_group_id = $1`,
+          `SELECT v.id FROM price_group_members m
+           JOIN product_variants v ON v.id = m.variant_id
+           WHERE m.price_group_id = $1 AND v.status <> 'archived'
+           ORDER BY v.id`,
           [priceGroupId],
         );
         variantIds = rows.map((r) => r.id);
-        if (variantIds.length === 0) throw ApiException.notFound('price group');
+        if (variantIds.length === 0) {
+          throw new ApiException('conflict', 'this price group has no items on sale', {
+            userMessage: 'Add items to this group before pricing it.',
+          });
+        }
       } else {
-        variantIds = input.variant_ids!;
+        variantIds = [...new Set(input.variant_ids!)];
 
-        const { rows: currentRows } = await tx.query<{ id: string; price_group_id: string | null }>(
-          `SELECT id, price_group_id FROM product_variants WHERE id = ANY($1::uuid[])`,
+        const { rows: currentRows } = await tx.query<{ id: string }>(
+          `SELECT id FROM product_variants WHERE id = ANY($1::uuid[])`,
           [variantIds],
         );
         if (currentRows.length !== variantIds.length) throw ApiException.notFound('variant');
 
-        // Reuse an existing group only when every given variant already
-        // shares the *same* one AND that group's membership is exactly this
-        // set -- anything else (fresh variants, a subset, mixed groups)
-        // mints a new one and re-stamps, which is the unsurprising reading
-        // of "form a group from exactly these variants."
-        const distinctGroups = new Set(
-          currentRows.map((r) => r.price_group_id).filter((g): g is string => g !== null),
+        const { rows: sameSet } = await tx.query<{ id: string }>(
+          `SELECT g.id
+           FROM price_groups g
+           JOIN price_group_members m ON m.price_group_id = g.id
+           GROUP BY g.id, g.name, g.created_at
+           HAVING count(*) = $2 AND bool_and(m.variant_id = ANY($1::uuid[]))
+           ORDER BY (g.name IS NULL), g.created_at
+           LIMIT 1`,
+          [variantIds, variantIds.length],
         );
-        let reusableGroupId: string | null = null;
-        if (distinctGroups.size === 1) {
-          const candidate = [...distinctGroups][0]!;
-          const { rows: memberRows } = await tx.query<{ id: string }>(
-            `SELECT id FROM product_variants WHERE price_group_id = $1`,
-            [candidate],
-          );
-          const sameSet =
-            memberRows.length === variantIds.length && memberRows.every((r) => variantIds.includes(r.id));
-          if (sameSet) reusableGroupId = candidate;
-        }
 
-        if (reusableGroupId) {
-          priceGroupId = reusableGroupId;
+        if (sameSet[0]) {
+          priceGroupId = sameSet[0].id;
         } else {
           const { rows: groupRows } = await tx.query<{ id: string }>(
             `INSERT INTO price_groups (org_id, created_by)
@@ -1450,11 +1472,7 @@ export class CatalogService {
             [actorUserId],
           );
           priceGroupId = groupRows[0]!.id;
-
-          await tx.query(
-            `UPDATE product_variants SET price_group_id = $2 WHERE id = ANY($1::uuid[])`,
-            [variantIds, priceGroupId],
-          );
+          await this.addMembersTx(tx, actorUserId, priceGroupId, variantIds);
         }
       }
 
@@ -1465,6 +1483,124 @@ export class CatalogService {
       }
 
       return { price_group_id: priceGroupId, prices };
+    });
+  }
+
+  /**
+   * Put flavors into a group, leaving whatever other groups they are in
+   * alone. One that is already a member is not an error -- "is it in the
+   * group" is yes either way -- so what comes back is only the ones that
+   * joined just now. Callers check the variants exist first; a missing one
+   * would fail the foreign key rather than be skipped.
+   */
+  private async addMembersTx(tx: PoolClient, actorUserId: string, groupId: string, variantIds: string[]) {
+    if (variantIds.length === 0) return [];
+    const { rows } = await tx.query<{ variant_id: string }>(
+      `INSERT INTO price_group_members (org_id, price_group_id, variant_id, added_by)
+       SELECT current_setting('app.org_id')::uuid, $1, t.id, $3
+       FROM unnest($2::uuid[]) AS t(id)
+       ON CONFLICT (price_group_id, variant_id) DO NOTHING
+       RETURNING variant_id`,
+      [groupId, variantIds, actorUserId],
+    );
+    return rows.map((r) => r.variant_id);
+  }
+
+  /**
+   * The group made for one product's flavors: found, or made now.
+   *
+   * Saving an AI draft calls this once the draft has found the whole line, so
+   * "Celsius Sparkling 12oz" turns up on the price groups page holding every
+   * Celsius Sparkling 12oz flavor, ready to reprice all at once later. No
+   * price changes here: flavors priced differently stay priced differently.
+   *
+   * Made once per product. Drafting the item again finds the same group and
+   * leaves its membership as it is, so a flavor someone deliberately took out
+   * (say, into a clearance promotion) is not quietly put back. New flavors
+   * join it as they are added (`addVariantTx`). A group of one flavor is not
+   * worth having, so a single flavor item gets none.
+   *
+   * A group somebody already built by hand holding exactly this product's
+   * flavors and nothing else is adopted rather than duplicated -- the shop
+   * that grouped its 48 Foger pods before this existed should not find a
+   * second group of the same 48 after drafting them.
+   */
+  async ensureProductPriceGroup(orgId: string, actorUserId: string, productId: string) {
+    return this.db.withOrg(orgId, async (tx) => {
+      const { rows: productRows } = await tx.query<{ name: string }>(
+        `SELECT name FROM products WHERE id = $1`,
+        [productId],
+      );
+      const product = productRows[0];
+      if (!product) throw ApiException.notFound('product');
+
+      const found = await tx.query<{ id: string; name: string | null }>(
+        `SELECT id, name FROM price_groups WHERE product_id = $1`,
+        [productId],
+      );
+      if (found.rows[0]) {
+        return { price_group: found.rows[0], created: false, added: 0 };
+      }
+
+      const { rows: variantRows } = await tx.query<{ id: string }>(
+        `SELECT id FROM product_variants
+         WHERE product_id = $1 AND status <> 'archived'
+         ORDER BY sort_order, id`,
+        [productId],
+      );
+      if (variantRows.length < 2) return { price_group: null, created: false, added: 0 };
+
+      const { rows: adoptable } = await tx.query<{ id: string; name: string | null }>(
+        `SELECT g.id, g.name
+         FROM price_groups g
+         WHERE g.product_id IS NULL
+           AND EXISTS (SELECT 1 FROM price_group_members m WHERE m.price_group_id = g.id)
+           AND NOT EXISTS (
+             SELECT 1 FROM price_group_members m
+             JOIN product_variants v ON v.id = m.variant_id
+             WHERE m.price_group_id = g.id AND v.product_id <> $1)
+           AND NOT EXISTS (
+             SELECT 1 FROM product_variants v
+             WHERE v.product_id = $1 AND v.status <> 'archived'
+               AND NOT EXISTS (SELECT 1 FROM price_group_members m
+                               WHERE m.price_group_id = g.id AND m.variant_id = v.id))
+         ORDER BY (g.name IS NULL), g.created_at
+         LIMIT 1`,
+        [productId],
+      );
+
+      const name = product.name.slice(0, 128);
+      let group: { id: string; name: string | null };
+      let created = false;
+      if (adoptable[0]) {
+        const { rows } = await tx.query<{ id: string; name: string | null }>(
+          `UPDATE price_groups SET product_id = $2, name = COALESCE(name, $3)
+           WHERE id = $1 RETURNING id, name`,
+          [adoptable[0].id, productId, name],
+        );
+        group = rows[0]!;
+      } else {
+        const { rows } = await tx.query<{ id: string; name: string | null }>(
+          `INSERT INTO price_groups (org_id, name, product_id, created_by)
+           VALUES (current_setting('app.org_id')::uuid, $1, $2, $3)
+           RETURNING id, name`,
+          [name, productId, actorUserId],
+        );
+        group = rows[0]!;
+        created = true;
+      }
+
+      const added = await this.addMembersTx(tx, actorUserId, group.id, variantRows.map((r) => r.id));
+
+      await this.audit.record(tx, {
+        action: created ? 'product.price_group_create' : 'product.price_group_adopt',
+        entityType: 'price_group',
+        entityId: group.id,
+        actorUserId,
+        newValue: { product_id: productId, name: group.name, variant_ids: added },
+      });
+
+      return { price_group: group, created, added: added.length };
     });
   }
 
@@ -1511,28 +1647,25 @@ export class CatalogService {
    * Dissolve a price group.
    *
    * Releases its members and destroys nothing else -- the items, their prices
-   * and their price history are untouched. A group is a saved grouping, not
-   * something anyone sells, so deleting one is the cheap, reversible act of
-   * ungrouping rather than the expensive one of removing products. That
-   * distinction is the whole reason this is a real DELETE while a product can
-   * only ever be archived.
+   * and their price history are untouched, and so is every other group those
+   * items are in. A group is a saved grouping, not something anyone sells, so
+   * deleting one is the cheap, reversible act of ungrouping rather than the
+   * expensive one of removing products. That distinction is the whole reason
+   * this is a real DELETE while a product can only ever be archived.
    *
-   * Members are detached explicitly rather than by leaning on the column's
-   * `ON DELETE SET NULL`: doing it here is what makes the count available to
-   * report back, and it states the intent at the place someone reads it.
+   * The memberships go with the group through the cascade; they are counted
+   * first so the confirmation can say how many items came out.
    */
   async deletePriceCategory(orgId: string, actorUserId: string, id: string) {
     return this.db.withOrg(orgId, async (tx) => {
-      const { rows: existing } = await tx.query<{ id: string }>(
-        `SELECT id FROM price_groups WHERE id = $1`,
+      const { rows: existing } = await tx.query<{ members: number }>(
+        `SELECT (SELECT count(*)::int FROM price_group_members m WHERE m.price_group_id = g.id) AS members
+         FROM price_groups g WHERE g.id = $1`,
         [id],
       );
       if (!existing[0]) throw ApiException.notFound('price group');
+      const released = existing[0].members;
 
-      const { rowCount } = await tx.query(
-        `UPDATE product_variants SET price_group_id = NULL WHERE price_group_id = $1`,
-        [id],
-      );
       await tx.query(`DELETE FROM price_groups WHERE id = $1`, [id]);
 
       await this.audit.record(tx, {
@@ -1540,10 +1673,10 @@ export class CatalogService {
         entityType: 'price_group',
         entityId: id,
         actorUserId,
-        newValue: { released: rowCount ?? 0 },
+        newValue: { released },
       });
 
-      return { deleted: true, released: rowCount ?? 0 };
+      return { deleted: true, released };
     });
   }
 
@@ -1552,15 +1685,22 @@ export class CatalogService {
       // `mismatch_count` is the point of grouping prices in the first place:
       // how many members have drifted off the price the rest of the group
       // shares. The group's own price is taken as the most common one among
-      // its members (`mode()`), and a member with no price at all counts as
-      // mismatched -- it's exactly as wrong at the counter as one priced
-      // differently.
+      // its members (`mode()`, returned as `common_price_minor`), and a member
+      // with no price at all counts as mismatched -- it's exactly as wrong at
+      // the counter as one priced differently. A flavor that is also in a
+      // promotion shows up here as off the price, which is the truth: repricing
+      // this group would take it off the promotion price.
+      //
+      // Discontinued flavors are left out of every figure: they stay members,
+      // but nobody can sell them and repricing the group skips them.
       const { rows } = await tx.query(
         `WITH member_prices AS (
-           SELECT pg.id AS group_id, pg.name, pg.created_at,
+           SELECT g.id AS group_id, g.name, g.created_at, g.product_id,
                   v.id AS variant_id, pr.price_minor
-           FROM price_groups pg
-           LEFT JOIN product_variants v ON v.price_group_id = pg.id
+           FROM price_groups g
+           LEFT JOIN (price_group_members m
+                      JOIN product_variants v ON v.id = m.variant_id AND v.status <> 'archived')
+             ON m.price_group_id = g.id
            LEFT JOIN LATERAL (
              SELECT price_minor FROM variant_prices
              WHERE variant_id = v.id
@@ -1571,24 +1711,43 @@ export class CatalogService {
              ORDER BY store_id NULLS LAST, effective_from DESC
              LIMIT 1
            ) pr ON true
-           WHERE pg.org_id = $1
+           WHERE g.org_id = $1
          ),
          group_mode AS (
            SELECT group_id, mode() WITHIN GROUP (ORDER BY price_minor) AS common_price
            FROM member_prices
            WHERE price_minor IS NOT NULL
            GROUP BY group_id
+         ),
+         -- How many prices tie for most common. On a tie mode() still picks
+         -- one, and the mismatch count comes out the same whichever it picks,
+         -- but calling that price "the group's" would be a coin toss: two at
+         -- $2.99 and two at $1.99 is mixed, not mostly anything.
+         top_prices AS (
+           SELECT group_id, count(*) FILTER (WHERE place = 1) AS tied
+           FROM (
+             SELECT group_id, rank() OVER (PARTITION BY group_id ORDER BY count(*) DESC) AS place
+             FROM member_prices
+             WHERE price_minor IS NOT NULL
+             GROUP BY group_id, price_minor
+           ) ranked
+           GROUP BY group_id
          )
-         SELECT mp.group_id AS id, mp.name, mp.created_at,
+         SELECT mp.group_id AS id, mp.name, mp.created_at, mp.product_id,
                 count(mp.variant_id)::int AS member_count,
-                (CASE WHEN count(DISTINCT mp.price_minor) = 1 THEN min(mp.price_minor) ELSE NULL END)::text
+                (CASE WHEN count(mp.variant_id) > 0
+                           AND count(mp.price_minor) = count(mp.variant_id)
+                           AND count(DISTINCT mp.price_minor) = 1
+                      THEN min(mp.price_minor) ELSE NULL END)::text
                   AS current_price_minor,
+                (CASE WHEN tp.tied = 1 THEN gm.common_price END)::text AS common_price_minor,
                 count(mp.variant_id) FILTER (
                   WHERE mp.price_minor IS DISTINCT FROM gm.common_price
                 )::int AS mismatch_count
          FROM member_prices mp
          LEFT JOIN group_mode gm ON gm.group_id = mp.group_id
-         GROUP BY mp.group_id, mp.name, mp.created_at, gm.common_price
+         LEFT JOIN top_prices tp ON tp.group_id = mp.group_id
+         GROUP BY mp.group_id, mp.name, mp.created_at, mp.product_id, gm.common_price, tp.tied
          ORDER BY mp.created_at DESC`,
         [orgId, storeId],
       );
@@ -1599,36 +1758,36 @@ export class CatalogService {
   async getPriceCategory(orgId: string, id: string, storeId: string | null) {
     return this.db.withOrg(orgId, async (tx) => {
       const { rows: categoryRows } = await tx.query(
-        `SELECT pg.id, pg.name, pg.created_at,
-                count(v.id)::int AS member_count,
-                (CASE WHEN count(DISTINCT pr.price_minor) = 1 THEN min(pr.price_minor) ELSE NULL END)::text
-                  AS current_price_minor
-         FROM price_groups pg
-         LEFT JOIN product_variants v ON v.price_group_id = pg.id
-         LEFT JOIN LATERAL (
-           SELECT price_minor FROM variant_prices
-           WHERE variant_id = v.id
-             AND (store_id = $3 OR store_id IS NULL)
-             AND kind = 'regular'
-             AND effective_from <= now()
-             AND (effective_to IS NULL OR effective_to > now())
-           ORDER BY store_id NULLS LAST, effective_from DESC
-           LIMIT 1
-         ) pr ON true
-         WHERE pg.id = $1 AND pg.org_id = $2
-         GROUP BY pg.id`,
-        [id, orgId, storeId],
+        `SELECT g.id, g.name, g.created_at, g.product_id
+         FROM price_groups g
+         WHERE g.id = $1 AND g.org_id = $2`,
+        [id, orgId],
       );
       const category = categoryRows[0];
       if (!category) throw ApiException.notFound('price category');
 
-      const { rows: members } = await tx.query(
+      // `also_in` is the other groups a member sits in, and `price_since` when
+      // its current price was set: between them they answer "why is this one
+      // $1.99 when the rest are $2.99" -- it was priced last through the
+      // promotion it is also in.
+      const { rows: members } = await tx.query<{
+        variant_id: string;
+        price_minor: string | null;
+      }>(
         `SELECT v.id AS variant_id, p.id AS product_id, p.name AS product_name,
-                v.variant_name, v.sku, pr.price_minor::text AS price_minor
-         FROM product_variants v
+                v.variant_name, v.sku, pr.price_minor::text AS price_minor,
+                pr.effective_from AS price_since,
+                COALESCE((
+                  SELECT jsonb_agg(jsonb_build_object('id', g2.id, 'name', g2.name) ORDER BY g2.created_at)
+                  FROM price_group_members m2
+                  JOIN price_groups g2 ON g2.id = m2.price_group_id
+                  WHERE m2.variant_id = v.id AND m2.price_group_id <> $1
+                ), '[]'::jsonb) AS also_in
+         FROM price_group_members m
+         JOIN product_variants v ON v.id = m.variant_id
          JOIN products p ON p.id = v.product_id
          LEFT JOIN LATERAL (
-           SELECT price_minor FROM variant_prices
+           SELECT price_minor, effective_from FROM variant_prices
            WHERE variant_id = v.id
              AND (store_id = $2 OR store_id IS NULL)
              AND kind = 'regular'
@@ -1637,20 +1796,27 @@ export class CatalogService {
            ORDER BY store_id NULLS LAST, effective_from DESC
            LIMIT 1
          ) pr ON true
-         WHERE v.price_group_id = $1
-         ORDER BY p.name, v.variant_name`,
+         WHERE m.price_group_id = $1 AND v.status <> 'archived'
+         ORDER BY lower(p.name), lower(COALESCE(v.variant_name, '')), v.sku`,
         [id, storeId],
       );
 
-      return { ...category, members };
+      const priced = members.map((m) => m.price_minor);
+      const uniform = priced.length > 0 && priced.every((p) => p !== null && p === priced[0]);
+      return {
+        ...category,
+        member_count: members.length,
+        current_price_minor: uniform ? priced[0] : null,
+        members,
+      };
     });
   }
 
   /**
-   * Stamps `price_group_id` on every given variant, without touching price --
-   * building a category's membership is separate from setting its price
-   * (`bulkSetPrice`, unchanged, does that). A variant carries at most one
-   * price category at a time, so this silently moves it out of any other.
+   * Add flavors to a group without touching their price -- building a
+   * group's membership is separate from setting its price (`bulkSetPrice`
+   * does that). A flavor can be in any number of groups, so this never takes
+   * one out of another group.
    */
   async addVariantsToPriceCategory(
     orgId: string,
@@ -1662,44 +1828,39 @@ export class CatalogService {
       const { rows: categoryRows } = await tx.query(`SELECT id FROM price_groups WHERE id = $1`, [categoryId]);
       if (!categoryRows[0]) throw ApiException.notFound('price category');
 
+      const wanted = [...new Set(variantIds)];
       const { rows: variantRows } = await tx.query<{ id: string }>(
         `SELECT id FROM product_variants WHERE id = ANY($1::uuid[])`,
-        [variantIds],
+        [wanted],
       );
-      if (variantRows.length !== variantIds.length) throw ApiException.notFound('variant');
+      if (variantRows.length !== wanted.length) throw ApiException.notFound('variant');
 
-      await tx.query(`UPDATE product_variants SET price_group_id = $2 WHERE id = ANY($1::uuid[])`, [
-        variantIds,
-        categoryId,
-      ]);
+      const added = await this.addMembersTx(tx, actorUserId, categoryId, wanted);
 
-      await this.audit.record(tx, {
-        action: 'product.price_category_add_member',
-        entityType: 'price_group',
-        entityId: categoryId,
-        actorUserId,
-        newValue: { variant_ids: variantIds },
-      });
+      if (added.length > 0) {
+        await this.audit.record(tx, {
+          action: 'product.price_category_add_member',
+          entityType: 'price_group',
+          entityId: categoryId,
+          actorUserId,
+          newValue: { variant_ids: added },
+        });
+      }
 
-      return { price_group_id: categoryId, added: variantIds.length };
+      return { price_group_id: categoryId, added: added.length, already: wanted.length - added.length };
     });
   }
 
-  async removeVariantFromPriceCategory(orgId: string, actorUserId: string, variantId: string) {
+  /** Take one flavor out of one group. Its price, and any other group it is in, stay as they are. */
+  async removeVariantFromPriceCategory(orgId: string, actorUserId: string, categoryId: string, variantId: string) {
     return this.db.withOrg(orgId, async (tx) => {
-      // `RETURNING price_group_id` on the UPDATE below would reflect the row
-      // *after* it's set to NULL, always -- never the value that justified the
-      // match. Joining against a pre-update snapshot is what lets RETURNING
-      // report the old value instead.
-      const { rows } = await tx.query<{ price_group_id: string | null }>(
-        `UPDATE product_variants v SET price_group_id = NULL
-         FROM (SELECT id, price_group_id FROM product_variants WHERE id = $1 AND price_group_id IS NOT NULL) AS old
-         WHERE v.id = old.id
-         RETURNING old.price_group_id`,
-        [variantId],
+      const { rows } = await tx.query<{ variant_id: string }>(
+        `DELETE FROM price_group_members
+         WHERE price_group_id = $1 AND variant_id = $2
+         RETURNING variant_id`,
+        [categoryId, variantId],
       );
-      const categoryId = rows[0]?.price_group_id;
-      if (!categoryId) throw ApiException.notFound('price category member');
+      if (!rows[0]) throw ApiException.notFound('price category member');
 
       await this.audit.record(tx, {
         action: 'product.price_category_remove_member',
@@ -1717,10 +1878,16 @@ export class CatalogService {
    * The speed-scan path: one typed/scanned SKU or barcode at a time, resolved
    * the same way a manually typed SKU is during invoice review
    * (`findVariantBySkuOrBarcodeTx`), then added to the category exactly like
-   * `addVariantsToPriceCategory` -- just returning enough about the match for
-   * the caller to show an on-page confirmation.
+   * `addVariantsToPriceCategory` -- just returning enough about the match,
+   * price included, for the caller to show it in the list straight away.
    */
-  async scanAddToPriceCategory(orgId: string, actorUserId: string, categoryId: string, code: string) {
+  async scanAddToPriceCategory(
+    orgId: string,
+    actorUserId: string,
+    categoryId: string,
+    code: string,
+    storeId: string | null,
+  ) {
     return this.db.withOrg(orgId, async (tx) => {
       const { rows: categoryRows } = await tx.query(`SELECT id FROM price_groups WHERE id = $1`, [categoryId]);
       if (!categoryRows[0]) throw ApiException.notFound('price category');
@@ -1728,24 +1895,43 @@ export class CatalogService {
       const match = await this.findVariantBySkuOrBarcodeTx(tx, code);
       if (!match) throw ApiException.notFound(`item for code "${code}"`);
 
-      await tx.query(`UPDATE product_variants SET price_group_id = $2 WHERE id = $1`, [match.id, categoryId]);
+      const added = await this.addMembersTx(tx, actorUserId, categoryId, [match.id]);
 
-      const { rows } = await tx.query<{ product_name: string; variant_name: string | null; sku: string }>(
-        `SELECT p.name AS product_name, v.variant_name, v.sku
+      const { rows } = await tx.query<{
+        product_id: string;
+        product_name: string;
+        variant_name: string | null;
+        sku: string;
+        price_minor: string | null;
+      }>(
+        `SELECT p.id AS product_id, p.name AS product_name, v.variant_name, v.sku,
+                pr.price_minor::text AS price_minor
          FROM product_variants v JOIN products p ON p.id = v.product_id
+         LEFT JOIN LATERAL (
+           SELECT price_minor FROM variant_prices
+           WHERE variant_id = v.id
+             AND (store_id = $2 OR store_id IS NULL)
+             AND kind = 'regular'
+             AND effective_from <= now()
+             AND (effective_to IS NULL OR effective_to > now())
+           ORDER BY store_id NULLS LAST, effective_from DESC
+           LIMIT 1
+         ) pr ON true
          WHERE v.id = $1`,
-        [match.id],
+        [match.id, storeId],
       );
 
-      await this.audit.record(tx, {
-        action: 'product.price_category_add_member',
-        entityType: 'price_group',
-        entityId: categoryId,
-        actorUserId,
-        newValue: { variant_id: match.id, via: 'scan' },
-      });
+      if (added.length > 0) {
+        await this.audit.record(tx, {
+          action: 'product.price_category_add_member',
+          entityType: 'price_group',
+          entityId: categoryId,
+          actorUserId,
+          newValue: { variant_id: match.id, via: 'scan' },
+        });
+      }
 
-      return { variant_id: match.id, ...rows[0]! };
+      return { variant_id: match.id, ...rows[0]!, already_member: added.length === 0 };
     });
   }
 

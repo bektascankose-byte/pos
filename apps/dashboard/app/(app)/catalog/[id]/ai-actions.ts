@@ -94,7 +94,16 @@ interface ApplyDraft {
 export async function applyAiDraftAction(
   productId: string,
   draft: ApplyDraft,
-): Promise<ActionResult<{ product: Product; created: number; named: number; failed: string[] }>> {
+): Promise<
+  ActionResult<{
+    product: Product;
+    created: number;
+    named: number;
+    failed: string[];
+    /** The line's price group, when saving made or adopted one. */
+    priceGroup: { id: string; name: string | null; created: boolean } | null;
+  }>
+> {
   try {
     const fields: Record<string, unknown> = {};
     if (draft.name !== undefined) fields.name = draft.name;
@@ -158,11 +167,25 @@ export async function applyAiDraftAction(
       }
     }
 
+    // Every flavor of the line in one price group, named after the item, so
+    // it can be repriced all at once later. Prices are left exactly as they are.
+    let priceGroup: { id: string; name: string | null; created: boolean } | null = null;
+    try {
+      const made = await apiFetch<{ price_group: { id: string; name: string | null } | null; created: boolean }>(
+        `/api/v1/catalog/products/${productId}/price-group`,
+        { method: "POST" },
+      );
+      if (made.price_group) priceGroup = { ...made.price_group, created: made.created };
+    } catch {
+      // A group is a convenience; failing to make one must not fail the save.
+    }
+
     if (created > 0 || named > 0) product = await apiFetch<Product>(`/api/v1/catalog/products/${productId}`);
 
     revalidatePath(`/catalog/${productId}`);
     revalidatePath("/catalog");
-    return { ok: true, data: { product, created, named, failed } };
+    revalidatePath("/catalog/price-categories");
+    return { ok: true, data: { product, created, named, failed, priceGroup } };
   } catch (e) {
     return {
       ok: false,

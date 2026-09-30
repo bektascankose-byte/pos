@@ -448,7 +448,7 @@ export async function addToPriceCategoryAction(formData: FormData): Promise<Acti
     return { ok: false, error: "Select at least one product first." };
   }
   if (!categoryId) {
-    return { ok: false, error: "Choose a price category first." };
+    return { ok: false, error: "Choose a price group first." };
   }
 
   try {
@@ -465,7 +465,7 @@ export async function addToPriceCategoryAction(formData: FormData): Promise<Acti
 export async function createPriceCategoryAction(formData: FormData): Promise<ActionResult<{ id: string }>> {
   const name = String(formData.get("name") ?? "").trim();
   if (!name) {
-    return { ok: false, error: "Give this category a name." };
+    return { ok: false, error: "Give this group a name." };
   }
 
   try {
@@ -475,7 +475,7 @@ export async function createPriceCategoryAction(formData: FormData): Promise<Act
     });
     return { ok: true, data };
   } catch (e) {
-    return { ok: false, error: e instanceof ApiError ? e.message : "Could not create that category." };
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not create that group." };
   }
 }
 
@@ -510,9 +510,13 @@ export async function removePriceCategoryMemberAction(id: string, variantId: str
 
 interface ScannedMember {
   variant_id: string;
+  product_id: string;
   product_name: string;
   variant_name: string | null;
   sku: string;
+  price_minor: string | null;
+  /** True when the scan found it already in this group, so nothing was added. */
+  already_member: boolean;
 }
 
 export async function scanAddToPriceCategoryAction(id: string, code: string): Promise<ActionResult<ScannedMember>> {
@@ -522,8 +526,35 @@ export async function scanAddToPriceCategoryAction(id: string, code: string): Pr
   try {
     const data = await apiFetch<ScannedMember>(`/api/v1/catalog/price-categories/${id}/scan`, {
       method: "POST",
-      body: JSON.stringify({ code: code.trim() }),
+      // The store decides which price comes back, so the row the page appends
+      // shows the same figure as the rest of the table rather than a blank.
+      body: JSON.stringify({ code: code.trim(), store_id: await primaryStoreId() }),
     });
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: e instanceof ApiError ? e.message : "Could not add that item." };
+  }
+}
+
+/**
+ * Add flavors to a group by id, for the group page's "Find by name" box.
+ *
+ * Separate from the scan action because searching by name can match something
+ * already in the group, and the counts say which is which rather than the page
+ * guessing from its own list.
+ */
+export async function addMembersToPriceGroupAction(
+  id: string,
+  variantIds: string[],
+): Promise<ActionResult<{ added: number; already: number }>> {
+  if (variantIds.length === 0) {
+    return { ok: false, error: "Pick at least one item." };
+  }
+  try {
+    const data = await apiFetch<{ added: number; already: number }>(
+      `/api/v1/catalog/price-categories/${id}/members`,
+      { method: "POST", body: JSON.stringify({ variant_ids: variantIds }) },
+    );
     return { ok: true, data };
   } catch (e) {
     return { ok: false, error: e instanceof ApiError ? e.message : "Could not add that item." };
@@ -649,26 +680,27 @@ export async function quickEditRowAction(
 
   // Price group membership is not a column on the variant -- it has its own
   // add/remove endpoints, because joining a group is a different act from
-  // repricing one. Comparing against the group the row was already in is what
-  // tells "left alone" apart from "deliberately set to none": both arrive as
-  // a value, and only the second should remove anything.
-  const chosenGroup = value("price_group_id");
-  const currentGroup = value("current_price_group_id");
-  if (chosenGroup !== currentGroup) {
+  // repricing one. A flavor can be in several groups, so the form sends the
+  // ones it was in and the ones still ticked: only a box someone unticked
+  // takes it out of anything, and the picker only ever adds.
+  const wasIn = formData.getAll("current_price_group_id").map(String).filter(Boolean);
+  const keep = new Set(formData.getAll("keep_price_group_id").map(String));
+  for (const groupId of wasIn.filter((id) => !keep.has(id))) {
     try {
-      if (chosenGroup) {
-        // Adding also moves it out of whatever group it was in -- a variant
-        // carries at most one, so there is no separate "leave the old" step.
-        await apiFetch(`/api/v1/catalog/price-categories/${chosenGroup}/members`, {
-          method: "POST",
-          body: JSON.stringify({ variant_ids: [variantId] }),
-        });
-      } else {
-        await apiFetch(
-          `/api/v1/catalog/price-categories/${currentGroup}/members/${variantId}/remove`,
-          { method: "POST" },
-        );
-      }
+      await apiFetch(`/api/v1/catalog/price-categories/${groupId}/members/${variantId}/remove`, {
+        method: "POST",
+      });
+    } catch (e) {
+      problems.push(e instanceof ApiError ? e.message : "leaving a price group");
+    }
+  }
+  const joinGroup = value("price_group_id");
+  if (joinGroup && !wasIn.includes(joinGroup)) {
+    try {
+      await apiFetch(`/api/v1/catalog/price-categories/${joinGroup}/members`, {
+        method: "POST",
+        body: JSON.stringify({ variant_ids: [variantId] }),
+      });
     } catch (e) {
       problems.push(e instanceof ApiError ? e.message : "the price group");
     }

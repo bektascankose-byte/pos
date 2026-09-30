@@ -16,5 +16,7 @@ export default async function PriceCategoryDetailPage({ params }: { params: Prom
     throw e;
   }
 
-  return <PriceCategoryClient categoryId={id} initialCategory={category} />;
+  // Keyed by id so moving from one group to another through an "Also in" link
+  // starts the page fresh rather than carrying the last group's state over.
+  return <PriceCategoryClient key={id} categoryId={id} initialCategory={category} storeId={storeId ?? null} />;
 }

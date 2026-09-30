@@ -14,6 +14,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { runSalesChecks } from './e2e-sales.mjs';
+import { runPriceGroupChecks } from './e2e-price-groups.mjs';
 import { runOrderChecks } from './e2e-orders.mjs';
 import { runShopChecks } from './e2e-shop.mjs';
 import { E2E_DOORDASH_AUTHORIZATION, runDeliveryAndRewardsChecks } from './e2e-delivery-rewards.mjs';
@@ -661,7 +662,13 @@ await runDeliveryAndRewardsChecks({
   mailbox,
 });
 
-// ----------------------------------------------------------------- 12. summary
+// ------------------------------------------ 12. price groups and promotions
+// Last, because it adds products of its own, and every check above that
+// counts the catalog was written against the seed alone.
+
+await runPriceGroupChecks({ api, check, ownerToken, cashierToken, storeId });
+
+// ----------------------------------------------------------------- 13. summary
 
 console.log(`\n  ${passed} passed, ${failed} failed\n`);
 if (failed > 0) {

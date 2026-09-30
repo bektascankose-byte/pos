@@ -18,23 +18,24 @@ const db = scratch.db;
 const n = async (sql) => Number((await db.query(sql))[0].n);
 
 test(`all ${migrationFiles().length} migrations applied on ${scratch.engine}`, () => {
-  assert.equal(migrationFiles().length, 34);
+  assert.equal(migrationFiles().length, 35);
 });
 
 test('migrations are numbered contiguously from 0001', () => {
   const prefixes = migrationFiles().map((f) => Number(f.name.slice(0, 4)));
-  assert.deepEqual(prefixes, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34]);
+  assert.deepEqual(prefixes, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]);
 });
 
 // 0034 adds two: pos_catalog_variants (what the registers were last sent) and
-// pos_releases (each press of Send).
-test('100 base tables exist', async () => {
+// pos_releases (each press of Send). 0035 adds price_group_members, so a
+// flavor can sit in more than one price group.
+test('101 base tables exist', async () => {
   assert.equal(
     await n(`select count(*) n from pg_class c
              join pg_namespace ns on ns.oid = c.relnamespace
              where ns.nspname='public' and c.relkind in ('r','p')
                and not c.relispartition`),
-    100,
+    101,
   );
 });
 
@@ -47,7 +48,7 @@ test('inventory_ledger and audit_log are range partitioned', async () => {
   assert.deepEqual(rows.map((r) => r.relname), ['audit_log', 'inventory_ledger']);
 });
 
-test('157 foreign keys, 35 enums, 142 table level checks', async () => {
+test('159 foreign keys, 35 enums, 142 table level checks', async () => {
   // 0027 accounts for the last move: seven foreign keys (four off `orders`,
   // two off `order_lines`, one off `order_events`), the order_fulfilment and
   // order_status enums, and six checks -- four on `orders` including the one
@@ -72,10 +73,13 @@ test('157 foreign keys, 35 enums, 142 table level checks', async () => {
   // and a withdrawal that names who withdrew it. 0034 adds two foreign keys,
   // both to organizations: the sent catalog deliberately has none to the
   // variants it copies, since a register keeps what it was sent until the next
-  // Send even if the variant is deleted meanwhile.
+  // Send even if the variant is deleted meanwhile. 0035 nets two: the
+  // membership table's keys to its group and to the variant, and a group's
+  // key to the product it was made for, less the variant's old single
+  // price_group_id key, dropped with the column.
   assert.equal(await n(`select count(*) n from pg_constraint c
                         join pg_namespace ns on ns.oid=c.connamespace
-                        where ns.nspname='public' and c.contype='f'`), 157);
+                        where ns.nspname='public' and c.contype='f'`), 159);
   assert.equal(await n(`select count(distinct t.typname) n from pg_type t
                         join pg_namespace ns on ns.oid=t.typnamespace
                         where ns.nspname='public' and t.typtype='e'`), 35);

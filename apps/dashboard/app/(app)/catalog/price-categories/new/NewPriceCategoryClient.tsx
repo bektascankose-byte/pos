@@ -11,9 +11,10 @@ export function NewPriceCategoryClient() {
 
   return (
     <div className="flex max-w-lg flex-col gap-4">
-      <h1 className="text-xl font-semibold">New price category</h1>
+      <h1 className="text-xl font-semibold">New price group</h1>
       <p className="text-sm text-[var(--color-text-muted)]">
-        Give it a name, then add members from the catalog list or by scanning them on its own page.
+        Give it a name, then add items by name, by scanning them on its own page or from the catalog list. Items
+        can come from different products, and an item already in another group stays in that one too.
       </p>
 
       {error ? <p className="text-sm text-[var(--color-error)]">{error}</p> : null}
@@ -39,7 +40,7 @@ export function NewPriceCategoryClient() {
           <input
             name="name"
             required
-            placeholder="9.99 tier"
+            placeholder="Slow movers"
             className="rounded-md border border-[var(--color-border)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
           />
         </label>
@@ -48,7 +49,7 @@ export function NewPriceCategoryClient() {
           disabled={pending}
           className="self-start rounded-md bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-[var(--color-accent-contrast)] disabled:opacity-60"
         >
-          {pending ? "Creating..." : "Create category"}
+          {pending ? "Creating..." : "Create group"}
         </button>
       </form>
     </div>

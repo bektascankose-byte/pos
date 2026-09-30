@@ -2,6 +2,48 @@
 
 Notable changes. Newest first.
 
+## Price groups: every flavor of a drafted item, and promotions across items
+
+**Saving an AI draft now makes a price group for the line.** It is named after
+the item, for example "Celsius Sparkling 12oz", and holds every flavor.
+Nothing is repriced by this. The group is there so the whole line can be
+repriced in one go later, which is how a shelf price usually changes anyway.
+If you already built that group by hand it is adopted rather than duplicated.
+
+**An item can be in more than one group at once.** Its line group and a
+"Slow movers" promotion mixing flavors from several products can both hold it.
+Until now a flavor carried at most one group, so adding it to a second quietly
+took it out of the first.
+
+**Its price is whichever was set last, from anywhere.** Pricing a group,
+pricing one flavor on its own page or editing a row in the catalog list all
+write the same kind of dated price, so nothing new had to be invented to
+decide who wins: the newest one is the price. Pricing a group touches only
+that group's members, so an item in two groups takes whichever price was set
+most recently. Like every other price change it reaches the tills when you
+Send to POS.
+
+**A group page shows what else its items belong to.** Each row lists the other
+groups that item is in, links to them, and says when its price was last set.
+The catalog list does the same in small: the first group name plus "+2" when
+there are more, with all of them on hover.
+
+**Unnamed groups say what they hold.** One with a single price reads as that
+price. One that is mostly a single figure now reads "Mostly $2.99 · 5 items"
+instead of "Mixed prices", which every mixed group used to read as.
+
+**Find items by name, not only by barcode.** The group page keeps its scanner
+and adds a search box, so a flavor can be added without the packet in hand.
+Scanning something already in the group now says so rather than looking like
+it worked.
+
+**Discontinued flavors stay in their group but are left alone.** They are not
+counted and a group reprice skips them, so an archived flavor cannot come back
+at a new price.
+
+**Deleting a group deletes only the grouping.** Every item stays in the
+catalog at the price it has now and stays in any other group it belongs to.
+
 ## Price every flavor at once, and the AI draft fills in the brand
 
 **All flavors on Cost & Margin.** Flavors of one line nearly always share a

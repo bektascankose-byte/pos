@@ -16,8 +16,8 @@ export interface SearchRow {
   brand_name: string | null;
   category_id: string | null;
   category_name: string | null;
-  price_group_id: string | null;
-  price_group_name: string | null;
+  /** Every price group this flavor is in, oldest membership first. A flavor can be in several. */
+  price_groups: { id: string; name: string | null }[];
   price_minor: string | null;
   cost: string | null;
   on_hand: string;

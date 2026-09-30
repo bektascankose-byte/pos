@@ -72,3 +72,7 @@ brands.txt
 *.bat
 lint.log
 .shot/
+
+# Scratch directory the desktop tooling writes drafts into. Anything worth
+# keeping gets applied into the tree properly; the copy here is a leftover.
+Claude outputs/

@@ -22,11 +22,26 @@ function groupPrice(category: PriceCategory): string | null {
   return category.current_price_minor === null ? null : String(category.current_price_minor);
 }
 
+/**
+ * What the Price column says. One price when every member has it; the price
+ * most of them share when they don't, so a line with one flavor on promotion
+ * still reads as the line's price; plain "Mixed" when no single price leads.
+ */
+function priceCell(category: PriceCategory): string {
+  const uniform = groupPrice(category);
+  if (uniform !== null) return formatMinor(uniform);
+  if (category.member_count === 0) return "—";
+  if (category.common_price_minor) return `Mostly ${formatMinor(String(category.common_price_minor))}`;
+  return "Mixed";
+}
+
 export function PriceCategoriesClient({ categories }: { categories: PriceCategory[] }) {
   const router = useRouter();
   const [editing, setEditing] = useState<PriceCategory | null>(null);
   const [confirming, setConfirming] = useState<PriceCategory | null>(null);
-  const [message, setMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null);
+  const [message, setMessage] = useState<{ kind: "error" | "success"; text: string; sendLink?: boolean } | null>(
+    null,
+  );
   const [pending, startTransition] = useTransition();
 
   const remove = (category: PriceCategory) => {
@@ -39,7 +54,7 @@ export function PriceCategoriesClient({ categories }: { categories: PriceCategor
           kind: "success",
           text:
             result.data.released > 0
-              ? `Group deleted. ${result.data.released} item${result.data.released === 1 ? "" : "s"} released — their prices are unchanged.`
+              ? `Group deleted. ${result.data.released} item${result.data.released === 1 ? "" : "s"} released, their prices unchanged.`
               : "Group deleted.",
         });
         router.refresh();
@@ -61,16 +76,28 @@ export function PriceCategoriesClient({ categories }: { categories: PriceCategor
         </Link>
       </div>
       <p className="text-sm text-[var(--color-text-muted)]">
-        Group items so their price can be changed all at once later. Add members from the{" "}
+        Group items so their price can be changed all at once. An item can be in more than one group, and its
+        price is whichever was set last. Saving an AI draft makes a group holding every flavor of that item. Add
+        members from the{" "}
         <Link href="/catalog" className="text-[var(--color-accent)]">
           catalog list
         </Link>{" "}
-        or by scanning them on a group&apos;s own page.
+        or on a group&apos;s own page, by name or by scanning.
       </p>
 
       {message ? (
         <p className={`text-sm ${message.kind === "error" ? "text-[var(--color-error)]" : "text-[var(--color-success)]"}`}>
           {message.text}
+          {message.sendLink ? (
+            <>
+              {" "}
+              New prices reach the registers when you{" "}
+              <Link href="/catalog/send-to-pos" className="text-[var(--color-accent)]">
+                Send to POS
+              </Link>
+              .
+            </>
+          ) : null}
         </p>
       ) : null}
 
@@ -95,11 +122,12 @@ export function PriceCategoriesClient({ categories }: { categories: PriceCategor
                   >
                     {category.name ?? "(unnamed)"}
                   </Link>
+                  {category.product_id ? (
+                    <span className="ml-2 text-xs text-[var(--color-text-muted)]">every flavor</span>
+                  ) : null}
                 </td>
                 <td className="px-4 py-2 text-right tabular-nums">{category.member_count}</td>
-                <td className="px-4 py-2 text-right tabular-nums">
-                  {groupPrice(category) !== null ? formatMinor(groupPrice(category)!) : "mixed / —"}
-                </td>
+                <td className="px-4 py-2 text-right tabular-nums">{priceCell(category)}</td>
                 <td className="px-4 py-2">
                   {category.mismatch_count > 0 ? (
                     <Link
@@ -149,9 +177,9 @@ export function PriceCategoriesClient({ categories }: { categories: PriceCategor
         <EditGroupModal
           category={editing}
           onClose={() => setEditing(null)}
-          onSaved={(text) => {
+          onSaved={(text, repriced) => {
             setEditing(null);
-            setMessage({ kind: "success", text });
+            setMessage({ kind: "success", text, sendLink: repriced });
             router.refresh();
           }}
         />
@@ -162,7 +190,7 @@ export function PriceCategoriesClient({ categories }: { categories: PriceCategor
           open
           onClose={() => setConfirming(null)}
           title={`Delete ${confirming.name ?? "this group"}?`}
-          description="Only the group goes. Every item in it stays in the catalog at the price it has now."
+          description="Only the group goes. Every item in it stays in the catalog at the price it has now, and in any other group it is in."
         >
           <div className="flex flex-col gap-3">
             <p className="text-sm text-[var(--color-text-muted)]">
@@ -208,7 +236,7 @@ function EditGroupModal({
 }: {
   category: PriceCategory;
   onClose: () => void;
-  onSaved: (message: string) => void;
+  onSaved: (message: string, repriced: boolean) => void;
 }) {
   const current = groupPrice(category);
   const [name, setName] = useState(category.name ?? "");
@@ -245,7 +273,7 @@ function EditGroupModal({
         );
       }
 
-      onSaved(done.length > 0 ? `${done.join(", ")}.` : "Nothing changed.");
+      onSaved(done.length > 0 ? `${done.join(", ")}.` : "Nothing changed.", priceChanged);
     });
   };
 
@@ -274,7 +302,7 @@ function EditGroupModal({
           />
           <span className="text-xs text-[var(--color-text-muted)]">
             {priceChanged
-              ? `Saving will reprice all ${category.member_count} item${category.member_count === 1 ? "" : "s"} in this group, and each change is recorded in that item's price history.`
+              ? `Saving will reprice all ${category.member_count} item${category.member_count === 1 ? "" : "s"} in this group, and each change is recorded in that item's price history. Items also in other groups take this price too: the last price set is the one that counts.`
               : "Change this to reprice every item in the group at once."}
           </span>
         </label>

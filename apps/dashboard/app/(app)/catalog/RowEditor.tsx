@@ -140,23 +140,35 @@ export function RowEditor({
         </div>
 
         {/*
-          The group the row is in now, so saving can tell "left alone" apart
-          from "deliberately set to none" — both arrive as a value, and only
-          the second should take the item out of its group.
+          The groups the row is in now, each a ticked box: unticking one is
+          the deliberate act of taking the item out of that group, and a box
+          left alone leaves it in. Joining another group is the picker below,
+          which never takes the item out of anything.
         */}
-        <input type="hidden" name="current_price_group_id" value={row.price_group_id ?? ""} />
+        {row.price_groups.length > 0 ? (
+          <fieldset className="flex flex-col gap-1 text-sm">
+            <legend className="mb-1">Price groups</legend>
+            {row.price_groups.map((group) => (
+              <label key={group.id} className="flex items-center gap-2">
+                <input type="hidden" name="current_price_group_id" value={group.id} />
+                <input type="checkbox" name="keep_price_group_id" value={group.id} defaultChecked />
+                {group.name ?? "Unnamed group"}
+              </label>
+            ))}
+          </fieldset>
+        ) : null}
         <LookupSelect
           kind="price_group"
-          label="Price group"
+          label={row.price_groups.length > 0 ? "Also add to" : "Price group"}
           name="price_group_id"
-          options={priceGroups}
-          defaultValue={row.price_group_id ?? ""}
+          options={priceGroups.filter((option) => !row.price_groups.some((g) => g.id === option.id))}
+          defaultValue=""
           placeholder="— none —"
           onCreated={onPriceGroupCreated}
         />
         <p className="-mt-2 text-xs text-[var(--color-text-muted)]">
-          Items in a group get repriced together. An item belongs to one group at a time, so choosing a
-          different one moves it.
+          Items in a group get repriced together. An item can be in more than one group, and its price is
+          whichever was set last. Untick a group to take the item out of it.
         </p>
 
         {/*

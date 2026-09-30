@@ -500,11 +500,12 @@ export const setVariantPriceSchema = z.object({
 /**
  * Price several variants together, in one transaction.
  *
- * `variant_ids` mints a fresh price group and stamps it on every variant
- * given -- a group is formed by pricing, not declared ahead of time.
- * `price_group_id` reprices a group that already exists, without having to
- * re-select its members. Exactly one of the two is how the request says
- * which case it is.
+ * `variant_ids` prices that selection and keeps it as a group (reusing one
+ * that already holds exactly those variants). `price_group_id` reprices a
+ * group that already exists, without having to re-select its members.
+ * Exactly one of the two is how the request says which case it is. Either
+ * way only those variants move: a variant in other groups too keeps them,
+ * and its price is simply whatever was set last.
  */
 export const bulkPriceVariantsSchema = z
   .object({
@@ -551,26 +552,34 @@ export const deletePriceCategoryResultSchema = z.object({
 });
 
 /**
- * Stamps `price_group_id` on every given variant without touching price --
- * unlike `bulkPriceVariantsSchema`, forming/joining a category here is a
- * separate, deliberate act from repricing it later. A variant carries at most
- * one price category at a time (a plain FK column, not a join table), so
- * adding it here silently moves it out of whatever category it was in.
+ * Adds every given variant to the group without touching price -- unlike
+ * `bulkPriceVariantsSchema`, joining a group here is a separate, deliberate
+ * act from repricing it later. A variant can be in any number of groups
+ * (`price_group_members`, 0035), so adding it here never takes it out of
+ * another one.
  */
 export const addPriceCategoryMembersSchema = z.object({
   variant_ids: z.array(uuid).min(1).max(500),
 });
 
 /** One scanned code at a time -- resolved the same way a manually typed SKU is during invoice review. */
-export const scanPriceCategoryMemberSchema = z.object({ code: z.string().min(1).max(64) });
+export const scanPriceCategoryMemberSchema = z.object({
+  code: z.string().min(1).max(64),
+  /** Which store's price to report back for the item scanned in. */
+  store_id: uuid.nullable().optional(),
+});
 
 export const priceCategorySchema = z.object({
   id: uuid,
   name: z.string().nullable(),
   created_at: timestamp,
+  /** The product whose flavors this group was made for, when an AI draft made it. */
+  product_id: uuid.nullable().optional(),
   member_count: z.number().int(),
   /** Null when empty, or when current members don't all share one price. */
   current_price_minor: moneyNonNegative.nullable(),
+  /** The price most members share. What "off the group price" is measured against. */
+  common_price_minor: moneyNonNegative.nullable().optional(),
   /**
    * Members that have drifted off the price the rest of the group shares --
    * the whole reason to group prices in the first place. An unpriced member
@@ -586,6 +595,10 @@ export const priceCategoryMemberSchema = z.object({
   variant_name: z.string().nullable(),
   sku,
   price_minor: moneyNonNegative.nullable(),
+  /** When the current price was set, by whatever route. The latest one set is the one that counts. */
+  price_since: timestamp.nullable().optional(),
+  /** The other groups this variant is in. */
+  also_in: z.array(z.object({ id: uuid, name: z.string().nullable() })).optional(),
 });
 
 export const taxCategorySchema = z.object({

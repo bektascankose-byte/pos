@@ -326,13 +326,15 @@ export class CatalogController {
     return this.catalog.addVariantsToPriceCategory(user.orgId, user.userId, id, body.variant_ids);
   }
 
+  /** Out of this one group only. A flavor can be in several, and the others keep it. */
   @Post('price-categories/:id/members/:variantId/remove')
   @RequirePermissions('product.update')
   removePriceCategoryMember(
     @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
     @Param('variantId') variantId: string,
   ) {
-    return this.catalog.removeVariantFromPriceCategory(user.orgId, user.userId, variantId);
+    return this.catalog.removeVariantFromPriceCategory(user.orgId, user.userId, id, variantId);
   }
 
   @Post('price-categories/:id/scan')
@@ -342,6 +344,18 @@ export class CatalogController {
     @Param('id') id: string,
     @Body(zodBody(scanPriceCategoryMemberSchema)) body: ReturnType<typeof scanPriceCategoryMemberSchema.parse>,
   ) {
-    return this.catalog.scanAddToPriceCategory(user.orgId, user.userId, id, body.code);
+    return this.catalog.scanAddToPriceCategory(user.orgId, user.userId, id, body.code, body.store_id ?? null);
+  }
+
+  /**
+   * The price group holding every flavor of this product, found or made now.
+   * Saving an AI draft calls it once the whole line is on file. Changes no
+   * price. See the service for when it makes none.
+   */
+  @Post('products/:id/price-group')
+  @HttpCode(200)
+  @RequirePermissions('product.update')
+  ensureProductPriceGroup(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.catalog.ensureProductPriceGroup(user.orgId, user.userId, id);
   }
 }

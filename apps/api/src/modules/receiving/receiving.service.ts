@@ -285,14 +285,15 @@ export class ReceivingService {
         // one exists.
         const { rows: groupRows } = await tx.query<{ common_price: string | null }>(
           `SELECT mode() WITHIN GROUP (ORDER BY pr.price_minor)::text AS common_price
-           FROM product_variants v
+           FROM price_group_members m
+           JOIN product_variants v ON v.id = m.variant_id AND v.status <> 'archived'
            JOIN LATERAL (
              SELECT price_minor FROM variant_prices
              WHERE variant_id = v.id AND kind = 'regular' AND effective_to IS NULL
                AND (store_id = $2 OR store_id IS NULL)
              ORDER BY store_id NULLS LAST LIMIT 1
            ) pr ON true
-           WHERE v.price_group_id = $1`,
+           WHERE m.price_group_id = $1`,
           [input.price_group_id, storeId],
         );
         const common = groupRows[0]?.common_price;
@@ -336,10 +337,12 @@ export class ReceivingService {
       const variantId = created.variants[0]!.id;
 
       if (input.price_group_id) {
-        await tx.query(`UPDATE product_variants SET price_group_id = $2 WHERE id = $1`, [
-          variantId,
-          input.price_group_id,
-        ]);
+        await tx.query(
+          `INSERT INTO price_group_members (org_id, price_group_id, variant_id, added_by)
+           VALUES (current_setting('app.org_id')::uuid, $2, $1, $3)
+           ON CONFLICT (price_group_id, variant_id) DO NOTHING`,
+          [variantId, input.price_group_id, actorUserId],
+        );
       }
 
       await tx.query(`UPDATE receiving_lines SET variant_id = $2 WHERE id = $1`, [lineId, variantId]);

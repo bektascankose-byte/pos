@@ -238,14 +238,20 @@ export function CatalogListClient({
                     <MarginCell priceMinor={row.price_minor} cost={row.cost} />
                   </td>
                   {/*
-                    Not `price_group_name ?? "—"`: most groups have no name,
-                    so that rendered an item that IS grouped identically to
-                    one that isn't — the exact thing this column was added to
-                    show. The id decides whether there's a group; the name
-                    only decides what to call it.
+                    A flavor can be in several groups, so the cell names the
+                    first and counts the rest, with every name on hover. An
+                    unnamed group still reads "Grouped": being in a group is
+                    the fact this column exists to show, whatever it's called.
                   */}
-                  <td className="max-w-[120px] truncate px-3 py-2 text-[var(--color-text-muted)]" title={row.price_group_name ?? undefined}>
-                    {row.price_group_id === null ? "—" : (row.price_group_name ?? "Grouped")}
+                  <td
+                    className="max-w-[160px] truncate px-3 py-2 text-[var(--color-text-muted)]"
+                    title={row.price_groups.map((g) => g.name ?? "Grouped").join(", ") || undefined}
+                  >
+                    {row.price_groups.length === 0
+                      ? "—"
+                      : `${row.price_groups[0]!.name ?? "Grouped"}${
+                          row.price_groups.length > 1 ? ` +${row.price_groups.length - 1}` : ""
+                        }`}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">{Number(row.available)}</td>
                   {/* Pinned to the right edge: on a narrow screen the table
@@ -445,7 +451,14 @@ function trimDecimal(value: string): string {
 function priceGroupLabel(category: PriceCategory): string {
   if (category.name) return category.name;
   const items = `${category.member_count} item${category.member_count === 1 ? "" : "s"}`;
-  return category.current_price_minor !== null
-    ? `${formatMinor(String(category.current_price_minor))} · ${items}`
-    : `Mixed prices · ${items}`;
+  if (category.current_price_minor !== null) {
+    return `${formatMinor(String(category.current_price_minor))} · ${items}`;
+  }
+  // Mixed, but usually one figure with a couple of exceptions -- naming that
+  // figure tells the group apart from every other mixed one in the list,
+  // which "Mixed prices · 5 items" does not.
+  if (category.common_price_minor != null) {
+    return `Mostly ${formatMinor(String(category.common_price_minor))} · ${items}`;
+  }
+  return `Mixed prices · ${items}`;
 }

@@ -604,4 +604,48 @@ await expectReject('a banner describes its picture for people who cannot see it'
 
 await expectOk('a banner with a picture, a link and a description is saved', () => bannerInsert());
 
+// ------------------------------------------------ 20. price groups
+const [lineGroup] = await q(`insert into price_groups (org_id, name, product_id) values ($1,'Geek Bar Pulse X',$2) returning id`,
+                            [org.id, prod.id]);
+const [promoGroup] = await q(`insert into price_groups (org_id, name) values ($1,'Slow movers') returning id`, [org.id]);
+const [otherOrgGroup] = await q(`insert into price_groups (org_id, name) values ($1,'Other') returning id`, [org2.id]);
+
+await expectOk('a flavor can sit in its line group and a promotion at once', async () => {
+  await q(`insert into price_group_members (org_id, price_group_id, variant_id) values ($1,$2,$3),($1,$2,$4),($1,$5,$3)`,
+          [org.id, lineGroup.id, v1.id, v2.id, promoGroup.id]);
+  const [{ n }] = await q(`select count(*)::int n from price_group_members where variant_id = $1`, [v1.id]);
+  if (n !== 2) throw new Error(`expected two memberships, got ${n}`);
+});
+
+await expectReject('a flavor is in one group once',
+  () => q(`insert into price_group_members (org_id, price_group_id, variant_id) values ($1,$2,$3)`, [org.id, promoGroup.id, v1.id]),
+  'duplicate key');
+
+await expectReject('a group never holds another organization\'s flavor',
+  () => q(`insert into price_group_members (org_id, price_group_id, variant_id) values ($1,$2,$3)`, [org2.id, otherOrgGroup.id, v1.id]),
+  'foreign key');
+
+await expectReject('a product has one group made for its flavors, not two',
+  () => q(`insert into price_groups (org_id, name, product_id) values ($1,'Geek Bar again',$2)`, [org.id, prod.id]),
+  'price_groups_product_key');
+
+await expectOk('deleting a flavor nobody sold takes its group memberships with it', async () => {
+  const [v3] = await q(`insert into product_variants (org_id, product_id, sku, variant_name) values ($1,$2,'GB-PX-GRAPE','Grape') returning id`,
+                       [org.id, prod.id]);
+  await q(`insert into price_group_members (org_id, price_group_id, variant_id) values ($1,$2,$3)`, [org.id, promoGroup.id, v3.id]);
+  await q(`delete from product_variants where id = $1`, [v3.id]);
+  const [{ n }] = await q(`select count(*)::int n from price_group_members where variant_id = $1`, [v3.id]);
+  if (n !== 0) throw new Error('a membership outlived its flavor');
+});
+
+await expectOk('deleting a group releases its flavors and nothing else', async () => {
+  await q(`delete from price_groups where id = $1`, [promoGroup.id]);
+  const [{ members, variants }] = await q(
+    `select (select count(*)::int from price_group_members where price_group_id = $1) members,
+            (select count(*)::int from product_variants where id = any($2::uuid[])) variants`,
+    [promoGroup.id, [v1.id, v2.id]]);
+  if (members !== 0) throw new Error('memberships outlived their group');
+  if (variants !== 2) throw new Error('deleting a group touched the flavors in it');
+});
+
 await scratch.drop();
