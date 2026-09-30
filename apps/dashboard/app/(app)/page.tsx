@@ -2,6 +2,7 @@ import Link from "next/link";
 import { apiFetch, ApiError } from "@/lib/api";
 import { formatMinor } from "@/lib/money";
 import { primaryStoreId } from "@/lib/store";
+import { Icon } from "@/app/_components/icons";
 import { NeedsAttentionSection } from "./_components/NeedsAttention";
 import { fillSalesDays, SalesBarChart, SalesLineChart } from "./_components/InsightsCharts";
 import type { MoneyFlow, NeedsAttention, SalesSummary, SalesTrendPoint } from "@snappos/contracts";
@@ -72,18 +73,18 @@ export default async function DashboardPage() {
           <p className="insights-subtitle">Your sales, profit, and inventory in one place · {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</p>
         </div>
         <div className="insights-actions">
-          <Link href="/reports" className="insights-button">↗ &nbsp; View reports</Link>
-          <Link href="/catalog/new" className="insights-button primary">＋ &nbsp; Add item</Link>
+          <Link href="/reports" className="insights-button"><Icon name="chart" /> View reports</Link>
+          <Link href="/catalog/new" className="insights-button primary"><Icon name="plus" /> Add item</Link>
         </div>
       </div>
 
       {error ? <div className="insights-panel insights-panel-pad text-sm text-[var(--color-error)]">{error}</div> : (
         <>
           <div className="insights-kpis">
-            <Kpi label="Sales today" value={formatMinor(today?.gross_minor ?? "0")} note={`${today?.sale_count ?? 0} completed sales`} icon="↗" />
-            <Kpi label="Last 7 days" value={formatMinor(week?.gross_minor ?? "0")} note={`${week?.sale_count ?? 0} completed sales`} icon="▥" />
-            <Kpi label="Gross profit today" value={formatMinor(todayFlow?.summary.gross_profit_minor ?? "0")} note={todayFlow?.summary.margin_rate === null ? "No sales yet" : `${((todayFlow?.summary.margin_rate ?? 0) * 100).toFixed(1)}% gross margin`} icon="◔" />
-            <Kpi label="Low stock items" value={String(lowStock?.count ?? 0)} note="Below reorder point" icon="!" danger={Boolean(lowStock?.count)} />
+            <Kpi label="Sales today" value={formatMinor(today?.gross_minor ?? "0")} note={`${today?.sale_count ?? 0} completed sales`} icon={<Icon name="trendUp" />} />
+            <Kpi label="Last 7 days" value={formatMinor(week?.gross_minor ?? "0")} note={`${week?.sale_count ?? 0} completed sales`} icon={<Icon name="chart" />} />
+            <Kpi label="Gross profit today" value={formatMinor(todayFlow?.summary.gross_profit_minor ?? "0")} note={todayFlow?.summary.margin_rate === null ? "No sales yet" : `${((todayFlow?.summary.margin_rate ?? 0) * 100).toFixed(1)}% gross margin`} icon={<Icon name="pie" />} />
+            <Kpi label="Low stock items" value={String(lowStock?.count ?? 0)} note="Below reorder point" icon={<Icon name="alert" />} danger={Boolean(lowStock?.count)} />
           </div>
 
           <div className="insights-grid">
@@ -93,7 +94,7 @@ export default async function DashboardPage() {
             </section>
             <section className="insights-panel">
               <div className="insights-panel-head"><div><h2 className="insights-panel-title">Revenue trend</h2><p className="insights-panel-subtitle">Daily gross sales · last 30 days</p></div><span className="insights-eyebrow">30 days</span></div>
-              <div className="insights-chart-wrap"><SalesBarChart points={fillSalesDays(monthTrend, ...chartDates(30))} /></div>
+              <div className="insights-chart-wrap"><SalesBarChart compact points={fillSalesDays(monthTrend, ...chartDates(30))} /></div>
             </section>
           </div>
 
@@ -119,6 +120,6 @@ export default async function DashboardPage() {
   );
 }
 
-function Kpi({ label, value, note, icon, danger = false }: { label: string; value: string; note: string; icon: string; danger?: boolean }) {
+function Kpi({ label, value, note, icon, danger = false }: { label: string; value: string; note: string; icon: React.ReactNode; danger?: boolean }) {
   return <div className={`insights-kpi ${danger ? "danger" : ""}`}><div className="insights-kpi-head"><span>{label}</span><span className="insights-kpi-icon" aria-hidden>{icon}</span></div><div className="insights-kpi-value">{value}</div><div className="insights-kpi-note">{note}</div></div>;
 }

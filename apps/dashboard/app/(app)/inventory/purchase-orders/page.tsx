@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { apiFetch, ApiError } from "@/lib/api";
+import { StatusBadge } from "@/app/_components/StatusBadge";
 import { formatMinor } from "@/lib/money";
 import { primaryStoreId } from "@/lib/store";
 import type { PurchaseOrder } from "@snappos/contracts";
@@ -51,7 +52,7 @@ export default async function PurchaseOrdersPage() {
                   </Link>
                 </td>
                 <td className="px-4 py-2">{po.vendor_name}</td>
-                <td className="px-4 py-2 capitalize">{po.status}</td>
+                <td className="px-4 py-2"><StatusBadge status={po.status} /></td>
                 <td className="px-4 py-2 tabular-nums">{formatMinor(po.total_minor)}</td>
                 <td className="px-4 py-2 text-[var(--color-text-muted)]">
                   {new Date(po.created_at).toLocaleDateString()}

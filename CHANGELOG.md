@@ -2,6 +2,46 @@
 
 Notable changes. Newest first.
 
+## The back office gets a new look: dark by default, light on request
+
+**A dark theme in the register's orange, with a switch for daylight.** The
+sun and moon button in the top bar flips between dark and light, and the
+browser remembers the choice. The page is painted in the right theme before
+it appears, so neither theme flashes the other on load. The orange is the
+register's own, so the till and the back office now look like one product.
+
+**Every screen changed at once, because every screen already used the same
+colour tokens.** The new theme is a new set of token values plus a handful of
+rules that upgrade patterns the screens share: primary buttons are lit orange
+gradients, panels and tables get depth, form fields get a border you can see
+when they are empty and an orange glow when focused, page titles use a display
+face (Space Grotesk, with Inter for text and JetBrains Mono for codes and
+numbers, self hosted by Next.js). Names in tables read as text and turn orange
+on hover, where a whole column of orange used to shout.
+
+**Easier to find your way.** The top bar says where you are (Catalog / Items)
+and has its own search button next to the theme switch. Every page has a
+proper icon of its own in the sidebar, the app launcher and the Ctrl K search,
+replacing emoji that looked different on every computer. The active page has a
+lit marker, and the search window shows the keys it listens to.
+
+**Statuses are coloured pills** on invoices, purchase orders, online orders,
+imports, employees and a vendor's invoices and orders: green is done, amber is
+waiting, red went wrong or was undone, blue is new.
+
+**Smaller fixes found while walking every screen:**
+* The catalog keeps Edit and Archive pinned to the right edge when the table
+  scrolls sideways, and product names no longer wrap into four lines.
+* On a phone the catalog's bulk change bar no longer pins over the whole list,
+  and title rows wrap their buttons underneath instead of crushing the title.
+* The 30 day revenue chart on the dashboard draws on a narrower canvas, so its
+  labels are readable instead of about six pixels tall.
+* Charts follow the theme; their dots now show the day's total on hover.
+* The sign in page is new: the brand on one side, the form on the other.
+
+Checked in both themes at desktop and phone widths by screenshot, and with a
+production build.
+
 ## The cash drawer opens, and receipts can print on the Star printer
 
 **The drawer pops after every sale paid partly or fully in cash.** It opens

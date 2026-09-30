@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { apiFetch, ApiError } from "@/lib/api";
+import { StatusBadge } from "@/app/_components/StatusBadge";
 import type { ImportJob } from "@snappos/contracts";
 
 /**
@@ -62,9 +63,10 @@ export default async function ImportsPage() {
                 <td className="px-4 py-2">{job.entity === "customer" ? "Customers" : "Items"}</td>
                 <td className="px-4 py-2 text-right tabular-nums">{job.row_count.toLocaleString()}</td>
                 <td className="px-4 py-2">
-                  <span className={job.status === "committed" ? "text-[var(--color-success)]" : ""}>
-                    {job.status === "committed" ? "Imported" : job.status === "validated" ? "Checked, not imported" : "Not imported"}
-                  </span>
+                  <StatusBadge
+                    status={job.status === "committed" ? "completed" : job.status === "validated" ? "pending" : "draft"}
+                    label={job.status === "committed" ? "Imported" : job.status === "validated" ? "Checked, not imported" : "Not imported"}
+                  />
                 </td>
                 <td className="px-4 py-2 text-[var(--color-text-muted)]">
                   {new Date(job.created_at).toLocaleString()}

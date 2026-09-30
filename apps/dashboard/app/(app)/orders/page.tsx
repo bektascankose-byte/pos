@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { apiFetch, ApiError } from "@/lib/api";
+import { StatusBadge } from "@/app/_components/StatusBadge";
 import { primaryStoreId } from "@/lib/store";
 import { formatMinor } from "@/lib/money";
 import { readableStatus, type OrderQueueEntry } from "@snappos/contracts";
@@ -90,7 +91,7 @@ export default async function OrdersPage() {
                     <td className="px-4 py-2 capitalize">{order.fulfilment}</td>
                     <td className="px-4 py-2 text-right tabular-nums">{order.line_count}</td>
                     <td className="px-4 py-2 text-right tabular-nums">{formatMinor(order.total_minor)}</td>
-                    <td className="px-4 py-2 capitalize">{readableStatus(order.status)}</td>
+                    <td className="px-4 py-2"><StatusBadge status={order.status} label={readableStatus(order.status)} /></td>
                     <td
                       className="px-4 py-2 tabular-nums"
                       title={new Date(order.placed_at).toLocaleString()}

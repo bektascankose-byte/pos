@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { apiFetch, ApiError } from "@/lib/api";
+import { StatusBadge } from "@/app/_components/StatusBadge";
 import { primaryStoreId } from "@/lib/store";
 import type { InvoiceImport } from "@snappos/contracts";
 
@@ -55,7 +56,7 @@ export default async function InvoiceImportsPage() {
                 </td>
                 <td className="px-4 py-2 uppercase">{imp.source_format}</td>
                 <td className="px-4 py-2">{imp.vendor_name ?? "—"}</td>
-                <td className="px-4 py-2 capitalize">{imp.status}</td>
+                <td className="px-4 py-2"><StatusBadge status={imp.status} /></td>
                 <td className="px-4 py-2 text-[var(--color-text-muted)]">
                   {new Date(imp.created_at).toLocaleString()}
                 </td>

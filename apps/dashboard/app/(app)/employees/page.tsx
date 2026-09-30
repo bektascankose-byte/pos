@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { apiFetch, ApiError } from "@/lib/api";
+import { StatusBadge } from "@/app/_components/StatusBadge";
 import { getSession } from "@/lib/session";
 import { EmployeeRowActions } from "./EmployeeRowActions";
 
@@ -73,7 +74,7 @@ export default async function EmployeesPage({ searchParams }: { searchParams: Pr
                 </td>
                 <td className="employee-extra px-4 py-2">{row.email ?? row.phone ?? "—"}</td>
                 <td className="employee-extra px-4 py-2">{row.role_names.join(", ") || "—"}</td>
-                <td className="px-4 py-2 capitalize">{row.status}</td>
+                <td className="px-4 py-2"><StatusBadge status={row.status} /></td>
                 <td className="px-4 py-2"><EmployeeRowActions id={row.id} name={row.full_name} removed={row.status === "terminated"} canRemove={row.id !== session?.userId} /></td>
               </tr>
             ))}

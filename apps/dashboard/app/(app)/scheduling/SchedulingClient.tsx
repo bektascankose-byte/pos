@@ -221,7 +221,7 @@ export function SchedulingClient({
             })}
           </div></div>
         )}
-        <p className="border-t border-[var(--color-border)] px-5 py-3 text-xs text-[var(--color-text-muted)]">Each small interval is 30 minutes. Existing shifts are green. Scroll sideways to reach later hours.</p>
+        <p className="border-t border-[var(--color-border)] px-5 py-3 text-xs text-[var(--color-text-muted)]">Each small interval is 30 minutes. Existing shifts are orange; your selection is the dashed blue box. Scroll sideways to reach later hours.</p>
       </section>
 
       <div className="overflow-x-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]">
@@ -370,7 +370,7 @@ export function SchedulingClient({
           <label className="schedule-field">End<input className="schedule-input" type="time" value={repeatEnd} onChange={(event) => setRepeatEnd(event.target.value)} required /></label>
           <label className="schedule-field sm:col-span-2 lg:col-span-3">Note<input className="schedule-input" maxLength={500} value={repeatNote} onChange={(event) => setRepeatNote(event.target.value)} placeholder="Optional" /></label>
           <div className="flex items-end"><button type="submit" disabled={repeatPending || occurrences.length < 1 || occurrences.length > 120 || !storeId} className="insights-button primary w-full disabled:opacity-50">{repeatPending ? "Setting…" : "Set schedule"}</button></div>
-          <p className="sm:col-span-2 lg:col-span-4 rounded-md bg-[#eaf7ee] p-3 text-xs font-semibold text-[#087b46]">{occurrences.length > 120 ? "More than 120 shifts. Shorten the date range." : `${occurrences.length} shifts will be created.`} Date range can span up to one year. If the end time is earlier, the shift ends the next day.</p>
+          <p className="sm:col-span-2 lg:col-span-4 rounded-md border border-[var(--color-accent-ring)] bg-[var(--color-accent-soft)] p-3 text-xs font-semibold text-[var(--color-accent)]">{occurrences.length > 120 ? "More than 120 shifts. Shorten the date range." : `${occurrences.length} shifts will be created.`} Date range can span up to one year. If the end time is earlier, the shift ends the next day.</p>
         </form>
       </section>
     </div>

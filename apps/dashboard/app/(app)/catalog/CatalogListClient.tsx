@@ -189,7 +189,7 @@ export function CatalogListClient({
                 <th className="px-3 py-2 text-right font-normal">Margin</th>
                 <th className="px-3 py-2 font-normal">Price group</th>
                 <th className="px-3 py-2 text-right font-normal">Available</th>
-                <th className="px-3 py-2 font-normal"></th>
+                <th className="sticky right-0 bg-[var(--color-surface)] px-3 py-2 font-normal"></th>
               </tr>
             </thead>
             <tbody>
@@ -219,14 +219,14 @@ export function CatalogListClient({
                       ) : null}
                     </div>
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="min-w-[200px] px-3 py-2">
                     <Link href={`/catalog/${row.product_id}`} className="text-[var(--color-accent)]">
                       {row.product_name}
                       {row.variant_name ? ` — ${row.variant_name}` : ""}
                     </Link>
                   </td>
                   <td className="px-3 py-2">{row.brand_name ?? "—"}</td>
-                  <td className="px-3 py-2">{row.category_name ?? "—"}</td>
+                  <td className="whitespace-nowrap px-3 py-2">{row.category_name ?? "—"}</td>
                   <td className="px-3 py-2 font-mono text-xs">{row.sku}</td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {row.cost && Number(row.cost) > 0 ? `$${trimDecimal(row.cost)}` : "—"}
@@ -244,11 +244,13 @@ export function CatalogListClient({
                     show. The id decides whether there's a group; the name
                     only decides what to call it.
                   */}
-                  <td className="px-3 py-2 text-[var(--color-text-muted)]">
+                  <td className="max-w-[120px] truncate px-3 py-2 text-[var(--color-text-muted)]" title={row.price_group_name ?? undefined}>
                     {row.price_group_id === null ? "—" : (row.price_group_name ?? "Grouped")}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums">{Number(row.available)}</td>
-                  <td className="px-3 py-2">
+                  {/* Pinned to the right edge: on a narrow screen the table
+                      scrolls sideways, and Edit must not scroll away with it. */}
+                  <td className="sticky right-0 bg-[var(--color-surface)] px-3 py-2 shadow-[-10px_0_12px_-10px_rgba(0,0,0,0.35)]">
                     <div className="flex justify-end gap-1">
                       <button
                         type="button"
@@ -288,9 +290,11 @@ export function CatalogListClient({
           end of a few hundred rows to reach it — then back up to see what was
           ticked — was the complaint. `sticky` rather than `fixed` so it still
           sits in the layout and settles at the end of the page instead of
-          covering the last row forever.
+          covering the last row forever. Pinned from tablet width up only: on a
+          phone the bar is taller than the screen, and pinned it hid the very
+          list it acts on.
         */}
-        <div className="sticky bottom-0 z-10 flex flex-wrap items-end gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-[0_-4px_12px_rgba(0,0,0,0.08)]">
+        <div className="z-10 flex flex-wrap items-end gap-3 rounded-lg md:sticky md:bottom-0 border border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-[0_-4px_12px_rgba(0,0,0,0.08)]">
           <span className="text-xs text-[var(--color-text-muted)]">
             {selectedCount > 0
               ? `${selectedCount} selected — apply a bulk change:`

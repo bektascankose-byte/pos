@@ -5,6 +5,7 @@ import Link from "next/link";
 import { setVendorStatusAction, updateVendorAction } from "../actions";
 import { VendorFields } from "../VendorFields";
 import { formatMinor } from "@/lib/money";
+import { StatusBadge } from "@/app/_components/StatusBadge";
 import type { Vendor, VendorDetail } from "@snappos/contracts";
 
 type Tab = "details" | "items" | "invoices" | "orders";
@@ -220,7 +221,7 @@ function InvoicesPanel({ invoices }: { invoices: VendorDetail["invoices"] }) {
               <td className="px-4 py-2 text-right tabular-nums">
                 {invoice.invoice_total_minor ? formatMinor(invoice.invoice_total_minor) : "—"}
               </td>
-              <td className="px-4 py-2">{invoice.status}</td>
+              <td className="px-4 py-2"><StatusBadge status={invoice.status} /></td>
               <td className="px-4 py-2 text-[var(--color-text-muted)]">
                 {new Date(invoice.created_at).toLocaleDateString()}
               </td>
@@ -252,7 +253,7 @@ function OrdersPanel({ orders }: { orders: VendorDetail["purchase_orders"] }) {
                   {order.reference}
                 </Link>
               </td>
-              <td className="px-4 py-2">{order.status}</td>
+              <td className="px-4 py-2"><StatusBadge status={order.status} /></td>
               <td className="px-4 py-2 text-right tabular-nums">{formatMinor(order.total_minor)}</td>
               <td className="px-4 py-2 text-[var(--color-text-muted)]">
                 {new Date(order.created_at).toLocaleDateString()}

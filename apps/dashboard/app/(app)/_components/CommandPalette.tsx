@@ -1,15 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { NAV_ENTRIES, entryById, searchEntries, type NavEntry } from "@/lib/navigation";
+import { Icon, NavIcon } from "@/app/_components/icons";
 import { searchEverythingAction, type PaletteResults } from "../search-actions";
 import { readRecents } from "./nav-state";
 
 interface Row {
   key: string;
   section: string;
-  icon: string;
+  icon: ReactNode;
   label: string;
   sublabel?: string;
   href: string;
@@ -21,7 +22,7 @@ function entryRow(entry: NavEntry, section: string): Row {
   return {
     key: `nav:${entry.id}`,
     section,
-    icon: entry.icon,
+    icon: <NavIcon id={entry.id} size={16} />,
     label: entry.label,
     href: entry.href,
   };
@@ -51,8 +52,15 @@ export function CommandPalette({
         onOpenChange(false);
       }
     };
+    // The top bar's search button lives outside this component's tree, so it
+    // asks by event rather than by prop.
+    const onOpenRequest = () => onOpenChange(true);
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("bo:open-palette", onOpenRequest);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("bo:open-palette", onOpenRequest);
+    };
   }, [open, onOpenChange]);
 
   useEffect(() => {
@@ -105,7 +113,7 @@ export function CommandPalette({
       ...results.items.map((hit) => ({
         key: `item:${hit.id}`,
         section: "Items",
-        icon: "📦",
+        icon: <Icon name="box" size={16} />,
         label: hit.label,
         sublabel: hit.sublabel,
         href: hit.href,
@@ -113,7 +121,7 @@ export function CommandPalette({
       ...results.customers.map((hit) => ({
         key: `customer:${hit.id}`,
         section: "Customers",
-        icon: "👤",
+        icon: <Icon name="person" size={16} />,
         label: hit.label,
         sublabel: hit.sublabel,
         href: hit.href,
@@ -136,16 +144,15 @@ export function CommandPalette({
   let lastSection = "";
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 pt-24"
-      onMouseDown={() => onOpenChange(false)}
-    >
+    <div className="bo-overlay" onMouseDown={() => onOpenChange(false)}>
       <div
         role="dialog"
         aria-label="Search"
-        className="w-full max-w-xl overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl"
+        className="bo-palette"
         onMouseDown={(e) => e.stopPropagation()}
       >
+        <div className="bo-palette-field">
+          <Icon name="search" size={18} />
         <input
           ref={inputRef}
           value={query}
@@ -163,12 +170,14 @@ export function CommandPalette({
             }
           }}
           placeholder="Search pages, items, customers…"
-          className="w-full border-b border-[var(--color-border)] px-4 py-3 text-sm outline-none"
+          aria-label="Search pages, items and customers"
         />
+          {pending ? <span className="bo-palette-spinner" aria-label="Searching" /> : <kbd className="bo-kbd">Esc</kbd>}
+        </div>
 
-        <div className="max-h-96 overflow-y-auto">
+        <div className="bo-palette-list">
           {rows.length === 0 ? (
-            <p className="px-4 py-6 text-center text-sm text-[var(--color-text-muted)]">
+            <p className="bo-palette-empty">
               {pending ? "Searching…" : query.trim() ? "Nothing matched." : "Start typing."}
             </p>
           ) : null}
@@ -178,37 +187,29 @@ export function CommandPalette({
             lastSection = row.section;
             return (
               <div key={row.key}>
-                {header ? (
-                  <div className="px-4 pb-1 pt-3 text-xs uppercase tracking-wide text-[var(--color-text-muted)]">
-                    {header}
-                  </div>
-                ) : null}
+                {header ? <div className="bo-palette-section">{header}</div> : null}
                 <button
                   type="button"
                   onMouseEnter={() => setCursor(index)}
                   onClick={() => go(row)}
-                  className={`flex w-full items-center gap-3 px-4 py-2 text-left text-sm ${
-                    index === cursor ? "bg-[var(--color-bg)]" : ""
-                  }`}
+                  className={`bo-palette-row ${index === cursor ? "active" : ""}`}
                 >
-                  <span aria-hidden>{row.icon}</span>
+                  <span className="bo-palette-icon" aria-hidden>{row.icon}</span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate">{row.label}</span>
-                    {row.sublabel ? (
-                      <span className="block truncate text-xs text-[var(--color-text-muted)]">
-                        {row.sublabel}
-                      </span>
-                    ) : null}
+                    {row.sublabel ? <span className="bo-palette-sub">{row.sublabel}</span> : null}
                   </span>
+                  {index === cursor ? <kbd className="bo-kbd">Enter</kbd> : null}
                 </button>
               </div>
             );
           })}
         </div>
 
-        <div className="flex justify-between border-t border-[var(--color-border)] px-4 py-2 text-xs text-[var(--color-text-muted)]">
-          <span>↑↓ to move · Enter to open · Esc to close</span>
-          {pending ? <span>Searching…</span> : null}
+        <div className="bo-palette-foot">
+          <span><kbd className="bo-kbd">↑</kbd> <kbd className="bo-kbd">↓</kbd> to move</span>
+          <span><kbd className="bo-kbd">Enter</kbd> to open</span>
+          <span><kbd className="bo-kbd">Ctrl K</kbd> anywhere</span>
         </div>
       </div>
     </div>

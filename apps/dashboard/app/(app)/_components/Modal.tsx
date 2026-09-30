@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { Icon } from "@/app/_components/icons";
 
 /**
  * A dialog that doesn't take you off the page.
@@ -95,23 +96,18 @@ export function Modal({
         }
         e.stopPropagation();
       }}
-      className="w-[min(32rem,calc(100vw-2rem))] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-0 text-[var(--color-text)] backdrop:bg-black/40"
+      className="bo-modal"
     >
-      <div className="flex flex-col gap-4 p-5">
+      <div className="flex flex-col gap-4 p-6">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-base font-semibold">{title}</h2>
+            <h2 className="bo-modal-title">{title}</h2>
             {description ? (
-              <p className="text-xs text-[var(--color-text-muted)]">{description}</p>
+              <p className="mt-1 text-xs text-[var(--color-text-muted)]">{description}</p>
             ) : null}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-md px-2 py-1 text-lg leading-none text-[var(--color-text-muted)] hover:bg-[var(--color-border)]"
-          >
-            ×
+          <button type="button" onClick={onClose} aria-label="Close" className="bo-icon-button" style={{ width: 32, height: 32 }}>
+            <Icon name="close" size={15} />
           </button>
         </div>
         {children}
