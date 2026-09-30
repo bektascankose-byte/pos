@@ -2,6 +2,33 @@
 
 Notable changes. Newest first.
 
+## List an item before you have it: barcodes are optional everywhere now
+
+**A flavor with no barcode goes to the registers.** Sending used to refuse
+anything without a scannable code, which sounded careful and was actually
+backwards: the AI draft finds a product's real lineup, the packets arrive over
+weeks, and a flavor nobody has yet cannot have a code copied off it. So a
+whole line sat off the tills waiting for its last flavor. A flavor with no
+code still sells perfectly well by tapping its tile, which is how the
+register's folders work anyway. Add the barcode when the stock turns up and it
+starts scanning from the next Send.
+
+**A price is still required, and is now the only thing that holds an item
+back.** A register refuses to sell something nobody priced, so sending it
+would only put a tile on the till that says no. The Send page now says
+"needs a price" instead of "needs a barcode and a price".
+
+**Add product no longer demands a UPC.** The box is optional. Leave it empty
+to get the item into the catalog now, run Draft with AI to fill in its details
+and flavors, and add the codes later against the flavors you actually stock.
+Adding a flavor by hand on the Variants tab works the same way.
+
+**A code you add later replaces the placeholder on its own.** An item saved
+without a UPC gets a temporary one so it has something to file under. The
+moment you give that flavor a real single unit barcode it takes its place, the
+same way imported items have always worked, so nothing has to be tidied up by
+hand.
+
 ## Price groups: every flavor of a drafted item, and promotions across items
 
 **Saving an AI draft now makes a price group for the line.** It is named after

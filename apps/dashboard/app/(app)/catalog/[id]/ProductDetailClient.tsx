@@ -835,8 +835,9 @@ function AddVariantForm({
         <Field label="Variant name" name="variant_name" placeholder="e.g. Cherry" required />
         {/* One box: the UPC is both this variant's code and what a scanner
             reads. Carton codes are added on the item's own page, where they
-            can carry the units-per-scan they need. */}
-        <Field label="UPC / Barcode" name="sku" required />
+            can carry the units-per-scan they need. Optional, because a flavor
+            is usually listed before the stock is in hand. */}
+        <Field label="UPC / Barcode (optional)" name="sku" />
       </div>
       <div className="grid grid-cols-3 gap-3">
         <Field label={`Attribute (${defaultAxis})`} name="attribute_value" placeholder="e.g. Cherry" />

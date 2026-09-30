@@ -85,8 +85,14 @@ export function NewProductClient({
         <input type="hidden" name="store_id" value={storeId ?? ""} />
         <Field label="Name" name="name" ref={nameRef} required />
         {/* One box, not two: the UPC is the item's code and its scannable
-            barcode, and asking for both got the same digits typed twice. */}
-        <Field label="UPC / Barcode" name="sku" required />
+            barcode, and asking for both got the same digits typed twice.
+            Optional, because an item is usually listed before the stock is
+            in hand and there is nothing to copy a code off. */}
+        <Field label="UPC / Barcode (optional)" name="sku" />
+        <p className="-mt-2 text-xs text-[var(--color-text-muted)]">
+          Leave this empty if you do not have the item yet. It can still be sold by tapping its
+          tile on the register, and adding the barcode later makes it scan.
+        </p>
         <div className="grid grid-cols-2 gap-4">
           <Field label="Cost" name="cost" placeholder="9.85" />
           <Field label="Price" name="price" placeholder="24.99" />

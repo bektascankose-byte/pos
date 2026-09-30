@@ -136,23 +136,22 @@ export function currentRegularPrices(prices: PriceRow[], now: Date): Map<string,
 /**
  * Why this variant cannot go to the registers yet, or null when it can.
  *
- * Nothing goes without a price: a register refuses to sell an item nobody
- * priced, so sending one only puts a tile on the till that says no.
+ * A price, and only a price. A register refuses to sell an item nobody
+ * priced, so sending one puts a tile on the till that says no.
  *
- * A flavor going out for the first time also needs a code that scans as one
- * unit, because the whole point of sending it is that the cashier can scan
- * it. One already on the registers does not: some older items are only ever
- * tapped, and refusing a price change on those until someone finds a barcode
- * would hold back the change that matters.
+ * A barcode is deliberately not required, though it used to be. The shop
+ * lists a whole line long before every flavor of it is physically in hand:
+ * the AI draft finds the real lineup, the packets arrive over weeks, and a
+ * flavor nobody has yet cannot have a code copied off it. Meanwhile a flavor
+ * with no code is perfectly sellable by tapping its tile, which is how the
+ * register's folders work anyway. Holding the whole line back until every
+ * flavor had a barcode meant none of it reached the till, which is worse than
+ * a tile that has to be tapped. Codes get added as stock turns up and the
+ * item starts scanning from the next Send.
  */
-export function notReadyReason(live: VariantState, alreadySent: boolean, now: Date): string | null {
+export function notReadyReason(live: VariantState, now: Date): string | null {
   const hasPrice = currentRegularPrices(live.prices, now).size > 0;
-  const needsCode = !alreadySent && !live.barcodes.some((b) => Number(b.units) === 1);
-  const label = variantLabel(live);
-  if (needsCode && !hasPrice) return `${label} needs a barcode and a price`;
-  if (needsCode) return `${label} needs a barcode`;
-  if (!hasPrice) return `${label} needs a price`;
-  return null;
+  return hasPrice ? null : `${variantLabel(live)} needs a price`;
 }
 
 /** "A, B, C" or "A, B, C, D, E, F and 4 more". No serial comma. */
@@ -227,7 +226,7 @@ export function describeProduct(pairs: VariantPair[], names: Names, now: Date): 
     const { live, sent } = pair;
 
     if (live) {
-      const reason = notReadyReason(live, sent !== null, now);
+      const reason = notReadyReason(live, now);
       if (reason) {
         problems.push(sent ? `${reason}, so the registers keep what they have` : reason);
       } else {
@@ -345,7 +344,7 @@ export function planSend(pairs: VariantPair[], now: Date): SendPlan {
       plan.remove.push(pair.variant_id);
       continue;
     }
-    const reason = notReadyReason(live, sent !== null, now);
+    const reason = notReadyReason(live, now);
     if (reason) {
       plan.heldBack.push({ product_id: pair.product_id, variant_name: variantLabel(live), reason });
       continue;

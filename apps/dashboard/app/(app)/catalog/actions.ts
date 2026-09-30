@@ -153,12 +153,14 @@ export async function addVariantAction(
   const caseQty = String(formData.get("case_quantity") ?? "").trim() || "1";
   const packQty = String(formData.get("pack_quantity") ?? "").trim() || "1";
 
-  if (!variantName || !sku) {
-    return { ok: false, error: "A variant name and UPC are required." };
+  if (!variantName) {
+    return { ok: false, error: "Give this flavor a name." };
   }
 
   const body = {
-    sku,
+    // Same as creating a product: a flavor is usually listed before it is in
+    // hand, so a placeholder stands in until there is a code to put here.
+    sku: sku || placeholderSku(variantName),
     variant_name: variantName,
     attributes: attributeValue ? { flavor: attributeValue } : {},
     cost,
@@ -201,6 +203,21 @@ export async function setPriceAction(
   }
 }
 
+/**
+ * A stand in code for something listed before it is in stock.
+ *
+ * `TMP-` is the convention the rest of the catalog already reads: adding a
+ * real single unit barcode to a variant whose SKU starts with it replaces the
+ * SKU with that barcode, so these disappear on their own as stock turns up.
+ * The name and a timestamp keep it recognisable in a list and unique, since
+ * SKUs have to be.
+ */
+function placeholderSku(name: string): string {
+  const stem =
+    name.toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 20) || "ITEM";
+  return `TMP-${stem}-${Date.now().toString(36).toUpperCase()}`;
+}
+
 /** A single-variant product. Multi-variant (several flavors of one item) isn't in this form yet. */
 export async function createProductAction(formData: FormData): Promise<ActionResult<{ id: string }>> {
   const name = String(formData.get("name") ?? "").trim();
@@ -208,10 +225,9 @@ export async function createProductAction(formData: FormData): Promise<ActionRes
   const cost = String(formData.get("cost") ?? "").trim() || "0";
   // One number, entered once. This business scans the UPC and files it as the
   // item's own code, so a form that asks for a "SKU" and a "barcode"
-  // separately is asking for the same digits twice — and the second box being
-  // optional meant half the catalog ended up with a code that could not be
-  // scanned. A caller that genuinely has two distinct codes can still send
-  // both; everything else gets the one it typed, in both places.
+  // separately is asking for the same digits twice. A caller that genuinely
+  // has two distinct codes can still send both; everything else gets the one
+  // it typed, in both places.
   const barcode = String(formData.get("barcode") ?? "").trim() || sku;
   const priceMajor = String(formData.get("price") ?? "").trim();
   const brandId = String(formData.get("brand_id") ?? "").trim();
@@ -219,8 +235,8 @@ export async function createProductAction(formData: FormData): Promise<ActionRes
   const taxCategoryId = String(formData.get("tax_category_id") ?? "").trim();
   const storeId = String(formData.get("store_id") ?? "").trim();
 
-  if (!name || !sku) {
-    return { ok: false, error: "Name and UPC are required." };
+  if (!name) {
+    return { ok: false, error: "Give this item a name." };
   }
 
   const priceMinor = priceMajor ? parseMajorToMinor(priceMajor) : null;
@@ -250,7 +266,11 @@ export async function createProductAction(formData: FormData): Promise<ActionRes
     ...(compliance ? { compliance } : {}),
     variants: [
       {
-        sku,
+        // No code yet is the normal case for something being listed before it
+        // is in stock. A placeholder stands in until one exists, and the API
+        // swaps it for the real barcode the moment somebody adds one, which
+        // is the same convention every imported item already follows.
+        sku: sku || placeholderSku(name),
         cost,
         case_quantity: 1,
         pack_quantity: 1,

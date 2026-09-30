@@ -112,7 +112,9 @@ export function AiFillPanel({
         `Saved${named > 0 ? `, your current item named ${toName.map((v) => v.name).join(", ")}` : ""}` +
           `${created > 0 ? `, ${created} new ${created === 1 ? "flavor" : "flavors"} added` : ""}.` +
           (failed.length > 0 ? ` Could not add: ${failed.join(", ")}.` : "") +
-          (created > 0 ? " Each needs a barcode and a price before it can go to the registers." : "") +
+          (created > 0
+            ? " Each needs a price before it can go to the registers. Barcodes can wait until the stock arrives."
+            : "") +
           // Only when saving actually made one. Saying so every time would
           // read as though the group were new on every redraft.
           (priceGroup?.created

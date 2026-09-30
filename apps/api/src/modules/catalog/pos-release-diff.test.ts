@@ -88,7 +88,7 @@ test('a product nobody touched has nothing waiting', () => {
   assert.equal(differs(pair(v, clone(v))), false);
 });
 
-test('a new product lists its flavors and holds back the ones missing a barcode or price', () => {
+test('a new product lists its flavors and holds back only the ones missing a price', () => {
   const pairs = [
     pair(variant('Honey Berry', { barcode: '071610000011', sort: 0 }), null),
     pair(variant('Rum', { barcode: null, sort: 1 }), null),
@@ -97,23 +97,24 @@ test('a new product lists its flavors and holds back the ones missing a barcode 
   const diff = describeProduct(pairs, names, NOW);
   assert.equal(diff.kind, 'new');
   assert.deepEqual(diff.changes, ['New item with 3 flavors: Honey Berry, Rum and Original']);
-  assert.deepEqual(diff.problems, ['Rum needs a barcode', 'Original needs a price']);
+  // Rum has no barcode and goes anyway: it sells by tapping its tile.
+  assert.deepEqual(diff.problems, ['Original needs a price']);
   assert.equal(diff.sendable, true);
 
   const plan = planSend(pairs, NOW);
-  assert.deepEqual(plan.upsert, ['v-honey-berry']);
-  assert.equal(plan.added, 1);
+  assert.deepEqual(plan.upsert, ['v-honey-berry', 'v-rum']);
+  assert.equal(plan.added, 2);
   assert.deepEqual(
     plan.heldBack.map((h) => h.reason),
-    ['Rum needs a barcode', 'Original needs a price'],
+    ['Original needs a price'],
   );
 });
 
-test('an AI found flavor with nothing filled in cannot be sent', () => {
+test('an AI found flavor with no price cannot be sent, barcode or not', () => {
   const pairs = [pair(variant('Russian Cream', { barcode: null, price: null }), null)];
   const diff = describeProduct(pairs, names, NOW);
   assert.equal(diff.sendable, false);
-  assert.deepEqual(diff.problems, ['Russian Cream needs a barcode and a price']);
+  assert.deepEqual(diff.problems, ['Russian Cream needs a price']);
   assert.deepEqual(planSend(pairs, NOW).upsert, []);
 });
 
@@ -128,12 +129,19 @@ test('a price change on something already sent is described with both prices', (
   assert.equal(diff.sendable, true);
 });
 
-test('an item already on the registers does not need a barcode to take a price change', () => {
+/**
+ * A flavor nobody has in hand yet cannot have a code copied off it, and the
+ * shop lists a whole line before the packets arrive. It is sellable by tapping
+ * its tile, so a missing barcode no longer holds it, or its line, back.
+ */
+test('a flavor with no barcode can still go to the registers', () => {
   const sent = variant('Loose Leaf', { barcode: null });
   const live = clone(sent);
   live.prices[0]!.price_minor = '499';
-  assert.equal(notReadyReason(live, true, NOW), null);
-  assert.equal(notReadyReason(live, false, NOW), 'Loose Leaf needs a barcode');
+  assert.equal(notReadyReason(live, NOW), null);
+
+  const brandNew = variant('Cherry Cola', { barcode: null });
+  assert.equal(notReadyReason(brandNew, NOW), null);
 });
 
 test('product level edits are listed once however many flavors carry them', () => {
@@ -209,5 +217,5 @@ test('lists read naturally, with no serial comma', () => {
 test('an expired price is not a price', () => {
   const live = variant('Honey Berry');
   live.prices[0]!.effective_to = '2026-09-01T00:00:00.000000Z';
-  assert.equal(notReadyReason(live, true, NOW), 'Honey Berry needs a price');
+  assert.equal(notReadyReason(live, NOW), 'Honey Berry needs a price');
 });
