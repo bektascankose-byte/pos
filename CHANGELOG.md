@@ -2,6 +2,42 @@
 
 Notable changes. Newest first.
 
+## Quick edit every flavor by voice and scanner, and photos for lines past forty flavors
+
+**Find photos works on any number of flavors.** Foger's SwitchPro pods have
+more than sixty flavors, and Find photos refused with "Array must contain at
+most 40 element(s)". The cap is gone. The back office now asks twelve flavors
+at a time and saves each batch as it lands, with progress on screen, and the
+API splits whatever it is sent into fifteen per model call, so no single call
+carries eighty names.
+
+**Quick edit on the Variants tab.** Three buttons: Count stock, Add barcodes,
+and Count and barcodes. Each walks every flavor on sale, A to Z, one box at a
+time: singles in a box, boxes on hand, singles on hand, the single's barcode,
+the box's barcode. The microphone opens with it and stays open; saying a
+number fills the blue box and moves on. "Skip", "go back", "box size", "next
+variant", "previous variant", and "save" or "close" do what they say. The
+scanner fills the barcode boxes and a scan moves on by itself, so after the
+box code the next flavor comes up without a click. Singles in a box is asked
+once and carried to every flavor after it, still editable.
+
+Counts are saved when a flavor is left, as one `count_adjustment` movement
+for boxes times singles per box plus loose singles, measured against what the
+server holds at that moment rather than what the page loaded. Counting the
+same flavor twice therefore posts nothing the second time. Barcodes are saved
+the moment they are scanned, so a code already on another item is reported
+while the box is still in hand; a single's kind is read from its length and a
+box code is always `case`, ringing up the box's singles. Save and close
+remembers the flavor it was on, in this browser, and the button then reads
+"Continue counting (Berry Bliss, 12 of 67)".
+
+The spoken words are parsed by a small pure function (`speech.ts`) that takes
+digits or words, joins "twenty five", splits "two ten" into two answers, and
+accepts the common mishearings ("to", "for") only when said alone. Speech
+recognition is the browser's own, so the microphone works in Chrome or Edge
+on the back office's own address (localhost); elsewhere the flow still works
+by keyboard and scanner.
+
 ## Brand, model, flavor on the till, A to Z, with each brand's logo on its folder
 
 **Every brand opens on its models, and every model on its flavors.** The till

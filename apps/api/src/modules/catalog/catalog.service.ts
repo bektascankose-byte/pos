@@ -1024,12 +1024,22 @@ export class CatalogService {
       return rows[0];
     });
 
-    const found = await this.ai.findProductImages({
-      product_name: product.name,
-      brand_name: product.brand_name,
-      variants: variantNames,
-    });
-    return { images: await this.stockImages.resolveAll(found.images) };
+    // A few flavors per model call, however many were asked for. One call
+    // carrying eighty names runs long and comes back with most of them
+    // dropped; the dashboard already batches, and this keeps any other
+    // caller from having to know that.
+    const BATCH = 15;
+    const images: Awaited<ReturnType<AiService['findProductImages']>>['images'] = [];
+    for (let start = 0; start < variantNames.length; start += BATCH) {
+      const found = await this.ai.findProductImages({
+        product_name: product.name,
+        brand_name: product.brand_name,
+        variants: variantNames.slice(start, start + BATCH),
+      });
+      // The product's own photo is asked about on every call; keep the first.
+      images.push(...found.images.filter((image) => image.variant_name !== null || start === 0));
+    }
+    return { images: await this.stockImages.resolveAll(images) };
   }
 
   async listTaxCategories(orgId: string) {

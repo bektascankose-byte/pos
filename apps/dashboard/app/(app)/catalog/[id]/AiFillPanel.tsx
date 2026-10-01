@@ -174,16 +174,48 @@ export function AiFillPanel({
         return;
       }
 
-      setStatus(`Looking for ${names.length} ${names.length === 1 ? "photo" : "photos"}…`);
-      const found = await aiFindImagesAction(productId, names);
-      if (!found.ok) {
-        setError(found.error);
+      // Twelve at a time, saving each batch as it lands. A line with eighty
+      // flavors would otherwise sit in one long model call and show nothing
+      // until the very end, or lose everything to one failure.
+      const BATCH = 12;
+      let saved = 0;
+      const missed: string[] = [];
+      const foundImages: { variant_name: string | null; image_url: string | null }[] = [];
+      const batchErrors: string[] = [];
+      for (let start = 0; start < names.length; start += BATCH) {
+        const batch = names.slice(start, start + BATCH);
+        setStatus(
+          names.length <= BATCH
+            ? `Looking for ${names.length} ${names.length === 1 ? "photo" : "photos"}…`
+            : `Looking for photos ${start + 1} to ${start + batch.length} of ${names.length}… ${saved} saved so far.`,
+        );
+        const found = await aiFindImagesAction(productId, batch);
+        if (!found.ok) {
+          batchErrors.push(found.error);
+          continue;
+        }
+        foundImages.push(...found.data.images);
+        saved += await saveFound(found.data.images);
+      }
+      if (batchErrors.length > 0 && foundImages.length === 0) {
+        setError(batchErrors[0] ?? "Could not look for photos.");
         return;
       }
 
-      let saved = 0;
-      const missed: string[] = [];
-      for (const candidate of found.data.images) {
+      const notFound = names.filter(
+        (name) => !foundImages.some((image) => image.variant_name === name && image.image_url),
+      );
+      setStatus(
+        `Saved ${saved} ${saved === 1 ? "photo" : "photos"}.` +
+          (notFound.length > 0 ? ` No photo found for: ${notFound.join(", ")}.` : "") +
+          (missed.length > 0 && notFound.length === 0 ? ` Could not save: ${missed.join(", ")}.` : ""),
+      );
+      await onApplied(product);
+      return;
+
+      async function saveFound(images: { variant_name: string | null; image_url: string | null; page_url: string | null }[]) {
+      let savedHere = 0;
+      for (const candidate of images) {
         const variant = candidate.variant_name
           ? withoutPhoto.find((v) => (v.variant_name ?? v.sku) === candidate.variant_name)
           : undefined;
@@ -211,22 +243,14 @@ export function AiFillPanel({
           if (candidate.page_url) formData.set("source_url", candidate.page_url);
 
           const uploaded = await uploadProductImageAction(productId, formData);
-          if (uploaded.ok) saved += 1;
+          if (uploaded.ok) savedHere += 1;
           else missed.push(candidate.variant_name ?? variant.sku);
         } catch {
           missed.push(candidate.variant_name ?? variant.sku);
         }
       }
-
-      const notFound = names.filter(
-        (name) => !found.data.images.some((image) => image.variant_name === name && image.image_url),
-      );
-      setStatus(
-        `Saved ${saved} ${saved === 1 ? "photo" : "photos"}.` +
-          (notFound.length > 0 ? ` No photo found for: ${notFound.join(", ")}.` : "") +
-          (missed.length > 0 && notFound.length === 0 ? ` Could not save: ${missed.join(", ")}.` : ""),
-      );
-      await onApplied(product);
+      return savedHere;
+      }
     } finally {
       setBusy(false);
     }

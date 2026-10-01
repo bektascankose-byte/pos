@@ -303,9 +303,15 @@ export const aiProductFillRequestSchema = z.object({
   hint: z.string().max(500).optional(),
 });
 
-/** Product photos to look for: one per variant name, plus the product itself. */
+/**
+ * Product photos to look for: one per variant name, plus the product itself.
+ *
+ * No cap on how many. A line like Foger's pods runs past eighty flavors, and
+ * refusing the request outright helps nobody; the dashboard asks in batches
+ * so no single model call has to carry them all.
+ */
 export const aiImageSearchRequestSchema = z.object({
-  variants: z.array(z.string().min(1).max(128)).max(40),
+  variants: z.array(z.string().min(1).max(128)).min(1),
 });
 
 export const aiImageCandidateSchema = z.object({

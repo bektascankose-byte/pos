@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { formatMinor } from "@/lib/money";
 import { Tabs } from "../_components/Tabs";
@@ -27,6 +27,14 @@ import { FlavorTile } from "../_components/FlavorTile";
 import { removeVariantAction } from "../../items/actions";
 import { ImagePanel } from "./ImagePanel";
 import { SellOnlinePanel } from "./SellOnlinePanel";
+import {
+  QuickEdit,
+  MODE_LABEL,
+  readResume,
+  clearResume,
+  type QuickEditMode,
+  type QuickEditResume,
+} from "./QuickEdit";
 import type {
   Product,
   Variant,
@@ -35,6 +43,8 @@ import type {
   TaxCategory,
   ProductImage,
 } from "@snappos/contracts";
+
+const QUICK_MODES: QuickEditMode[] = ["count", "barcodes", "both"];
 
 interface Props {
   productId: string;
@@ -181,6 +191,7 @@ export function ProductDetailClient({ productId, storeId, initialProduct, brands
             content: (
               <VariantsPanel
                 productId={productId}
+                productName={product.name}
                 storeId={storeId}
                 variants={variants}
                 images={product.images ?? []}
@@ -453,6 +464,7 @@ function DetailsPanel({
 
 function VariantsPanel({
   productId,
+  productName,
   storeId,
   variants,
   images,
@@ -462,6 +474,7 @@ function VariantsPanel({
   onChanged,
 }: {
   productId: string;
+  productName: string;
   storeId: string | null;
   variants: Variant[];
   images: ProductImage[];
@@ -479,6 +492,21 @@ function VariantsPanel({
     if (!nameA !== !nameB) return nameA ? 1 : -1;
     return (nameA || a.sku).localeCompare(nameB || b.sku, "en", { sensitivity: "base", numeric: true });
   });
+  const onSale = ordered.filter((variant) => variant.status !== "archived");
+
+  // Quick edit, and where each of its three modes was left. Read after the
+  // page is on screen: it lives in this browser, not on the server.
+  const [quick, setQuick] = useState<{ mode: QuickEditMode; resume: QuickEditResume | null } | null>(null);
+  const [resumes, setResumes] = useState<Partial<Record<QuickEditMode, QuickEditResume>>>({});
+  const loadResumes = () => {
+    const found: Partial<Record<QuickEditMode, QuickEditResume>> = {};
+    for (const mode of QUICK_MODES) {
+      const resume = readResume(productId, mode);
+      if (resume && onSale.some((v) => v.id === resume.variantId)) found[mode] = resume;
+    }
+    setResumes(found);
+  };
+  useEffect(loadResumes, [productId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="flex flex-col gap-4">
@@ -486,6 +514,63 @@ function VariantsPanel({
         The flavors this item is sold in, A to Z. Each one carries its own photo, its own barcode and
         the carton code that rings up a case of it. A cashier scans one of these, never the item above.
       </p>
+
+      {onSale.length > 0 ? (
+        <section className="flex flex-col gap-2 rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-surface)] p-4">
+          <div>
+            <h2 className="text-sm font-medium">Quick edit every flavor</h2>
+            <p className="text-xs text-[var(--color-text-muted)]">
+              Goes through all {onSale.length} flavors one by one. Talk the counts in and scan the barcodes; it moves
+              on by itself. Say how many singles come in a box once and every flavor after it gets the same.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {QUICK_MODES.map((mode) => {
+              const resume = resumes[mode];
+              const at = resume ? onSale.findIndex((v) => v.id === resume.variantId) : -1;
+              const name = at >= 0 ? (onSale[at]!.variant_name ?? onSale[at]!.sku) : null;
+              return (
+                <div key={mode} className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setQuick({ mode, resume: resume ?? null })}
+                    className="rounded-md bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-[var(--color-accent-contrast)]"
+                  >
+                    {name ? `${MODE_LABEL[mode].resume} (${name}, ${at + 1} of ${onSale.length})` : MODE_LABEL[mode].start}
+                  </button>
+                  {name ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        clearResume(productId, mode);
+                        setQuick({ mode, resume: null });
+                      }}
+                      className="px-2 text-xs text-[var(--color-text-muted)] underline"
+                    >
+                      start over
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
+      {quick ? (
+        <QuickEdit
+          productId={productId}
+          productName={productName}
+          variants={onSale}
+          mode={quick.mode}
+          resume={quick.resume}
+          onClose={() => {
+            setQuick(null);
+            loadResumes();
+            void onChanged();
+          }}
+        />
+      ) : null}
 
       {ordered.map((variant) => (
         <VariantRow
