@@ -38,6 +38,15 @@ recognition is the browser's own, so the microphone works in Chrome or Edge
 on the back office's own address (localhost); elsewhere the flow still works
 by keyboard and scanner.
 
+**The microphone stays on one listener.** On first try the tab's mic icon
+blinked fast and nothing was heard. React mounts the window twice in
+development, which left two recognizers running, each one's start ending the
+other's session forever. Starting is now a beat after opening, so the first
+mount's timer is cleared before it fires; a recognizer that has been replaced
+never restarts itself; and one that keeps ending straight away (five times in
+five seconds) stops and shows the browser's reason, such as no microphone
+found or the speech service unreachable, instead of blinking.
+
 ## Brand, model, flavor on the till, A to Z, with each brand's logo on its folder
 
 **Every brand opens on its models, and every model on its flavors.** The till

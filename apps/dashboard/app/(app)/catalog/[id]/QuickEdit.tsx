@@ -367,6 +367,8 @@ export function QuickEdit({
   const [heard, setHeard] = useState("");
   const [hearing, setHearing] = useState("");
   const [micError, setMicError] = useState<string | null>(null);
+  /** When recent sessions ended, to tell a normal pause from a loop. */
+  const restarts = useRef<number[]>([]);
 
   function startMic() {
     const w = window as unknown as { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition };
@@ -375,7 +377,14 @@ export function QuickEdit({
       setMicError("This browser can't listen. Open the back office in Chrome or Edge to use the microphone.");
       return;
     }
+    // One recognizer at a time. Two fight over the microphone, each start
+    // ending the other, and the tab's mic icon blinks without hearing a word.
+    const previous = recognition.current;
+    recognition.current = null;
+    previous?.abort();
     setMicError(null);
+    restarts.current = [];
+    let lastError = "";
     const rec = new Ctor();
     rec.continuous = true;
     rec.interimResults = true;
@@ -396,25 +405,45 @@ export function QuickEdit({
       setHearing(interim.trim());
     };
     rec.onerror = (event) => {
+      lastError = event.error;
       if (event.error === "not-allowed" || event.error === "service-not-allowed") {
         wantListening.current = false;
         setMicError(
           "The microphone is blocked. Allow it from the icon in the address bar, then press Start listening. It only works on this computer's own address (localhost).",
         );
+      } else if (event.error === "audio-capture") {
+        wantListening.current = false;
+        setMicError("No microphone was found. Check it is plugged in and chosen as the input in Windows sound settings.");
+      } else if (event.error === "network") {
+        setMicError("Chrome's speech service can't be reached. Check the internet connection.");
       }
     };
-    // Chrome ends a session after a pause; starting it again is what keeps
-    // the microphone open from one flavor to the next.
+    // Chrome ends a session after a pause; starting it again keeps the
+    // microphone open from one flavor to the next. A recognizer that was
+    // replaced or stopped stays stopped, and one that keeps ending straight
+    // away gives up and says why rather than blinking.
     rec.onend = () => {
-      if (wantListening.current) {
+      if (recognition.current !== rec) return;
+      if (!wantListening.current) {
+        setListening(false);
+        return;
+      }
+      const now = Date.now();
+      restarts.current = [...restarts.current.filter((t) => now - t < 5000), now];
+      if (restarts.current.length > 4) {
+        wantListening.current = false;
+        setListening(false);
+        setMicError(`The microphone keeps stopping${lastError ? ` (${lastError})` : ""}. Press Start listening to try again.`);
+        return;
+      }
+      window.setTimeout(() => {
+        if (recognition.current !== rec || !wantListening.current) return;
         try {
           rec.start();
         } catch {
           /* already starting */
         }
-      } else {
-        setListening(false);
-      }
+      }, 300);
     };
     wantListening.current = true;
     recognition.current = rec;
@@ -428,17 +457,24 @@ export function QuickEdit({
 
   function stopMic() {
     wantListening.current = false;
-    recognition.current?.stop();
+    const rec = recognition.current;
+    recognition.current = null;
+    rec?.stop();
     setListening(false);
     setHearing("");
   }
 
   // Listening from the moment it opens: the whole point is not to click.
+  // Started a beat later so React mounting this twice in development never
+  // makes a second recognizer: the first mount's timer is cleared unfired.
   useEffect(() => {
-    startMic();
+    const timer = window.setTimeout(startMic, 200);
     return () => {
+      window.clearTimeout(timer);
       wantListening.current = false;
-      recognition.current?.abort();
+      const rec = recognition.current;
+      recognition.current = null;
+      rec?.abort();
     };
     // Once, on open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
