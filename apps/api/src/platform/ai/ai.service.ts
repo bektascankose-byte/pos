@@ -106,6 +106,10 @@ const VARIANT_SUGGESTION_INSTRUCTIONS = `You are helping a retail store stock ev
 
 Answer with ONLY a JSON array of short variant name strings (e.g. ["Blueberry", "Watermelon Ice", "Mango"]) and nothing else -- no prose, no markdown code fences, no explanation. Use the product's own naming (flavor, size, color -- whatever axis it actually varies on). If you can't find reliable information on real variants for this product, answer with an empty array [] rather than guessing generic flavors.`;
 
+const MORE_FLAVOURS_INSTRUCTIONS = `A retail store is listing every flavour of one product line and already has the list in "already_listed". Search the web (the maker's site, its flavour list or lineup page, and vape or tobacco retailers that carry the whole line) for flavours of this exact line and size that are NOT in that list.
+
+Answer with ONLY a JSON array of the missing flavour names, Title Case, flavour names only, spelled the way the maker spells them, and nothing else: no prose, no code fences. Do not repeat a name already listed, even spelled a little differently. Do not include flavours of a different line, size or puff count from the same brand. Lines can run past a hundred flavours, so keep going until you have them all. If nothing is missing, answer [].`;
+
 const PRODUCT_FILL_INSTRUCTIONS = `You are cataloguing one product for a smoke and vape shop's point-of-sale system, and the same entry is published on the shop's website. Search the web for this specific product and answer from what you find, not from memory: lineups change, and a flavour that no longer exists becomes an item nobody can sell.
 
 The shop's naming rule, which every product follows without exception:
@@ -113,7 +117,7 @@ The shop's naming rule, which every product follows without exception:
 - name: "{Brand} {Model or line} {Pack size}" -- "Backwoods Cigars 5pk", "Foger Switch Pro 25K", "Geek Bar Pulse 15K". It names the thing a customer picks up. It NEVER contains a flavour, because flavours are the variants underneath it. If the pack size is not part of how the product is sold, leave it off rather than inventing one.
 - brand: the maker's brand as printed on the package -- "Backwoods", "Celsius", "Geek Bar". Always give it for a branded product; the shop may never have stocked the brand before, and that is fine, give it anyway. null only for an unbranded item.
 - short_name: the same item in at most 24 characters, for a receipt -- "Backwoods 5pk".
-- variants: EVERY flavour the product line is currently sold in at this size, flavour names only ("Honey Berry", not "Backwoods Honey Berry 5pk"). Title Case. The full lineup, not a sample: if the brand sells fourteen flavours of this line, list all fourteen. If the product genuinely has one version, return one entry naming it, or an empty array if it has no flavour axis at all.
+- variants: EVERY flavour the product line is currently sold in at this size, flavour names only ("Honey Berry", not "Backwoods Honey Berry 5pk"). Title Case. The full lineup, not a sample: if the brand sells fourteen flavours of this line, list all fourteen, and if it sells ninety, list all ninety. Some disposable vape lines run past a hundred flavours; never shorten the list. If the product genuinely has one version, return one entry naming it, or an empty array if it has no flavour axis at all.
 - variant_axis: the word for what the variants differ by -- "flavor", "size", "color", "strength".
 - current_flavor: the flavour the name you were given names, spelled exactly as it appears in variants, or null if the name names none.
 
@@ -447,9 +451,68 @@ export class AiService {
       if (!name || seen.has(key)) continue;
       seen.add(key);
       variants.push(name);
-      if (variants.length >= 12) break;
     }
+    variants.push(...(await this.findMoreFlavours(input.product_name, input.brand_name ?? null, variants)));
     return { variants };
+  }
+
+  /**
+   * Ask again for the flavours a long list left out.
+   *
+   * Asked to list a whole lineup, a model stops somewhere around forty names
+   * however the instructions are worded, and Foger's and Geek Bar's lines run
+   * near a hundred. So a list that is already long (twenty or more, the size
+   * at which that starts to happen) is handed back with "what is missing",
+   * up to twice, stopping as soon as a pass finds nothing new. A short list is
+   * left alone: a five flavour line asked again only invites inventions.
+   *
+   * Only names not already present, compared case-insensitively. A failed
+   * pass keeps what was found rather than losing the whole draft.
+   */
+  private async findMoreFlavours(
+    productName: string,
+    brandName: string | null,
+    found: string[],
+  ): Promise<string[]> {
+    const added: string[] = [];
+    if (found.length < 20) return added;
+    const seen = new Set(found.map((name) => name.trim().toLowerCase()));
+    const { client, model } = this.getClient();
+
+    for (let pass = 0; pass < 2; pass += 1) {
+      let reply: unknown;
+      try {
+        const response = await client.responses.create({
+          model,
+          instructions: MORE_FLAVOURS_INSTRUCTIONS,
+          tools: [{ type: 'web_search' }],
+          input: JSON.stringify({
+            product_name: productName,
+            brand_name: brandName,
+            already_listed: [...found, ...added],
+          }),
+        });
+        reply = this.parseJsonReply(response.output_text, 'findMoreFlavours');
+      } catch (error) {
+        this.logger.warn(`findMoreFlavours: pass ${pass + 1} failed: ${(error as Error).message}`);
+        break;
+      }
+      const list = variantSuggestionListSchema.safeParse(reply);
+      if (!list.success) break;
+
+      let newThisPass = 0;
+      for (const raw of list.data) {
+        const name = nullIfPlaceholder(raw)?.trim();
+        if (!name) continue;
+        const key = name.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        added.push(name);
+        newThisPass += 1;
+      }
+      if (newThisPass === 0) break;
+    }
+    return added;
   }
 
   /**
@@ -518,12 +581,19 @@ export class AiService {
       if (seen.has(key)) continue;
       seen.add(key);
       flavours.push(name);
-      if (flavours.length >= 40) break;
     }
     // The flavour of the item the shop already stocks is always in the list,
     // even when the model named it but left it out of the lineup.
     const currentFlavour = nullIfPlaceholder(draft.current_flavor ?? null);
-    if (currentFlavour && !seen.has(currentFlavour.toLowerCase())) flavours.push(currentFlavour);
+    if (currentFlavour && !seen.has(currentFlavour.toLowerCase())) {
+      seen.add(currentFlavour.toLowerCase());
+      flavours.push(currentFlavour);
+    }
+    // No cap. A long line is exactly where a model stops early, so it is
+    // asked again for what it left out -- see `findMoreFlavours`.
+    flavours.push(
+      ...(await this.findMoreFlavours(nullIfPlaceholder(draft.name) ?? input.product_name, nullIfPlaceholder(draft.brand ?? null), flavours)),
+    );
 
     const tags: string[] = [];
     const seenTags = new Set<string>();

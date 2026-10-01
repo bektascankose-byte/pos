@@ -2,6 +2,24 @@
 
 Notable changes. Newest first.
 
+## The AI lists every flavor of a long line, not the first forty
+
+**Draft with AI stopped at 41 flavors every time.** `AiService.fillProduct`
+kept the first forty names the model gave and then added the flavor already
+on the shelf, which is the 41 the shop kept seeing on lines that run near a
+hundred. The flavor suggester used on invoice imports stopped at twelve. Both
+caps are gone.
+
+Removing the cap alone would not be enough: asked for a whole lineup, a model
+tends to stop somewhere around forty names however it is asked. So a list of
+twenty or more is handed back with "what is missing from this", searched
+again on the maker's and retailers' lineup pages, up to two more times,
+stopping when a pass finds nothing new. Only names not already present are
+kept, compared without case; a short line is not asked again, since that
+only invites invented flavors. The draft instructions also now say outright
+that lines can run past a hundred flavors. A long line takes a little longer
+to draft as a result.
+
 ## Quick edit every flavor by voice and scanner, and photos for lines past forty flavors
 
 **Find photos works on any number of flavors.** Foger's SwitchPro pods have
