@@ -28,6 +28,31 @@ export const loginSchema = z.object({
   device_id: uuid.optional(),
 });
 
+/**
+ * Ask for a reset link. Only an address, deliberately: anything else on this
+ * form would be a second thing a stranger could probe with.
+ */
+export const requestPasswordResetSchema = z.object({ email });
+
+/**
+ * Set a new password with the token out of the reset link.
+ *
+ * Same length floor as signing in, because this is the same password. The
+ * token is checked as a value, not parsed: its shape is this system's own
+ * business and a client should not be told what a valid one looks like.
+ */
+export const completePasswordResetSchema = z.object({
+  token: z.string().min(16).max(256),
+  password: z.string().min(8).max(256),
+});
+
+/**
+ * What a reset request answers, always, whether or not the address is on file.
+ * Telling a stranger which addresses have accounts is the one thing a forgot
+ * password form must never do.
+ */
+export const passwordResetRequestedSchema = z.object({ ok: z.literal(true) });
+
 export const tokenPairSchema = z.object({
   access_token: z.string(),
   /** Short lived: a stolen access token should expire before it is useful. */
@@ -159,6 +184,8 @@ export const roleSchema = z.object({
   permissions: z.array(z.string()),
 });
 
+export type RequestPasswordReset = z.infer<typeof requestPasswordResetSchema>;
+export type CompletePasswordReset = z.infer<typeof completePasswordResetSchema>;
 export type Session = z.infer<typeof sessionSchema>;
 export type TokenPair = z.infer<typeof tokenPairSchema>;
 export type Store = z.infer<typeof storeSchema>;

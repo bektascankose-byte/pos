@@ -39,6 +39,15 @@ export async function middleware(request: NextRequest) {
   // the API verifies it; this page must simply render.
   if (pathname.startsWith("/unsubscribe/")) return NextResponse.next();
 
+  // Forgetting a password is precisely the state of having no session, so
+  // these two cannot sit behind one. The reset link's token is the whole
+  // authorization and the API verifies it, exactly as with unsubscribe. They
+  // are let through even when signed in: somebody who suspects their password
+  // is known should not have to sign out first to change it.
+  if (pathname === "/forgot-password" || pathname === "/reset-password") {
+    return NextResponse.next();
+  }
+
   const access = request.cookies.get(ACCESS_COOKIE)?.value;
   const refresh = request.cookies.get(REFRESH_COOKIE)?.value;
 

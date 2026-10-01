@@ -1,6 +1,11 @@
-import { Body, Controller, Get, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Post, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
-import { loginSchema, refreshSchema } from '@snappos/contracts';
+import {
+  loginSchema,
+  refreshSchema,
+  requestPasswordResetSchema,
+  completePasswordResetSchema,
+} from '@snappos/contracts';
 import { AuthService } from './auth.service.js';
 import { Public } from './auth.guard.js';
 import { zodBody } from '../validation/zod.pipe.js';
@@ -34,6 +39,46 @@ export class AuthController {
       userAgent: request.headers['user-agent'],
       ip: request.ip,
     });
+  }
+
+  /**
+   * Ask for a reset link.
+   *
+   * Always 200 with the same body, whether or not that address has an
+   * account: a different answer, or a different response time, is a way to
+   * find out who banks here. Rate limiting is the global one, which matters
+   * more on this route than most because it sends mail on demand.
+   *
+   * The link's base comes from the server's own configuration, never from the
+   * request. A `reset_url_base` a caller could set would be an open redirect
+   * that mails itself to the victim.
+   */
+  @Public()
+  @Post('password-reset/request')
+  @HttpCode(200)
+  async requestPasswordReset(
+    @Body(zodBody(requestPasswordResetSchema))
+    body: ReturnType<typeof requestPasswordResetSchema.parse>,
+    @Req() request: FastifyRequest,
+  ) {
+    await this.auth.requestPasswordReset(body.email, {
+      userAgent: request.headers['user-agent'],
+      ip: request.ip,
+      resetUrlBase: process.env.DASHBOARD_URL ?? 'http://localhost:3001',
+    });
+    return { ok: true as const };
+  }
+
+  /** Set the new password. Throws when the link is unknown, expired or already spent. */
+  @Public()
+  @Post('password-reset/complete')
+  @HttpCode(200)
+  async completePasswordReset(
+    @Body(zodBody(completePasswordResetSchema))
+    body: ReturnType<typeof completePasswordResetSchema.parse>,
+  ) {
+    await this.auth.completePasswordReset(body.token, body.password);
+    return { ok: true as const };
   }
 
   @Post('logout')

@@ -75,6 +75,10 @@ export default function LoginPage() {
             <button type="submit" disabled={pending} className="bo-login-submit">
               {pending ? "Signing in…" : "Sign in"}
             </button>
+
+            <a href="/forgot-password" className="bo-login-forgot">
+              Forgot your password?
+            </a>
           </form>
         </div>
         <p className="bo-login-foot">SnapPOS Back Office · secured session</p>

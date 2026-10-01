@@ -2,6 +2,27 @@
 
 Notable changes. Newest first.
 
+## Forgot your password? Reset it yourself
+
+**There is a "Forgot your password?" link under the sign in button now.** Type
+the address you sign in with, and a link to set a new password arrives by
+email from no-reply@smokeandvapetx.com. The link works once and stops working
+after an hour. Before this the only way back in was someone editing the
+database by hand, which happened twice in a fortnight and meant the new
+password had to be read out to its owner.
+
+**Nobody else learns anything from it.** The page says the same thing whether
+or not that address has an account, and it says it just as quickly, so the
+form cannot be used to find out who has a login here. Only a fingerprint of
+the link is kept, never anything that would open the account, so the reset is
+no use to anyone who gets at a database backup.
+
+**Asking again cancels the previous link**, and using one cancels it too, so
+an old reset email sitting in an inbox is not a spare key.
+
+**Setting a new password signs you out everywhere else.** If you reset because
+you think somebody else knows your password, they are out at the same moment.
+
 ## List an item before you have it: barcodes are optional everywhere now
 
 **A flavor with no barcode goes to the registers.** Sending used to refuse

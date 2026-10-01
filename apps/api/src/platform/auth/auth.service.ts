@@ -1,8 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { hash, verify } from '@node-rs/argon2';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { DatabaseService } from '../database/database.service.js';
 import { TokenService } from './token.service.js';
+import { MailerService } from '../mail/mailer.service.js';
 import { ApiException } from '../errors/api-exception.js';
 
 /**
@@ -24,6 +25,24 @@ const ARGON_PIN = { memoryCost: 4_096, timeCost: 2, parallelism: 1 } as const;
 const MAX_PIN_FAILURES = 5;
 const PIN_LOCKOUT_MINUTES = 15;
 
+/**
+ * How long a reset link lives. Long enough to walk to a computer and find the
+ * email, short enough that one left in an inbox is not a standing key. It is
+ * also stated in the email, so nobody is surprised by a dead link.
+ */
+const RESET_TOKEN_MINUTES = 60;
+
+/**
+ * Only the hash is stored, so the database never holds anything that opens an
+ * account. SHA-256 rather than Argon2 here on purpose: this is a 256 bit
+ * random value, not a password, so there is nothing to brute force and no
+ * reason to pay Argon2's cost on a lookup -- the same reasoning as the
+ * refresh session hashes in migration 0007.
+ */
+function hashToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
 export interface AuthenticatedUser {
   userId: string;
   orgId: string;
@@ -40,6 +59,7 @@ export class AuthService {
   constructor(
     private readonly db: DatabaseService,
     private readonly tokens: TokenService,
+    private readonly mailer: MailerService,
   ) {}
 
   hashPassword(password: string): Promise<string> {
@@ -298,6 +318,122 @@ export class AuthService {
       token_type: 'Bearer' as const,
       session: { userId, orgId, displayName, permissions },
     };
+  }
+
+  /**
+   * Start a password reset.
+   *
+   * Always answers the same, whatever happened. An unknown address, a
+   * suspended account and a mail server that was down all look identical from
+   * outside, because the alternative is a form that tells a stranger which
+   * email addresses have accounts here. What actually happened goes to the
+   * log instead, which is where somebody investigating "I never got it" will
+   * look.
+   *
+   * The raw token is generated here, hashed before it touches the database,
+   * and then exists only inside the email. Nothing can read it back out
+   * afterwards -- not a database dump, not a query log, not this method twice.
+   */
+  async requestPasswordReset(
+    email: string,
+    context: { ip?: string | undefined; userAgent?: string | undefined; resetUrlBase: string },
+  ): Promise<void> {
+    const token = randomBytes(32).toString('base64url');
+    const expiresAt = new Date(Date.now() + RESET_TOKEN_MINUTES * 60_000);
+
+    const found = await this.db.unscoped(async (client) => {
+      const { rows } = await client.query<{ user_id: string; email: string; full_name: string }>(
+        `SELECT * FROM auth_create_password_reset($1, $2, $3, $4, $5)`,
+        [email, hashToken(token), expiresAt, context.ip ?? null, context.userAgent ?? null],
+      );
+      return rows[0];
+    });
+
+    if (!found) {
+      this.logger.log(`password reset asked for an address with no active account`);
+      return;
+    }
+
+    const link = `${context.resetUrlBase.replace(/\/+$/, '')}/reset-password?token=${encodeURIComponent(token)}`;
+
+    // Deliberately not awaited. Talking to a mail server takes seconds, and
+    // awaiting it would make a request for a real address visibly slower than
+    // one for an address with no account -- handing back, as a stopwatch
+    // reading, exactly the answer the identical response bodies above exist to
+    // withhold. The caller gets the same quick `ok` either way and the send
+    // finishes on its own; `MailerService.send` never throws and logs its own
+    // failures, so nothing is lost but the wait.
+    void this.mailer.send({
+      to: found.email,
+      subject: 'Reset your SnapPOS password',
+      text: [
+        `Hello ${found.full_name},`,
+        '',
+        'Someone asked to reset the password on your SnapPOS back office account.',
+        'Open this link to choose a new one:',
+        '',
+        link,
+        '',
+        `The link works once and stops working in ${RESET_TOKEN_MINUTES} minutes.`,
+        '',
+        'If this was not you, ignore this email. Your password has not changed,',
+        'and nobody can get in without the link above.',
+      ].join('\n'),
+    }).then((sent) => {
+      if (!sent.ok) {
+        this.logger.error(`password reset for ${found.email} could not be emailed: ${sent.error}`);
+      } else {
+        this.logger.log(`password reset link emailed to ${found.email}`);
+      }
+    });
+  }
+
+  /**
+   * Finish a password reset.
+   *
+   * The token is spent inside `auth_consume_password_reset`, in the same
+   * statement that checks it, so two people racing the same link cannot both
+   * get through. Unknown, expired and already used come back the same way and
+   * are reported the same way, because telling someone which of the three it
+   * was is telling them something about a token they do not hold.
+   *
+   * Every existing session is revoked on success. Somebody resetting a
+   * password has either forgotten it or suspects somebody else has it, and in
+   * the second case leaving the intruder's session alive would make the reset
+   * pointless.
+   */
+  async completePasswordReset(token: string, password: string): Promise<void> {
+    const claim = await this.db.unscoped(async (client) => {
+      const { rows } = await client.query<{ user_id: string; org_id: string }>(
+        `SELECT * FROM auth_consume_password_reset($1)`,
+        [hashToken(token)],
+      );
+      return rows[0];
+    });
+
+    if (!claim) {
+      throw new ApiException(
+        'invalid_credentials',
+        'that reset link has expired or has already been used -- ask for a new one',
+        { retryable: false },
+      );
+    }
+
+    const passwordHash = await this.hashPassword(password);
+    await this.db.withOrg(claim.org_id, async (tx) => {
+      await tx.query(`UPDATE users SET password_hash = $2 WHERE id = $1`, [
+        claim.user_id,
+        passwordHash,
+      ]);
+      await tx.query(
+        `UPDATE auth_sessions
+         SET revoked_at = now(), revoked_reason = 'password_reset'
+         WHERE user_id = $1 AND revoked_at IS NULL`,
+        [claim.user_id],
+      );
+    });
+
+    this.logger.log(`password reset completed for user ${claim.user_id}`);
   }
 
   private async revokeFamily(orgId: string, familyId: string, reason: string): Promise<void> {

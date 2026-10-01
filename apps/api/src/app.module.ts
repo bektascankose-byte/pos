@@ -32,6 +32,7 @@ import { ReportsModule } from './modules/reports/reports.module.js';
 import { SchedulingModule } from './modules/scheduling/scheduling.module.js';
 import { AuditModule } from './platform/audit/audit.module.js';
 import { OutboxModule } from './platform/outbox/outbox.module.js';
+import { MailModule } from './platform/mail/mail.module.js';
 import { HealthController } from './modules/health/health.controller.js';
 
 @Module({
@@ -39,6 +40,7 @@ import { HealthController } from './modules/health/health.controller.js';
     DatabaseModule,
     AuditModule,
     OutboxModule,
+    MailModule,
     AuthModule,
     IdempotencyModule,
     CatalogModule,

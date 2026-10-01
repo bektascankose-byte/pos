@@ -677,6 +677,17 @@ table a[class~="text-[var(--color-accent)]"]:hover { color: var(--color-accent);
 .bo-login-submit:hover:not(:disabled) { filter: brightness(1.06); }
 .bo-login-submit:disabled { opacity: .7; }
 .bo-login-foot { color: var(--color-text-faint); font-size: 11.5px; }
+
+/* Quiet by design: the way back in for the rare person who needs it, not a
+   second call to action competing with Sign in. */
+.bo-login-forgot {
+  align-self: center;
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+  text-decoration: none;
+}
+.bo-login-forgot:hover { color: var(--color-accent); text-decoration: underline; }
 @keyframes bo-float { from { transform: translateY(-54%) scale(1); } to { transform: translateY(-46%) scale(1.08); } }
 @media (max-width: 900px) {
   .bo-login { grid-template-columns: 1fr; }

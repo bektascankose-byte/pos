@@ -18,24 +18,25 @@ const db = scratch.db;
 const n = async (sql) => Number((await db.query(sql))[0].n);
 
 test(`all ${migrationFiles().length} migrations applied on ${scratch.engine}`, () => {
-  assert.equal(migrationFiles().length, 35);
+  assert.equal(migrationFiles().length, 36);
 });
 
 test('migrations are numbered contiguously from 0001', () => {
   const prefixes = migrationFiles().map((f) => Number(f.name.slice(0, 4)));
-  assert.deepEqual(prefixes, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]);
+  assert.deepEqual(prefixes, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36]);
 });
 
 // 0034 adds two: pos_catalog_variants (what the registers were last sent) and
 // pos_releases (each press of Send). 0035 adds price_group_members, so a
-// flavor can sit in more than one price group.
-test('101 base tables exist', async () => {
+// flavor can sit in more than one price group. 0036 adds
+// password_reset_tokens.
+test('102 base tables exist', async () => {
   assert.equal(
     await n(`select count(*) n from pg_class c
              join pg_namespace ns on ns.oid = c.relnamespace
              where ns.nspname='public' and c.relkind in ('r','p')
                and not c.relispartition`),
-    101,
+    102,
   );
 });
 
@@ -48,7 +49,7 @@ test('inventory_ledger and audit_log are range partitioned', async () => {
   assert.deepEqual(rows.map((r) => r.relname), ['audit_log', 'inventory_ledger']);
 });
 
-test('159 foreign keys, 35 enums, 142 table level checks', async () => {
+test('161 foreign keys, 35 enums, 143 table level checks', async () => {
   // 0027 accounts for the last move: seven foreign keys (four off `orders`,
   // two off `order_lines`, one off `order_events`), the order_fulfilment and
   // order_status enums, and six checks -- four on `orders` including the one
@@ -76,10 +77,11 @@ test('159 foreign keys, 35 enums, 142 table level checks', async () => {
   // Send even if the variant is deleted meanwhile. 0035 nets two: the
   // membership table's keys to its group and to the variant, and a group's
   // key to the product it was made for, less the variant's old single
-  // price_group_id key, dropped with the column.
+  // price_group_id key, dropped with the column. 0036 adds two: a reset token
+  // belongs to an organization and to the user whose password it resets.
   assert.equal(await n(`select count(*) n from pg_constraint c
                         join pg_namespace ns on ns.oid=c.connamespace
-                        where ns.nspname='public' and c.contype='f'`), 159);
+                        where ns.nspname='public' and c.contype='f'`), 161);
   assert.equal(await n(`select count(distinct t.typname) n from pg_type t
                         join pg_namespace ns on ns.oid=t.typnamespace
                         where ns.nspname='public' and t.typtype='e'`), 35);
@@ -87,10 +89,10 @@ test('159 foreign keys, 35 enums, 142 table level checks', async () => {
                         join pg_class t on t.oid=c.conrelid
                         join pg_namespace ns on ns.oid=c.connamespace
                         where ns.nspname='public' and c.contype='c'
-                          and not t.relispartition`), 142);
+                          and not t.relispartition`), 143);
 });
 
-test('19 functions and 56 user triggers', async () => {
+test('21 functions and 56 user triggers', async () => {
   // Extensions install their own functions into public (pg_trgm adds ~20), so
   // count only what our migrations own.
   assert.equal(await n(`select count(*) n from pg_proc p
@@ -98,7 +100,7 @@ test('19 functions and 56 user triggers', async () => {
                         where ns.nspname='public'
                           and not exists (
                             select 1 from pg_depend d
-                            where d.objid = p.oid and d.deptype = 'e')`), 19);
+                            where d.objid = p.oid and d.deptype = 'e')`), 21);
   // 18, plus the twelve change_log triggers from migration 0008 (one per
   // replicated table) plus the one from 0010 on role_permissions (the join
   // table that grants a permission to a role, whose own change_log trigger

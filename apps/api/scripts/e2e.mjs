@@ -15,6 +15,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { runSalesChecks } from './e2e-sales.mjs';
 import { runPriceGroupChecks } from './e2e-price-groups.mjs';
+import { runPasswordResetChecks } from './e2e-password-reset.mjs';
 import { runOrderChecks } from './e2e-orders.mjs';
 import { runShopChecks } from './e2e-shop.mjs';
 import { E2E_DOORDASH_AUTHORIZATION, runDeliveryAndRewardsChecks } from './e2e-delivery-rewards.mjs';
@@ -667,6 +668,22 @@ await runDeliveryAndRewardsChecks({
 // counts the catalog was written against the seed alone.
 
 await runPriceGroupChecks({ api, check, ownerToken, cashierToken, storeId });
+
+// -------------------------------------------------- 12b. forgetting a password
+// After everything that needs to be signed in, because finishing a reset
+// revokes every open session and changes the owner's password.
+//
+// Connects as the migrator rather than going through the API, because the
+// point of the design is that a reset token never leaves the server: there is
+// no endpoint that hands one back, so the only way to test the second half is
+// to plant one the way the service does.
+const { Client } = await import('pg');
+const resetDb = new Client({ connectionString: MIGRATOR_URL });
+await resetDb.connect();
+const sql = async (text, params = []) => (await resetDb.query(text, params)).rows;
+
+await runPasswordResetChecks({ api, check, sql, ownerEmail: 'owner@hhsmoke.test' });
+await resetDb.end();
 
 // ----------------------------------------------------------------- 13. summary
 
