@@ -31,6 +31,8 @@ import kotlinx.coroutines.flow.Flow
  */
 data class CatalogIndexRow(
   val id: String,
+  /** Which product this flavor belongs to: a product with flavors is one model folder. */
+  val productId: String,
   val productName: String,
   val variantName: String?,
   val brandId: String?,
@@ -153,7 +155,7 @@ interface CatalogDao {
    */
   @Query(
     """
-    SELECT id, productName, variantName, brandId, brandName, categoryId, sortOrder, imageUrl, searchText
+    SELECT id, productId, productName, variantName, brandId, brandName, categoryId, sortOrder, imageUrl, searchText
     FROM variants
     WHERE status = 'active'
     ORDER BY brandName, productName, sortOrder

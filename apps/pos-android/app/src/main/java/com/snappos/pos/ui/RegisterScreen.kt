@@ -310,9 +310,10 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
               //   inside a brand  -> its models
               //   otherwise       -> the brands in this category
               //
-              // A brand holding a single model line skips its own folder
-              // screen and shows the flavours directly, because a folder
-              // containing exactly one folder is a tap that buys nothing.
+              // A brand always opens on its model folders, even when it has
+              // only one: the shop wants the same brand, model, flavor path
+              // every time, so a cashier's hand learns one route and the
+              // folder names the model the flavors on screen belong to.
               val openBrand = brands.firstOrNull { it.id == state.selectedBrandId }
               when {
                 searching || state.selectedLineId != null ->
@@ -327,23 +328,11 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
                     onHold = viewModel::togglePinnedProduct.takeIf { state.cashier != null },
                   )
 
-                openBrand != null && openBrand.hasModelChoice ->
+                openBrand != null ->
                   LineFolderGrid(
                     lines = lines,
                     onOpen = { viewModel.selectLine(it.id) },
                     modifier = Modifier.fillMaxSize(),
-                  )
-
-                openBrand != null ->
-                  ProductGrid(
-                    tiles = state.tiles,
-                    parts = nav.parts,
-                    insideLine = false,
-                    onTap = { viewModel.addToCart(it) },
-                    modifier = Modifier.fillMaxSize(),
-                    tileWidth = if (compact) 168.dp else Touch.TILE.dp,
-                    pinnedIds = pinnedIds,
-                    onHold = viewModel::togglePinnedProduct.takeIf { state.cashier != null },
                   )
 
                 else ->

@@ -64,6 +64,24 @@ export const brandSchema = z.object({
   status: entityStatus,
 });
 
+/**
+ * Ask for a brand's logo to be found on the web. A brand that already has one
+ * keeps it unless `replace` says otherwise, so an automatic find after an AI
+ * draft never overwrites a logo somebody chose.
+ */
+export const findBrandLogoSchema = z.object({ replace: z.boolean().default(false) });
+
+/** One row of the back office's Brands page. */
+export const brandWithLogoSchema = z.object({
+  id: uuid,
+  name: z.string(),
+  /** Serve with `GET /v1/catalog/brand-logos/:logo_id`. Null when the brand has none. */
+  logo_id: uuid.nullable(),
+  logo_source_url: z.string().nullable(),
+  /** Products on sale under this brand. */
+  product_count: z.number().int(),
+});
+
 export const createBrandSchema = brandSchema.pick({ name: true }).extend({
   brand_family: z.string().max(128).optional(),
   logo_url: z.string().url().optional(),
@@ -630,6 +648,8 @@ export type CreateBarcode = z.infer<typeof createBarcodeSchema>;
 export type Category = z.infer<typeof categorySchema>;
 export type Brand = z.infer<typeof brandSchema>;
 export type CreateBrand = z.infer<typeof createBrandSchema>;
+export type FindBrandLogo = z.infer<typeof findBrandLogoSchema>;
+export type BrandWithLogo = z.infer<typeof brandWithLogoSchema>;
 export type Product = z.infer<typeof productSchema>;
 export type ProductImage = z.infer<typeof productImageSchema>;
 export type UploadProductImage = z.infer<typeof uploadProductImageSchema>;

@@ -2,6 +2,45 @@
 
 Notable changes. Newest first.
 
+## Brand, model, flavor on the till, A to Z, with each brand's logo on its folder
+
+**Every brand opens on its models, and every model on its flavors.** The till
+used to skip a brand's model folder when the brand had only one model, so
+Foger and Celsius went straight to their flavors while a brand with two models
+did not. The shop asked for the same path every time: tap Foger, tap
+SwitchPro Disposable Pod, tap Mexico Mango. A product sent with flavors is now
+always a model folder of its own, named for the product less the brand.
+Products imported one per flavor still have their model lines worked out from
+their names, as before.
+
+**Everything on the till reads A to Z.** Brands, models inside a brand, and
+flavors inside a model are alphabetical, ignoring case, with the unbranded
+"Other" shelf last. Brands used to be biggest first and flavors in the order
+they were added; both moved things around as the catalog changed. Model ids
+keep their "Brand/Model" shape, so a model pinned to a cashier's quick menu
+keeps working.
+
+**Brands have logos, and the till shows them on the brand folders.** The new
+Brands page in the back office lists every brand with its logo. Find logo
+asks the AI for the brand's logo files and official website; the back office
+fetches each candidate through the stock image proxy, scales it to 512 pixels,
+lays it on white and checks there is something left to see, then uploads the
+first one that passes with the page it came from. That check is why it runs
+in the browser: brand sites often draw their logo in white for a dark header
+(Geek Bar's does), which would be an empty box on the till, and telling that
+apart needs pixels the API, with no image library, cannot read. When no logo
+file works, the icons the brand's own website declares are tried. A logo can
+also be uploaded by hand or removed. Saving an AI draft looks for the brand's
+logo on its own when the brand has none yet.
+
+Logos are our own copy (0037, `brand_logos`), served immutable at
+`/v1/catalog/brand-logos/:id`; replacing one writes a new id. They reach the
+registers without a Send: the catalog sync now carries `brands` with each
+logo's address, and a logo change is its own change_log entity
+(`brand_logo`) that tells the registers to pull. The till keeps the brand
+list in preferences, not its encrypted database, so no on device migration
+was needed.
+
 ## The till signs back in on its own, departments show what is filed under them, and a red pill says why
 
 **Tapping a department on the till now shows what is filed beneath it.** The

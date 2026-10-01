@@ -15,6 +15,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { runSalesChecks } from './e2e-sales.mjs';
 import { runPriceGroupChecks } from './e2e-price-groups.mjs';
+import { runBrandLogoChecks } from './e2e-brand-logos.mjs';
 import { runPasswordResetChecks } from './e2e-password-reset.mjs';
 import { runOrderChecks } from './e2e-orders.mjs';
 import { runShopChecks } from './e2e-shop.mjs';
@@ -668,6 +669,10 @@ await runDeliveryAndRewardsChecks({
 // counts the catalog was written against the seed alone.
 
 await runPriceGroupChecks({ api, check, ownerToken, cashierToken, storeId });
+
+// ------------------------------------------------------------- 12a. brand logos
+
+await runBrandLogoChecks({ api, base: BASE, check, ownerToken, cashierToken, storeId });
 
 // -------------------------------------------------- 12b. forgetting a password
 // After everything that needs to be signed in, because finishing a reset

@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import type { AiProductDraft, Product, Variant } from "@snappos/contracts";
 import { aiFillProductAction, aiFindImagesAction, applyAiDraftAction } from "./ai-actions";
 import { uploadProductImageAction } from "./image-actions";
+import { findBrandLogo } from "../brands/find-logo";
 import { downscale, DISPLAY_MAX, THUMB_MAX } from "./ImagePanel";
 
 /**
@@ -37,6 +38,7 @@ export function AiFillPanel({
   const [keep, setKeep] = useState<Record<string, boolean>>({});
   const [chosenFlavors, setChosenFlavors] = useState<Set<string>>(new Set());
   const [status, setStatus] = useState<string | null>(null);
+  const [logoStatus, setLogoStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -77,6 +79,27 @@ export function AiFillPanel({
       });
       setChosenFlavors(new Set(result.data.variants.filter((v) => !v.existing_variant_id).map((v) => v.name)));
     });
+  };
+
+  /**
+   * Give the brand a logo for its folder on the till, when it has none.
+   *
+   * After the save rather than part of it: searching the web takes a while,
+   * and the draft is saved and usable the whole time. A brand that already has
+   * a logo keeps it, so this costs nothing on the second Foger product.
+   */
+  const lookForBrandLogo = async (brandId: string, brandName: string) => {
+    setLogoStatus(`Looking for the ${brandName} logo for its folder on the till...`);
+    const found = await findBrandLogo(brandId, false);
+    if (found.error || found.kept) {
+      setLogoStatus(null);
+      return;
+    }
+    setLogoStatus(
+      found.logoId
+        ? `${brandName} logo saved. The registers show it on their next sync.`
+        : `No ${brandName} logo found. You can add one on the Brands page.`,
+    );
   };
 
   const apply = () => {
@@ -121,8 +144,10 @@ export function AiFillPanel({
             ? ` Price group "${priceGroup.name}" made with every flavor.`
             : ""),
       );
+      const brandName = draft.brand?.trim() || "brand";
       setDraft(null);
       await onApplied(result.data.product);
+      if (result.data.product.brand_id) void lookForBrandLogo(result.data.product.brand_id, brandName);
     });
   };
 
@@ -249,6 +274,7 @@ export function AiFillPanel({
 
       {error ? <p className="text-xs text-[var(--color-error)]">{error}</p> : null}
       {status ? <p className="text-xs text-[var(--color-text-muted)]">{status}</p> : null}
+      {logoStatus ? <p className="text-xs text-[var(--color-text-muted)]">{logoStatus}</p> : null}
 
       {draft ? (
         <div className="flex flex-col gap-3 border-t border-[var(--color-border)] pt-3">

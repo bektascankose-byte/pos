@@ -461,11 +461,8 @@ fun BrandFolderGrid(
         count = brand.itemCount,
         // Say how many models are inside, because that is what the next tap
         // will be choosing between.
-        sublabel = if (brand.hasModelChoice) {
-          "${brand.lines.size} models · ${brand.itemCount} items"
-        } else {
-          null
-        },
+        sublabel = "${brand.lines.size} ${if (brand.lines.size == 1) "model" else "models"} · " +
+          "${brand.itemCount} ${if (brand.itemCount == 1) "item" else "items"}",
         coverImageUrl = brand.coverImageUrl,
         onTap = { onOpen(brand) },
       )

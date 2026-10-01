@@ -152,6 +152,56 @@ export class StockImageService {
     return null;
   }
 
+  /**
+   * The icons a website declares for itself, largest first, ending with the
+   * conventional `/apple-touch-icon.png` at its root.
+   *
+   * For brand logos: a brand's touch icon is its mark, square, made to be
+   * recognised on a phone's home screen, which is close to what a folder on a
+   * till needs. Addresses only and unverified; the caller fetches each through
+   * `fetch`, which refuses anything that is not a real image.
+   */
+  async readSiteIcons(siteUrl: string): Promise<string[]> {
+    const found: { url: string; size: number }[] = [];
+    try {
+      const response = await this.get(siteUrl);
+      const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
+      if (contentType.includes('text/html')) {
+        const html = (await this.readCapped(response, 256 * 1024)).split(/<\/head>/i)[0] ?? '';
+        for (const tag of html.match(/<link\b[^>]*>/gi) ?? []) {
+          const rel = attribute(tag, 'rel')?.toLowerCase() ?? '';
+          if (!rel.split(/\s+/).some((r) => r === 'icon' || r === 'apple-touch-icon' || r === 'apple-touch-icon-precomposed')) {
+            continue;
+          }
+          const href = attribute(tag, 'href');
+          if (!href || /\.(svg|ico)(\?|$)/i.test(href)) continue;
+          const sizes = attribute(tag, 'sizes') ?? '';
+          const size = Number(/(\d+)x\d+/i.exec(sizes)?.[1] ?? (rel.includes('apple-touch-icon') ? 180 : 32));
+          try {
+            const absolute = new URL(decodeHtmlEntities(href), siteUrl);
+            if (absolute.protocol === 'http:' || absolute.protocol === 'https:') {
+              found.push({ url: absolute.toString(), size });
+            }
+          } catch {
+            continue;
+          }
+        }
+      } else {
+        await response.body?.cancel().catch(() => undefined);
+      }
+    } catch (error) {
+      this.logger.debug(`could not read ${siteUrl}: ${(error as Error).message}`);
+    }
+
+    const ordered = found.sort((a, b) => b.size - a.size).map((icon) => icon.url);
+    try {
+      ordered.push(new URL('/apple-touch-icon.png', siteUrl).toString());
+    } catch {
+      // A website address that is not a URL has no root to try.
+    }
+    return [...new Set(ordered)];
+  }
+
   private async readCapped(response: Response, max: number): Promise<string> {
     const reader = response.body?.getReader();
     if (!reader) return '';
@@ -255,6 +305,12 @@ export function matchMetaContent(html: string, property: string): string | null 
     if (match?.[1]) return decodeHtmlEntities(match[1].trim());
   }
   return null;
+}
+
+/** One attribute's value from an HTML tag, either quote style. */
+function attribute(tag: string, name: string): string | null {
+  const match = new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, 'i').exec(tag);
+  return match?.[1]?.trim() || null;
 }
 
 /** Only the five that matter in an attribute value; this is a URL, not prose. */

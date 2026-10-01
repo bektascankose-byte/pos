@@ -100,21 +100,17 @@ data class BrandNode(
   val name: String,
   val categoryIds: Set<String>,
   val lines: List<LineNode>,
+  /** Server-relative path to the brand's logo, when the back office has one. */
+  val logoUrl: String? = null,
 ) {
   val itemCount: Int get() = lines.sumOf { it.variantIds.size }
 
-  /** The brand folder's cover, taken from the first of its lines that has one. */
-  val coverImageUrl: String? get() = lines.firstNotNullOfOrNull { it.coverImageUrl }
-
   /**
-   * Whether opening this brand should show model folders or go straight to the
-   * products.
-   *
-   * A brand with one model line has nothing to choose between, and making a
-   * cashier tap through a folder containing exactly one folder is a tap that
-   * buys them nothing.
+   * The brand folder's picture: its logo, which a cashier picks out from across
+   * the counter, or failing that a photo from the first of its models that has
+   * one.
    */
-  val hasModelChoice: Boolean get() = lines.size > 1
+  val coverImageUrl: String? get() = logoUrl ?: lines.firstNotNullOfOrNull { it.coverImageUrl }
 }
 
 /**
@@ -176,6 +172,7 @@ data class CatalogNavigation(
 class CatalogRepository @Inject constructor(
   private val catalog: CatalogDao,
   private val config: ConfigDao,
+  private val brandStore: BrandStore,
 ) {
 
   fun categories(): Flow<List<CategoryEntity>> = catalog.categories()
@@ -190,7 +187,7 @@ class CatalogRepository @Inject constructor(
    * the next sync without anyone configuring anything.
    */
   fun navigation(): Flow<CatalogNavigation> =
-    combine(catalog.catalogIndex(), catalog.categories(), ::buildNavigation)
+    combine(catalog.catalogIndex(), catalog.categories(), brandStore.observe(), ::buildCatalogNavigation)
 
   /** Full rows for one model line's variants, in the order the tree put them. */
   suspend fun byIds(ids: List<String>): List<ResolvedProduct> {
@@ -227,77 +224,6 @@ class CatalogRepository @Inject constructor(
   /** The store's tax rate, as a decimal string. Never a float. */
   suspend fun taxRate(): String = config.get()?.taxRate ?: "0"
 
-  private fun buildNavigation(rows: List<CatalogIndexRow>, categories: List<CategoryEntity>): CatalogNavigation {
-    val parts = taxonomize(
-      rows.map { NamedItem(it.id, it.productName, it.variantName, it.brandName) },
-    )
-
-    // Grouped on the brand the taxonomy resolved, not the raw column, and on
-    // the *name* rather than the id.
-    //
-    // The name, because a catalog that carries one brand under two ids -- which
-    // happens whenever a feed is re-imported -- would otherwise show two
-    // identical tabs side by side.
-    //
-    // The taxonomy's answer, because it is the one the tiles and the receipt
-    // already use, and a tree that disagreed with the labels inside it would
-    // file "FOGER SwitchPro Kit 30K" under Other while the tile above it read
-    // Foger. It also recovers the products whose brand column was never filled
-    // in: in this shop that is 88 of 152, and grouped by the raw column they
-    // collapse into a single "Other" pile of eighty-eight, which is exactly
-    // the flat list this navigation exists to replace.
-    val brands = rows
-      .groupBy { parts[it.id]?.brand ?: it.brandName?.trim()?.takeIf { name -> name.isNotEmpty() } }
-      .map { (brandName, brandRows) ->
-        val lines = brandRows
-          .groupBy { parts[it.id]?.line?.takeIf { line -> line.isNotBlank() } }
-          .map { (lineName, lineRows) ->
-            val sorted = lineRows.sortedWith(
-              compareBy({ it.sortOrder }, { parts[it.id]?.tileLabel ?: it.productName }),
-            )
-            LineNode(
-              id = "${brandName ?: "~"}/${lineName ?: "~"}",
-              // A line with no model of its own is the brand's own shelf, and
-              // "Other" reads better on a tab than an empty string does.
-              name = lineName ?: brandName ?: "Other",
-              brandId = brandRows.firstNotNullOfOrNull { it.brandId },
-              brandName = brandName,
-              categoryIds = lineRows.mapNotNull { it.categoryId }.toSet(),
-              variantIds = sorted.map { it.id },
-              coverImageUrl = sorted.firstNotNullOfOrNull { it.imageUrl },
-            )
-          }
-          .sortedWith(compareByDescending<LineNode> { it.variantIds.size }.thenBy { it.name })
-        BrandNode(
-          id = brandName ?: "~",
-          name = brandName ?: "Other",
-          categoryIds = brandRows.mapNotNull { it.categoryId }.toSet(),
-          lines = lines,
-        )
-      }
-      // Biggest brand first. A cashier's hand goes to the same place all shift,
-      // and the shop's best seller earning the first tab is worth more than
-      // alphabetical order is.
-      .sortedWith(compareByDescending<BrandNode> { it.itemCount }.thenBy { it.name })
-
-    // Documents in menu order -- biggest brand, then its biggest line, then the
-    // line's own order -- so equally good matches arrive grouped the way the
-    // folders are rather than in whatever order the rows were read.
-    val byId = rows.associateBy { it.id }
-    val documents = brands.flatMap { it.lines }.flatMap { it.variantIds }.mapNotNull { id ->
-      val row = byId[id] ?: return@mapNotNull null
-      val p = parts[id]
-      SearchDocument.of(id, p?.brand, p?.line, p?.flavour, row.searchText)
-    }
-
-    return CatalogNavigation(
-      brands = brands,
-      parts = parts,
-      search = ProductSearchIndex(documents),
-      subtree = categorySubtrees(categories),
-    )
-  }
-
   private fun ScannedItem.toResolved() = ResolvedProduct(
     variantId = variant.id,
     productName = variant.productName,
@@ -313,6 +239,116 @@ class CatalogRepository @Inject constructor(
     minimumAge = variant.minimumAge,
     idScanRequired = variant.idScanRequired,
     imageUrl = variant.imageUrl,
+  )
+}
+
+/**
+ * The brand, model and flavor tree the till's folders are drawn from.
+ *
+ * Three levels, always, and each one A to Z:
+ *
+ *   brand    "Foger"                          one folder per brand, wearing its logo
+ *   model    "SwitchPro Disposable Pod"       one folder per product line
+ *   flavor   "Berry Bliss", "Mexico Mango"    the tiles that get rung up
+ *
+ * A product sent with named flavors is a model of its own: its name, less the
+ * brand, is the folder. A brand with only one model still opens on that
+ * model's folder rather than skipping to the flavors. The shop asked for the
+ * same three taps every time, so a cashier's hand learns one path, and the
+ * folder says which model the flavors on screen belong to.
+ *
+ * Products imported one per flavor, with the flavor welded onto the name, still
+ * go through `taxonomize`, which finds their model lines by what the names
+ * share.
+ *
+ * Alphabetical rather than biggest first. Biggest first put the best seller
+ * under the cashier's hand, but it also reshuffled the folders every time a
+ * line grew or shrank, and A to Z is the one order nobody has to learn.
+ * "Other", the products with no brand, goes last.
+ */
+internal fun buildCatalogNavigation(
+  rows: List<CatalogIndexRow>,
+  categories: List<CategoryEntity>,
+  brands: List<BrandInfo>,
+): CatalogNavigation {
+  val parts = taxonomize(
+    rows.map { NamedItem(it.id, it.productName, it.variantName, it.brandName) },
+  )
+
+  // Matched on the brand id the catalog carries, and on the name for products
+  // whose brand the taxonomy read off the name instead.
+  val logoById = brands.mapNotNull { b -> b.logoUrl?.let { b.id to it } }.toMap()
+  val logoByName = brands.mapNotNull { b -> b.logoUrl?.let { b.name.trim().lowercase() to it } }.toMap()
+
+  // A product with at least one named flavor is a structured product: it is
+  // its own model, whatever its names have in common with its neighbours.
+  val structured = rows.filter { !it.variantName.isNullOrBlank() }.map { it.productId }.toSet()
+
+  val alphabetical = String.CASE_INSENSITIVE_ORDER
+
+  // Grouped on the brand the taxonomy resolved, not the raw column, and on the
+  // *name* rather than the id: a catalog that carries one brand under two ids
+  // -- which happens whenever a feed is re-imported -- would otherwise show
+  // two identical folders side by side. The taxonomy's answer also recovers
+  // products whose brand field was never filled in.
+  val brandNodes = rows
+    .groupBy { parts[it.id]?.brand ?: it.brandName?.trim()?.takeIf { name -> name.isNotEmpty() } }
+    .map { (brandName, brandRows) ->
+      val usedIds = HashSet<String>()
+      val lines = brandRows
+        .groupBy { row ->
+          if (row.productId in structured) "product:${row.productId}"
+          else "line:${parts[row.id]?.line?.takeIf { it.isNotBlank() }.orEmpty()}"
+        }
+        .map { (_, lineRows) ->
+          val lineName = lineRows.firstNotNullOfOrNull { parts[it.id]?.line?.takeIf { line -> line.isNotBlank() } }
+          val sorted = lineRows.sortedWith(
+            compareBy(alphabetical) { row: CatalogIndexRow -> parts[row.id]?.tileLabel ?: row.productName }
+              .thenBy { it.id },
+          )
+          // The same shape of id as before, "Brand/Model", so a model pinned to
+          // the quick menu keeps working. Two products that strip to the same
+          // model name keep apart by product.
+          var id = "${brandName ?: "~"}/${lineName ?: "~"}"
+          if (!usedIds.add(id)) id = "$id#${lineRows.first().productId}".also { usedIds.add(it) }
+          LineNode(
+            id = id,
+            // A line with no model of its own is the brand's own shelf, and
+            // "Other" reads better on a folder than an empty string does.
+            name = lineName ?: brandName ?: "Other",
+            brandId = brandRows.firstNotNullOfOrNull { it.brandId },
+            brandName = brandName,
+            categoryIds = lineRows.mapNotNull { it.categoryId }.toSet(),
+            variantIds = sorted.map { it.id },
+            coverImageUrl = sorted.firstNotNullOfOrNull { it.imageUrl },
+          )
+        }
+        .sortedWith(compareBy(alphabetical) { line: LineNode -> line.name }.thenBy { it.id })
+      val brandId = brandRows.firstNotNullOfOrNull { it.brandId }
+      BrandNode(
+        id = brandName ?: "~",
+        name = brandName ?: "Other",
+        categoryIds = brandRows.mapNotNull { it.categoryId }.toSet(),
+        lines = lines,
+        logoUrl = brandId?.let(logoById::get) ?: brandName?.let { logoByName[it.trim().lowercase()] },
+      )
+    }
+    .sortedWith(compareBy<BrandNode> { it.id == "~" }.thenBy(alphabetical) { it.name })
+
+  // Documents in menu order, so equally good matches arrive grouped the way
+  // the folders are rather than in whatever order the rows were read.
+  val byId = rows.associateBy { it.id }
+  val documents = brandNodes.flatMap { it.lines }.flatMap { it.variantIds }.mapNotNull { id ->
+    val row = byId[id] ?: return@mapNotNull null
+    val p = parts[id]
+    SearchDocument.of(id, p?.brand, p?.line, p?.flavour, row.searchText)
+  }
+
+  return CatalogNavigation(
+    brands = brandNodes,
+    parts = parts,
+    search = ProductSearchIndex(documents),
+    subtree = categorySubtrees(categories),
   )
 }
 

@@ -18,25 +18,25 @@ const db = scratch.db;
 const n = async (sql) => Number((await db.query(sql))[0].n);
 
 test(`all ${migrationFiles().length} migrations applied on ${scratch.engine}`, () => {
-  assert.equal(migrationFiles().length, 36);
+  assert.equal(migrationFiles().length, 37);
 });
 
 test('migrations are numbered contiguously from 0001', () => {
   const prefixes = migrationFiles().map((f) => Number(f.name.slice(0, 4)));
-  assert.deepEqual(prefixes, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36]);
+  assert.deepEqual(prefixes, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37]);
 });
 
 // 0034 adds two: pos_catalog_variants (what the registers were last sent) and
 // pos_releases (each press of Send). 0035 adds price_group_members, so a
 // flavor can sit in more than one price group. 0036 adds
-// password_reset_tokens.
-test('102 base tables exist', async () => {
+// password_reset_tokens. 0037 adds brand_logos.
+test('103 base tables exist', async () => {
   assert.equal(
     await n(`select count(*) n from pg_class c
              join pg_namespace ns on ns.oid = c.relnamespace
              where ns.nspname='public' and c.relkind in ('r','p')
                and not c.relispartition`),
-    102,
+    103,
   );
 });
 
@@ -49,7 +49,7 @@ test('inventory_ledger and audit_log are range partitioned', async () => {
   assert.deepEqual(rows.map((r) => r.relname), ['audit_log', 'inventory_ledger']);
 });
 
-test('161 foreign keys, 35 enums, 143 table level checks', async () => {
+test('162 foreign keys, 35 enums, 145 table level checks', async () => {
   // 0027 accounts for the last move: seven foreign keys (four off `orders`,
   // two off `order_lines`, one off `order_events`), the order_fulfilment and
   // order_status enums, and six checks -- four on `orders` including the one
@@ -79,9 +79,11 @@ test('161 foreign keys, 35 enums, 143 table level checks', async () => {
   // key to the product it was made for, less the variant's old single
   // price_group_id key, dropped with the column. 0036 adds two: a reset token
   // belongs to an organization and to the user whose password it resets.
+  // 0037 adds one key, a logo to its brand, and two checks: a logo is a PNG,
+  // JPEG or WebP, and it has bytes.
   assert.equal(await n(`select count(*) n from pg_constraint c
                         join pg_namespace ns on ns.oid=c.connamespace
-                        where ns.nspname='public' and c.contype='f'`), 161);
+                        where ns.nspname='public' and c.contype='f'`), 162);
   assert.equal(await n(`select count(distinct t.typname) n from pg_type t
                         join pg_namespace ns on ns.oid=t.typnamespace
                         where ns.nspname='public' and t.typtype='e'`), 35);
@@ -89,10 +91,10 @@ test('161 foreign keys, 35 enums, 143 table level checks', async () => {
                         join pg_class t on t.oid=c.conrelid
                         join pg_namespace ns on ns.oid=c.connamespace
                         where ns.nspname='public' and c.contype='c'
-                          and not t.relispartition`), 143);
+                          and not t.relispartition`), 145);
 });
 
-test('21 functions and 56 user triggers', async () => {
+test('21 functions and 57 user triggers', async () => {
   // Extensions install their own functions into public (pg_trgm adds ~20), so
   // count only what our migrations own.
   assert.equal(await n(`select count(*) n from pg_proc p
@@ -124,8 +126,9 @@ test('21 functions and 56 user triggers', async () => {
   // lift only against a platform rule and only lets a withdrawal be written
   // afterwards, and three triggers: that guard, a touch, and a refusal to
   // delete. 0034 adds the change_log trigger on pos_releases, which is how a
-  // press of Send reaches the registers.
-  assert.equal(await n(`select count(*) n from pg_trigger where not tgisinternal`), 56);
+  // press of Send reaches the registers. 0037 adds the change_log trigger on
+  // brand_logos, so a new logo reaches the registers without a Send.
+  assert.equal(await n(`select count(*) n from pg_trigger where not tgisinternal`), 57);
 });
 
 test('every table carrying org_id has RLS enabled and exactly one policy', async () => {

@@ -104,6 +104,15 @@ export const NAV_ENTRIES: NavEntry[] = [
     keywords: ["pricing", "price category", "bulk price"],
   },
   {
+    id: "brands",
+    label: "Brands",
+    href: "/catalog/brands",
+    group: "Catalog",
+    surfaces: ["setup"],
+    icon: "🏢",
+    keywords: ["brand", "logo", "maker", "manufacturer", "folders", "till folders"],
+  },
+  {
     id: "catalog-new",
     label: "Add an item",
     href: "/catalog/new",

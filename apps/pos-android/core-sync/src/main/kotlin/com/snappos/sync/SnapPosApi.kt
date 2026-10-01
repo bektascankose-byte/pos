@@ -236,6 +236,8 @@ data class ChangesResponse(
 @Serializable
 data class CatalogSnapshot(
   val categories: List<CategoryDto>,
+  /** Every brand and its logo, for the folders. Absent from servers older than 0037. */
+  val brands: List<BrandDto> = emptyList(),
   val variants: List<VariantDto>,
   val barcodes: List<BarcodeDto>,
   val prices: List<PriceDto>,
@@ -245,6 +247,14 @@ data class CatalogSnapshot(
   val included_scopes: List<String> = listOf("catalog", "prices", "tax", "employees", "inventory"),
   val cursor: String,
   val server_time: String,
+)
+
+@Serializable
+data class BrandDto(
+  val id: String,
+  val name: String,
+  /** Server-relative path to the logo, or null. */
+  val logo_url: String? = null,
 )
 
 @Serializable

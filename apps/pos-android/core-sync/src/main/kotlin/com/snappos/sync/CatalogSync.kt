@@ -2,6 +2,8 @@ package com.snappos.sync
 
 import android.util.Log
 import androidx.room.withTransaction
+import com.snappos.data.BrandInfo
+import com.snappos.data.BrandStore
 import com.snappos.data.SnapPosDatabase
 import com.snappos.data.dao.CatalogDao
 import com.snappos.data.dao.ConfigDao
@@ -36,6 +38,7 @@ class CatalogSync @Inject constructor(
   private val employees: EmployeeDao,
   private val config: ConfigDao,
   private val database: SnapPosDatabase,
+  private val brandStore: BrandStore,
 ) {
 
   data class Result(
@@ -235,6 +238,15 @@ class CatalogSync @Inject constructor(
         }
       }
       config.setCatalogCursor(snapshot.cursor)
+    }
+
+    // Brands and their logos, for the folders. Outside the transaction because
+    // they live in preferences, not the database; a failure here costs a logo
+    // until the next pull, never a price or a sale.
+    if ("catalog" in scopes) {
+      runCatching {
+        brandStore.replace(snapshot.brands.map { BrandInfo(it.id, it.name, it.logo_url) })
+      }.onFailure { Log.w(TAG, "could not keep brand logos: ${it.message}") }
     }
 
     Log.i(

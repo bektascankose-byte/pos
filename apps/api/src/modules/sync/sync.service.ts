@@ -734,11 +734,27 @@ export class SyncService {
         [storeId],
       ) : { rows: [] };
 
+      // Brands, for the folders on the till: the name it is filed under and
+      // the address of its logo. The logo is a path to an immutable image, the
+      // same as a product photo's, so the register downloads each one once.
+      // Served live rather than from the sent copy: a logo is how a folder
+      // looks, not something sold (0037).
+      const { rows: brands } = includes('catalog') ? await tx.query(
+        `SELECT b.id, b.name,
+                CASE WHEN l.id IS NULL THEN NULL
+                     ELSE '/api/v1/catalog/brand-logos/' || l.id END AS logo_url
+         FROM brands b
+         LEFT JOIN brand_logos l ON l.brand_id = b.id
+         WHERE b.status = 'active'
+         ORDER BY lower(b.name)`,
+      ) : { rows: [] };
+
       // The cursor the register resumes the change feed from. Taken AFTER the
       // snapshot reads so nothing committed during them is missed; re-applying
       // a change already in the snapshot is harmless, skipping one is not.
       return {
         categories,
+        brands,
         variants: variants.map((r: { row: Record<string, unknown> }) => r.row),
         barcodes: barcodes.map((r: { row: Record<string, unknown> }) => r.row),
         // Rebuilt field by field rather than passed through: the sent copy
@@ -841,6 +857,8 @@ const SCOPE_BY_ENTITY: Record<string, Change['scope']> = {
   variant_barcode: 'catalog',
   category: 'catalog',
   brand: 'catalog',
+  // Not in HELD_FOR_SEND: a new logo makes the registers pull straight away.
+  brand_logo: 'catalog',
   variant_price: 'prices',
   promotion: 'promotions',
   compliance_rule: 'compliance',

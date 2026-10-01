@@ -144,6 +144,28 @@ Rules that matter more than filling every row. A picture of the wrong flavour is
 
 Answer with ONLY a JSON array of those entries and nothing else -- no prose, no markdown fences.`;
 
+const BRAND_LOGO_INSTRUCTIONS = `You are finding the logo of a brand a shop sells, to show on the brand's folder on a till's touchscreen. Search the web.
+
+Answer with a JSON object with two fields:
+- website: the brand's own official website, for example "https://www.celsius.com". Null if it has none you can find. The site's own icon is used when no logo file can be fetched, so get the real brand site, not a retailer.
+- logos: up to four candidates, best first, each { "image_url": ..., "page_url": ... }. image_url is a direct address of the logo as an image file ending .png, .jpg, .jpeg or .webp; not .svg, not .gif, and not a page. A PNG rendering of a vector logo is ideal: Wikimedia Commons serves one at an address like https://upload.wikimedia.org/wikipedia/commons/thumb/.../Logo.svg/512px-Logo.svg.png, and the brand's own website often has a PNG of its logo in its header. When the brand's own site gives you no logo file, a specialist retailer's or distributor's brand page usually shows the logo as a PNG or WebP image: give that image's direct address. Prefer a logo drawn in color or black, since it is shown on a light background; a white logo meant for a dark header will not show. page_url is the page the logo is on.
+
+Rules that matter more than returning something. It must be the logo of THIS brand of the product kind you are told, not a different company with a similar name: "Foger" is a disposable vape brand, "Celsius" is an energy drink. A wordmark or emblem only: not a product photo, not a banner, not a press photo, not a social media avatar with a background scene. Leave logos empty rather than guess.
+
+Answer with ONLY that JSON object and nothing else -- no prose, no markdown fences.`;
+
+const brandLogoReplySchema = z.object({
+  website: z.string().nullish(),
+  logos: z
+    .array(
+      z.object({
+        image_url: z.string().nullish(),
+        page_url: z.string().nullish(),
+      }),
+    )
+    .nullish(),
+});
+
 /** Loosely -- and defensively -- validates the model's free-text answer to `suggestProductVariants` against the shape the caller actually needs. */
 const variantSuggestionListSchema = z.array(z.string());
 
@@ -618,6 +640,43 @@ export class AiService {
       });
     }
     return { images };
+  }
+
+  /**
+   * Addresses where a brand's logo might be, best first.
+   *
+   * Addresses only, the same as `findProductImages`: whether one is safe to
+   * fetch and actually an image is decided where it is fetched.
+   * `product_hint` is a product the shop sells under the brand, which is what
+   * tells "Celsius" the drink from Celsius the temperature scale.
+   */
+  async findBrandLogo(input: {
+    brand_name: string;
+    product_hint?: string | null | undefined;
+  }): Promise<{ website: string | null; logos: { image_url: string | null; page_url: string | null }[] }> {
+    const { client, model } = this.getClient();
+    const response = await client.responses.create({
+      model,
+      instructions: BRAND_LOGO_INSTRUCTIONS,
+      tools: [{ type: 'web_search' }],
+      input: JSON.stringify({
+        brand_name: input.brand_name,
+        sold_as: input.product_hint ?? null,
+      }),
+    });
+
+    const reply = brandLogoReplySchema.safeParse(this.parseJsonReply(response.output_text, 'findBrandLogo'));
+    if (!reply.success) {
+      this.logger.warn('findBrandLogo: model output was not a website and a list of candidates');
+      throw new Error('the model did not return a usable answer about the logo');
+    }
+    return {
+      website: httpUrlOrNull(reply.data.website ?? null),
+      logos: (reply.data.logos ?? []).slice(0, 4).map((entry) => ({
+        image_url: httpUrlOrNull(entry.image_url ?? null),
+        page_url: httpUrlOrNull(entry.page_url ?? null),
+      })),
+    };
   }
 
   /**
