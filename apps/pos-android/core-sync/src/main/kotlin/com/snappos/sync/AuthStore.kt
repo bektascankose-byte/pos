@@ -67,6 +67,18 @@ class AuthInterceptor @Inject constructor(
   private val refreshLock = Mutex()
 
   override fun intercept(chain: Interceptor.Chain): Response {
+    // Signing in and refreshing are how a token is obtained, so neither one
+    // carries a token or tries to refresh one. The refresh call runs through
+    // this same client: when the server refused a dead refresh token with a
+    // 401, this interceptor answered that 401 by refreshing again, and waited
+    // on the lock the outer refresh was already holding. Every request after
+    // it waited behind it, forever. A register whose sign in had been revoked
+    // therefore never signed in again and sat on "Sync error".
+    val path = chain.request().url.encodedPath
+    if (path.endsWith("/auth/login") || path.endsWith("/auth/refresh")) {
+      return chain.proceed(chain.request())
+    }
+
     val token = runBlocking { store.accessToken() }
     val request = chain.request().newBuilder()
       .apply { token?.let { header("Authorization", "Bearer $it") } }

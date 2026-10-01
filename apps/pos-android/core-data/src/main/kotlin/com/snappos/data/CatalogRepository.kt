@@ -12,7 +12,7 @@ import com.snappos.domain.ProductSearchIndex
 import com.snappos.domain.SearchDocument
 import com.snappos.domain.taxonomize
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -139,14 +139,31 @@ data class CatalogNavigation(
    * say so.
    */
   val search: ProductSearchIndex = ProductSearchIndex.EMPTY,
+  /**
+   * Each category with every category beneath it, itself included. See
+   * `categorySubtrees`.
+   */
+  val subtree: Map<String, Set<String>> = emptyMap(),
 ) {
-  fun brandsIn(categoryId: String?): List<BrandNode> =
-    if (categoryId == null) brands else brands.filter { categoryId in it.categoryIds }
+  /**
+   * A category and everything filed beneath it. One the tree has not seen
+   * (the categories have not synced yet) stands for itself alone, which is
+   * what this matched before departments looked beneath themselves.
+   */
+  private fun within(categoryId: String): Set<String> = subtree[categoryId] ?: setOf(categoryId)
 
-  fun linesIn(brandId: String?, categoryId: String?): List<LineNode> =
-    brands.filter { brandId == null || it.id == brandId }
+  fun brandsIn(categoryId: String?): List<BrandNode> {
+    if (categoryId == null) return brands
+    val ids = within(categoryId)
+    return brands.filter { brand -> brand.categoryIds.any { it in ids } }
+  }
+
+  fun linesIn(brandId: String?, categoryId: String?): List<LineNode> {
+    val ids = categoryId?.let(::within)
+    return brands.filter { brandId == null || it.id == brandId }
       .flatMap { it.lines }
-      .filter { categoryId == null || categoryId in it.categoryIds }
+      .filter { line -> ids == null || line.categoryIds.any { it in ids } }
+  }
 
   fun line(id: String?): LineNode? =
     if (id == null) null else brands.firstNotNullOfOrNull { b -> b.lines.firstOrNull { it.id == id } }
@@ -172,7 +189,8 @@ class CatalogRepository @Inject constructor(
    * about, and a shop that adds a product line sees the menu reshape itself on
    * the next sync without anyone configuring anything.
    */
-  fun navigation(): Flow<CatalogNavigation> = catalog.catalogIndex().map(::buildNavigation)
+  fun navigation(): Flow<CatalogNavigation> =
+    combine(catalog.catalogIndex(), catalog.categories(), ::buildNavigation)
 
   /** Full rows for one model line's variants, in the order the tree put them. */
   suspend fun byIds(ids: List<String>): List<ResolvedProduct> {
@@ -209,7 +227,7 @@ class CatalogRepository @Inject constructor(
   /** The store's tax rate, as a decimal string. Never a float. */
   suspend fun taxRate(): String = config.get()?.taxRate ?: "0"
 
-  private fun buildNavigation(rows: List<CatalogIndexRow>): CatalogNavigation {
+  private fun buildNavigation(rows: List<CatalogIndexRow>, categories: List<CategoryEntity>): CatalogNavigation {
     val parts = taxonomize(
       rows.map { NamedItem(it.id, it.productName, it.variantName, it.brandName) },
     )
@@ -272,7 +290,12 @@ class CatalogRepository @Inject constructor(
       SearchDocument.of(id, p?.brand, p?.line, p?.flavour, row.searchText)
     }
 
-    return CatalogNavigation(brands = brands, parts = parts, search = ProductSearchIndex(documents))
+    return CatalogNavigation(
+      brands = brands,
+      parts = parts,
+      search = ProductSearchIndex(documents),
+      subtree = categorySubtrees(categories),
+    )
   }
 
   private fun ScannedItem.toResolved() = ResolvedProduct(
@@ -292,3 +315,22 @@ class CatalogRepository @Inject constructor(
     imageUrl = variant.imageUrl,
   )
 }
+
+/**
+ * Each category with every category beneath it, itself included.
+ *
+ * Products are filed under the most specific category -- every vape in this
+ * shop sits in "Disposable Vapes", none directly in "Vapes" -- while the rail
+ * shows only departments. Matching a department's own id exactly left every
+ * department except Everything empty. The materialized path makes "beneath" a
+ * prefix test, the same one `CatalogDao.byCategory` already uses; the dot is
+ * part of the prefix so a sibling that merely starts the same ("vapes-kits")
+ * is not taken for a child of "vapes".
+ */
+internal fun categorySubtrees(categories: List<CategoryEntity>): Map<String, Set<String>> =
+  categories.associate { root ->
+    root.id to categories
+      .filter { it.id == root.id || it.path.startsWith(root.path + ".") }
+      .map { it.id }
+      .toSet()
+  }

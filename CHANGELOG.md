@@ -2,6 +2,40 @@
 
 Notable changes. Newest first.
 
+## The till signs back in on its own, departments show what is filed under them, and a red pill says why
+
+**Tapping a department on the till now shows what is filed beneath it.** The
+rail shows departments (Vapes, Tobacco, Accessories) while every product is
+filed one level down (Disposable Vapes, Nicotine Pouches, Rolling Papers). The
+brand and model folders matched a department's own id exactly, so every
+department except Everything looked empty. The product grid already looked
+beneath a department; the folders now do too, using the same category path
+prefix. A category that only starts with the same letters ("vapes-kits") is
+not taken for a child of "vapes".
+
+**A register whose sign in was revoked signs in again instead of hanging.** The
+refresh request runs through the same HTTP client as everything else. When the
+server refused a dead refresh token with a 401, the auth interceptor answered
+that 401 by refreshing again, and waited on the lock the first refresh was
+still holding. Every request after it waited too, forever: the till never
+tried to sign in again, never pulled the catalog, and sat on "Sync error". This
+is what happened when the seeded test cashier the till signs in as was removed
+from the staff list on Sep 29. Sign in and refresh requests now skip the
+interceptor's refresh, so a dead token is cleared and the register signs in
+fresh on its next start.
+
+**The red "Sync error" pill opens.** It lists each upload the server refused
+for good, with the reason it gave, and a Send again button that puts them back
+in the queue from their first attempt. Retrying cannot double a sale: the
+entity id is the idempotency key. Before this nothing on the register could
+say what had failed.
+
+Not a code change, recorded here because it explains the outage: the till's
+development sign in uses cashier@hhsmoke.test, so that account is active again
+with its PIN removed, and nobody can unlock the till as it. Delete it only
+together with `DevSignIn`, once a register can be claimed by a manager signing
+in on the device.
+
 ## Forgot your password? Reset it yourself
 
 **There is a "Forgot your password?" link under the sign in button now.** Type

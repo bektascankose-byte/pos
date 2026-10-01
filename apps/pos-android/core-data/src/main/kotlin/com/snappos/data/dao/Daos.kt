@@ -377,6 +377,16 @@ interface OutboxDao {
 
   @Query("SELECT count(*) FROM sync_outbox WHERE state = 'dead'")
   fun deadCount(): Flow<Int>
+
+  /**
+   * Put every failed entry back in the queue, from its first attempt.
+   *
+   * For after a person has fixed what made them fail, or wants the server's
+   * reason again. Retrying cannot double anything: the entity id is the
+   * idempotency key, so one that did land after all comes back a duplicate.
+   */
+  @Query("UPDATE sync_outbox SET state = 'pending', attempts = 0, nextAttemptMillis = :now WHERE state = 'dead'")
+  suspend fun retryDead(now: Long): Int
 }
 
 @Dao

@@ -72,6 +72,12 @@ class SaleRepository @Inject constructor(
   val pendingUploads: Flow<Int> get() = outbox.pendingCount()
   val deadLetters: Flow<Int> get() = outbox.deadCount()
 
+  /** The uploads the server refused for good, with its reasons. */
+  val failedUploads: Flow<List<OutboxEntity>> get() = outbox.deadLetters()
+
+  /** Queue every failed upload again. Returns how many. */
+  suspend fun retryFailedUploads(): Int = outbox.retryDead(System.currentTimeMillis())
+
   fun recentSales(limit: Int = 50): Flow<List<SaleEntity>> = sales.recent(limit)
 
   /**

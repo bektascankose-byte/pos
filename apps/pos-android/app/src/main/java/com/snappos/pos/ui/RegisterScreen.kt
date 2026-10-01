@@ -88,6 +88,7 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
   val state by viewModel.state.collectAsStateWithLifecycle()
   val pending by viewModel.pendingUploads.collectAsStateWithLifecycle()
   val dead by viewModel.deadLetters.collectAsStateWithLifecycle()
+  val failedUploads by viewModel.failedUploads.collectAsStateWithLifecycle()
 
   // Three gates, in order: who is on the register, is the drawer open, then
   // sell. Each one exists because the step after it is impossible without it —
@@ -155,6 +156,7 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
   var showCustomer by remember { mutableStateOf(false) }
   var showLineActions by remember { mutableStateOf(false) }
   var confirmClear by remember { mutableStateOf(false) }
+  var showSyncProblems by remember { mutableStateOf(false) }
 
   // Any tap anywhere counts as the counter being busy. Bumping a counter is
   // cruder than tracking real gestures and it is also the only version that
@@ -201,6 +203,7 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
         storeName = state.storeName.ifBlank { "Register" },
         state = syncState,
         pending = pending,
+        onSyncProblems = { showSyncProblems = true },
         onLock = viewModel::lock,
         onCloseDrawer = { showClose = true },
         onRefund = viewModel::startRefund,
@@ -520,6 +523,17 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
     )
   }
 
+  if (showSyncProblems) {
+    SyncProblemsDialog(
+      failed = failedUploads,
+      onRetry = {
+        viewModel.retryFailedUploads()
+        showSyncProblems = false
+      },
+      onDismiss = { showSyncProblems = false },
+    )
+  }
+
   if (showHeldSales) {
     HeldSalesDialog(
       held = state.heldCarts,
@@ -627,6 +641,7 @@ private fun RegisterHeader(
   storeName: String,
   state: SyncState,
   pending: Int,
+  onSyncProblems: () -> Unit,
   onLock: () -> Unit,
   onCloseDrawer: () -> Unit,
   onRefund: () -> Unit,
@@ -647,7 +662,7 @@ private fun RegisterHeader(
       Spacer(Modifier.width(Space.S.dp + 2.dp))
       BrandLockup(caption = storeName)
       Spacer(Modifier.width(Space.L.dp))
-      SyncPill(state, pending)
+      SyncPill(state, pending, onClick = onSyncProblems)
       Spacer(Modifier.weight(1f))
 
       Row(
@@ -692,7 +707,7 @@ private fun RegisterHeader(
  * state that actually needs a person.
  */
 @Composable
-private fun SyncPill(state: SyncState, pending: Int) {
+private fun SyncPill(state: SyncState, pending: Int, onClick: () -> Unit) {
   val (label, color) = when (state) {
     SyncState.Online -> "Online" to MaterialTheme.colorScheme.tertiary
     SyncState.Syncing -> "Syncing" to MaterialTheme.colorScheme.primary
@@ -703,6 +718,9 @@ private fun SyncPill(state: SyncState, pending: Int) {
     verticalAlignment = Alignment.CenterVertically,
     modifier = Modifier
       .clip(RoundedCornerShape(999.dp))
+      // Red is the one state that needs a person, so it is the one that opens
+      // something: what failed and why, and a way to send it again.
+      .then(if (state == SyncState.Error) Modifier.clickable(onClick = onClick) else Modifier)
       .background(color.copy(alpha = 0.10f))
       .padding(horizontal = Space.S.dp + 2.dp, vertical = 6.dp),
   ) {
@@ -710,6 +728,49 @@ private fun SyncPill(state: SyncState, pending: Int) {
     Spacer(Modifier.width(Space.S.dp))
     Text(label, style = MaterialTheme.typography.labelMedium, color = color)
   }
+}
+
+/**
+ * What is behind the red pill.
+ *
+ * Each upload the server refused for good, with the reason it gave. Before
+ * this the pill said "Sync error" and nothing on the register could say why:
+ * the only way to learn which sale failed, and whether it mattered, was to
+ * read the device's log over a cable.
+ */
+@Composable
+private fun SyncProblemsDialog(failed: List<FailedUpload>, onRetry: () -> Unit, onDismiss: () -> Unit) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("Not sent to the back office") },
+    text = {
+      Column {
+        Text(
+          "The server refused these. They are kept on this register, so nothing is lost. " +
+            "Send them again once whatever stopped them is fixed.",
+          style = MaterialTheme.typography.bodyMedium,
+        )
+        Spacer(Modifier.height(Space.M.dp))
+        LazyColumn(Modifier.heightIn(max = 360.dp)) {
+          items(failed.size) { index ->
+            val item = failed[index]
+            Column(Modifier.padding(vertical = Space.S.dp)) {
+              Text(item.label, style = MaterialTheme.typography.titleSmall)
+              Text(
+                item.error,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+              )
+            }
+          }
+        }
+      }
+    },
+    confirmButton = {
+      TextButton(onClick = onRetry, enabled = failed.isNotEmpty()) { Text("Send again") }
+    },
+    dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+  )
 }
 
 @Composable

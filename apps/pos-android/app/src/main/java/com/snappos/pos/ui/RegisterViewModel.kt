@@ -27,6 +27,7 @@ import com.snappos.data.RefundableSale
 import com.snappos.data.ShiftRepository
 import com.snappos.data.UnlockResult
 import com.snappos.data.entities.EmployeeEntity
+import com.snappos.data.entities.OutboxEntity
 import com.snappos.data.ResolvedProduct
 import com.snappos.data.SaleRepository
 import com.snappos.data.HoldRepository
@@ -195,6 +196,30 @@ private const val TILE_LIMIT = 300
 
 data class CategoryTile(val id: String, val name: String)
 
+/** One upload the server refused for good, as the sync problems sheet shows it. */
+data class FailedUpload(
+  val id: String,
+  /** "Sale HH01-R1-20", or the kind and the start of its id when there is no receipt number. */
+  val label: String,
+  val error: String,
+  val deviceTimeMillis: Long,
+) {
+  companion object {
+    private val receiptNo = Regex("\"receipt_no\"\\s*:\\s*\"([^\"]+)\"")
+
+    fun of(row: OutboxEntity): FailedUpload {
+      val receipt = receiptNo.find(row.payloadJson)?.groupValues?.get(1)
+      val kind = row.entityType.replace('_', ' ').replaceFirstChar { it.uppercase() }
+      return FailedUpload(
+        id = row.id,
+        label = if (receipt != null) "$kind $receipt" else "$kind ${row.entityId.take(8)}",
+        error = row.lastError?.takeIf { it.isNotBlank() } ?: "Refused by the server",
+        deviceTimeMillis = row.deviceTimeMillis,
+      )
+    }
+  }
+}
+
 @HiltViewModel
 class RegisterViewModel @Inject constructor(
   @ApplicationContext private val context: Context,
@@ -229,6 +254,26 @@ class RegisterViewModel @Inject constructor(
 
   val deadLetters: StateFlow<Int> =
     sales.deadLetters.stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
+  /** What is behind the red pill: each upload the server refused for good, and why. */
+  val failedUploads: StateFlow<List<FailedUpload>> =
+    sales.failedUploads
+      .map { rows -> rows.map(FailedUpload::of) }
+      .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+  /** Queue every failed upload again and send at once. */
+  fun retryFailedUploads() {
+    viewModelScope.launch {
+      val count = sales.retryFailedUploads()
+      SyncWorker.syncNow(context)
+      _state.value = _state.value.copy(
+        message = Toast(
+          "Sending ${if (count == 1) "1 item" else "$count items"} again. " +
+            "If the server still refuses, the reason shows under the red pill.",
+        ),
+      )
+    }
+  }
 
   private var taxRate: String = "0"
 
