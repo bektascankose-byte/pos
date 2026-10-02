@@ -2,6 +2,24 @@
 
 Notable changes. Newest first.
 
+## The till's brand folders no longer vanish at startup
+
+**"Everything 55" with "Nothing here" under it.** The count was right and the
+grid was empty: no brand folders, though a search still found every product.
+The folders come from the catalog tree, which arrives on its own a moment
+after the app opens. Startup also loads the store name, and it did so inside
+the state copy: `_state.value.copy(storeName = catalog.storeName())`. Kotlin
+reads `_state.value` first and runs the suspending call after, so whatever was
+written in between is overwritten by the stale copy. On this till's slow
+storage the store name read takes long enough for the tree to land in that
+gap and be wiped. The tree is only rebuilt when the catalog changes, so the
+folders stayed gone until the app was restarted or something synced.
+
+The store name is now read into a local first, in both places startup does
+it, and the same pattern is fixed where a failed print re-reads the printer
+status. Search was unaffected because it falls back to the database when the
+tree is empty, which is also why the fault looked like a display problem.
+
 ## Print, email or text the receipt, straight after the sale
 
 **The receipt now comes up on its own when a sale completes.** Print, Email,

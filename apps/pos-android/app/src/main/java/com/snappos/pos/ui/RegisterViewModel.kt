@@ -322,7 +322,13 @@ class RegisterViewModel @Inject constructor(
       // two rows with different ids, which is why DevSeed was deleted.
       provisioning.ensureProvisioned()
       taxRate = catalog.taxRate()
-      _state.value = _state.value.copy(storeName = catalog.storeName().orEmpty())
+      // Read into a local before the copy, never inside it. `_state.value` is
+      // read first and the suspending call runs after, so a value written
+      // in between is overwritten by the stale copy. On this till's slow
+      // disk that is how the brand folders arrived and were then wiped,
+      // leaving the count on screen and nothing under it.
+      val storeName = catalog.storeName().orEmpty()
+      _state.value = _state.value.copy(storeName = storeName)
       refreshTiles()
 
       if (catalog.isEmpty()) {
@@ -336,7 +342,8 @@ class RegisterViewModel @Inject constructor(
         val pulled = catalogSync.pull()
         if (pulled.ok) {
           taxRate = catalog.taxRate()
-          _state.value = _state.value.copy(storeName = catalog.storeName().orEmpty())
+          val pulledStoreName = catalog.storeName().orEmpty()
+          _state.value = _state.value.copy(storeName = pulledStoreName)
           refreshTiles()
           _state.value = _state.value.copy(message = null)
         } else if (catalog.isEmpty()) {
@@ -1607,7 +1614,8 @@ class RegisterViewModel @Inject constructor(
       )
       // A printer that went away mid-print should stop offering to print.
       if (result == PrintResult.NoPrinter) {
-        _state.value = _state.value.copy(printerStatus = printer.status())
+        val status = printer.status()
+        _state.value = _state.value.copy(printerStatus = status)
       }
     }
   }
