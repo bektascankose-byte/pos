@@ -401,6 +401,15 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
         printing = state.printing,
         printNote = state.printProblem ?: printer?.detail,
         printNoteIsProblem = state.printProblem != null,
+        // Offered only once the sale has an id, which it has from the moment
+        // it commits. Without one there is nothing for the server to attach
+        // the delivery to.
+        onSend = if (state.lastSaleId != null) viewModel::sendReceipt else null,
+        sending = state.sendingReceipt,
+        sendNote = state.receiptSendNote,
+        sendFailed = state.receiptSendFailed,
+        customerEmail = state.lastCustomerEmail,
+        customerPhone = state.lastCustomerPhone,
       )
     }
   }

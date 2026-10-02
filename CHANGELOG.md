@@ -2,6 +2,30 @@
 
 Notable changes. Newest first.
 
+## Print, email or text the receipt, straight after the sale
+
+**The receipt now comes up on its own when a sale completes.** Print, Email,
+Text and Done, in that order, instead of a receipt icon in the header that a
+cashier had to know was there. The customer is still at the counter when the
+question gets asked, so the answer belongs on the screen at that moment.
+
+**Email works today**, over the shop's own mailbox, the one the password
+reset link already goes out from. The subject reads "Your receipt from
+Harker Heights" with the receipt number after it, and what lands in the
+inbox is the exact text the printer puts on paper rather than a second
+rendering that could drift away from it.
+
+**Text is wired up but has no provider yet**, and says so: "Texting is not
+switched on yet. This one is saved and will go out once it is." The number
+is kept, so nothing is lost when a provider is picked. Nothing here claims
+to have sent something it did not send, because a cashier repeats what the
+screen tells them.
+
+Where a receipt went is recorded against the sale, so "I never got it" is a
+question with an answer. If the sale had a customer attached, the address or
+number is filled in already. Print still only appears when a printer is
+plugged in.
+
 ## A sale is never thrown away for arriving before its drawer
 
 **Sales rung this morning were being marked dead and never reaching the back

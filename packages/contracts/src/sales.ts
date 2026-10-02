@@ -451,3 +451,39 @@ export type PaymentInput = z.infer<typeof paymentInput>;
 export type RefundInput = z.infer<typeof refundInput>;
 export type CashMovementInput = z.infer<typeof cashMovementInput>;
 export type AgeVerificationInput = z.infer<typeof ageVerificationInput>;
+
+
+/**
+ * Send a copy of a receipt to the customer.
+ *
+ * The rendered receipt travels with the request rather than being rebuilt
+ * here from the sale. The receipt is what the customer was handed: rebuilding
+ * it server side would let a later change to the rendering code alter a
+ * receipt that already exists on paper, and it would also make emailing one
+ * impossible until the sale had finished syncing -- which is exactly the
+ * moment the customer is still at the counter asking for it.
+ */
+export const sendReceiptSchema = z.discriminatedUnion('channel', [
+  z.object({
+    channel: z.literal('email'),
+    destination: z.string().trim().email().max(320),
+    body: z.string().min(1).max(20_000),
+  }),
+  z.object({
+    channel: z.literal('sms'),
+    // Checked loosely here and normalised to E.164 by `normalizeUsPhone` on
+    // the way into storage, so a number typed as (254) 555-0123 and the same
+    // number typed as 2545550123 do not become two different customers.
+    destination: z.string().trim().min(7).max(32),
+    body: z.string().min(1).max(20_000),
+  }),
+]);
+
+export type SendReceiptInput = z.infer<typeof sendReceiptSchema>;
+
+/** What became of a request to send a receipt, in terms a cashier can read. */
+export interface SendReceiptResult {
+  status: 'sent' | 'queued' | 'failed';
+  /** One line the cashier can say out loud. Always present, always true. */
+  note: string;
+}

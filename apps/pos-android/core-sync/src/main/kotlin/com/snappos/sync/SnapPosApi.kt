@@ -88,7 +88,40 @@ interface SnapPosApi {
   /** Re-resolving a name for a customer id a held cart already carries. */
   @GET("api/v1/customers/{id}")
   suspend fun getCustomer(@Path("id") id: String): Response<CustomerDto>
+
+  /**
+   * Send the customer their receipt by email or text.
+   *
+   * The one thing on a receipt the register cannot do by itself. Printing is
+   * local and works with the internet down; sending needs a mail or text
+   * provider, which lives server side, so this is a live call and it fails
+   * honestly when there is no network rather than pretending to queue.
+   *
+   * The rendered receipt goes up with the request. The server could rebuild
+   * it from the sale, but only once the sale has finished uploading, and the
+   * customer asking for it is standing at the counter now.
+   */
+  @POST("api/v1/sales/{id}/receipt")
+  suspend fun sendReceipt(
+    @Path("id") saleId: String,
+    @Body body: SendReceiptRequest,
+  ): Response<SendReceiptResponse>
 }
+
+@Serializable
+data class SendReceiptRequest(
+  /** "email" or "sms". */
+  val channel: String,
+  val destination: String,
+  val body: String,
+)
+
+@Serializable
+data class SendReceiptResponse(
+  /** "sent", "queued" or "failed". */
+  val status: String,
+  val note: String,
+)
 
 @Serializable
 data class LoginRequest(val email: String, val password: String, val device_id: String? = null)

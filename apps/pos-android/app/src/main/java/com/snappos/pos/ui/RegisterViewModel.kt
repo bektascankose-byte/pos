@@ -34,7 +34,9 @@ import com.snappos.data.HoldRepository
 import com.snappos.data.entities.HeldCartEntity
 import com.snappos.data.Tender
 import com.snappos.domain.Cart
+import com.snappos.domain.PaperWidth
 import com.snappos.domain.ReceiptRenderer
+import com.snappos.domain.TextReceipt
 import com.snappos.hardware.PrintResult
 import com.snappos.hardware.PrinterProvider
 import com.snappos.hardware.PrinterStatus
@@ -44,6 +46,7 @@ import com.snappos.sync.CatalogSync
 import com.snappos.sync.CustomerDto
 import com.snappos.sync.CustomerRepository
 import com.snappos.sync.DevSignIn
+import com.snappos.sync.ReceiptSender
 import com.snappos.sync.SyncWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -148,6 +151,29 @@ data class RegisterUiState(
    * message the cashier waiting on paper never sees.
    */
   val printProblem: String? = null,
+  /**
+   * The sale the receipt on screen belongs to.
+   *
+   * Needed because emailing or texting a receipt is the one receipt action
+   * the server performs, and the server knows sales by id, not by receipt
+   * number. Kept beside `lastReceipt` so the two can never disagree about
+   * which sale is being sent.
+   */
+  val lastSaleId: String? = null,
+  /**
+   * Where to send this sale's receipt, when the sale had a customer on it.
+   *
+   * Carried here rather than read off `attachedCustomer`, which is cleared
+   * the instant the sale commits: the cashier is asked "receipt?" after that
+   * point, and an address the shop already holds should not have to be
+   * typed again from memory.
+   */
+  val lastCustomerEmail: String? = null,
+  val lastCustomerPhone: String? = null,
+  val sendingReceipt: Boolean = false,
+  /** What happened to the last email or text, shown on the sheet itself. */
+  val receiptSendNote: String? = null,
+  val receiptSendFailed: Boolean = false,
   val busy: Boolean = false,
   // ------------------------------------------------------------------ refunds
   val refundSale: RefundableSale? = null,
@@ -237,6 +263,10 @@ class RegisterViewModel @Inject constructor(
   private val customers: CustomerRepository,
   private val config: ConfigDao,
   private val printer: PrinterProvider,
+  // Emailing and texting a receipt. Everything else a register does works
+  // with the network down; sending one cannot, so it goes to the server and
+  // says plainly when it could not.
+  private val receiptSender: ReceiptSender,
 ) : ViewModel() {
 
   private val _state = MutableStateFlow(RegisterUiState())
@@ -1402,14 +1432,30 @@ class RegisterViewModel @Inject constructor(
         // receipt. Resolved into a local first: see onSearch for what happens
         // when a suspending call is evaluated inside a state copy.
         val receipt = buildReceipt(cart, committed, tenders, change)
+        // Read before the customer is cleared, two lines below.
+        val soldTo = _state.value.attachedCustomer
 
         _state.value = _state.value.copy(
           busy = false,
           cart = Cart.EMPTY,
           attachedCustomer = null,
+          lastCustomerEmail = soldTo?.email,
+          lastCustomerPhone = soldTo?.phone,
           lastReceiptNo = committed.receiptNo,
           lastChange = committed.change,
           lastReceipt = receipt,
+          lastSaleId = committed.saleId,
+          // Shown without being asked for. The customer is still at the
+          // counter and "receipt?" is the next thing out of the cashier's
+          // mouth; making them hunt for a button in the header to answer it
+          // is a question asked in the wrong order. Closing the sheet is one
+          // tap, and the sale is already saved either way.
+          showingReceipt = true,
+          // Last sale's outcome, cleared with it.
+          receiptSendNote = null,
+          receiptSendFailed = false,
+          sendingReceipt = false,
+          printProblem = null,
           message = Toast("Sale ${committed.receiptNo} saved on this device"),
         )
         // Enqueued AFTER the sale is committed, never before. The upload is a
@@ -1485,13 +1531,56 @@ class RegisterViewModel @Inject constructor(
 
   fun showReceipt() {
     if (_state.value.lastReceipt != null) {
-      _state.value = _state.value.copy(showingReceipt = true, printProblem = null)
+      _state.value = _state.value.copy(
+        showingReceipt = true,
+        printProblem = null,
+        receiptSendNote = null,
+        receiptSendFailed = false,
+      )
       // Asked fresh each time the receipt opens: a printer unplugged since the
       // last sale should not still be offering to print.
       viewModelScope.launch {
         val status = printer.status()
         _state.value = _state.value.copy(printerStatus = status)
       }
+    }
+  }
+
+  /**
+   * Email or text the customer their receipt.
+   *
+   * The only receipt action that needs the network, so it is also the only
+   * one that can leave the cashier unsure. Every path out of here therefore
+   * ends in a sentence on the sheet saying what actually happened -- sent,
+   * saved for later, or did not go -- because the cashier is about to tell
+   * the customer, and they can only repeat what they are shown.
+   *
+   * `channel` is "email" or "sms".
+   */
+  fun sendReceipt(channel: String, destination: String) {
+    val saleId = _state.value.lastSaleId ?: return
+    val receipt = _state.value.lastReceipt ?: return
+    val to = destination.trim()
+    if (to.isEmpty()) return
+
+    viewModelScope.launch {
+      _state.value = _state.value.copy(
+        sendingReceipt = true,
+        receiptSendNote = null,
+        receiptSendFailed = false,
+      )
+      // The same text the printer would put on paper, so what lands in an
+      // inbox is the receipt, not a second rendering of it that could drift.
+      val body = TextReceipt.render(ReceiptRenderer.render(receipt), PaperWidth.Mm80)
+        .joinToString("\n")
+
+      val outcome = receiptSender.send(saleId, channel, to, body)
+
+      _state.value = _state.value.copy(
+        sendingReceipt = false,
+        receiptSendNote = outcome.note,
+        receiptSendFailed = !outcome.delivered,
+      )
     }
   }
 
