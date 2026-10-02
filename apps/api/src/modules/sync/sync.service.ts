@@ -58,6 +58,17 @@ const APPROVER_FIELD_BY_ENTITY: Record<string, string> = {
   sale_void: 'approved_by',
 };
 
+/**
+ * Entity types whose payload names the cash session they belong to, and which
+ * therefore cannot land before it. See `requireCashSession`.
+ */
+const SESSION_BOUND = new Set([
+  'sale',
+  'refund',
+  'cash_movement',
+  'cash_session_close',
+]);
+
 @Injectable()
 export class SyncService {
   private readonly logger = new Logger(SyncService.name);
@@ -249,6 +260,9 @@ export class SyncService {
     // malformed row reject every sale behind it.
     const envelope = syncEnvelopeSchema.parse(raw);
 
+    // Everything rung into a drawer waits for that drawer. See the method.
+    await this.requireCashSession(tx, envelope);
+
     switch (envelope.entity_type) {
       case 'sale': {
         const sale = saleInput.parse({ ...envelope.payload, id: envelope.id });
@@ -280,6 +294,52 @@ export class SyncService {
         throw new Error('payments are uploaded inside their sale or refund, not separately');
       default:
         throw new Error(`entity type "${envelope.entity_type}" is not accepted yet`);
+    }
+  }
+
+  /**
+   * Whatever was rung into a drawer waits for that drawer, the same way a void
+   * waits for its sale.
+   *
+   * Entities are ordered inside a batch but not across batches, and the
+   * register's outbox makes that weaker than it sounds: it selects rows that
+   * are `pending` and whose backoff has expired, oldest first. A row in
+   * backoff is skipped, not waited for. So a `cash_session` whose first
+   * upload failed -- one timeout, one restart of this process -- is passed
+   * over for up to fifteen minutes while every sale rung into it goes on
+   * ahead, arriving before the session it belongs to.
+   *
+   * Left to the foreign key that is `sales_session_id_org_id_fkey`: a plain
+   * constraint violation, which is not a Postgres code `isRetryable` counts as
+   * transient, so a completed sale with the money already in the drawer is
+   * called invalid, retried five times and dead lettered. The register shows
+   * Sync Error and the day's takings have a hole in them, because a drawer was
+   * a few minutes behind the sales rung into it.
+   *
+   * Checked here rather than in each service because the hazard belongs to the
+   * sync path, where "retryable" means something. Over HTTP a sale naming a
+   * session that does not exist is simply wrong, and the foreign key should
+   * say so.
+   */
+  private async requireCashSession(
+    tx: PoolClient,
+    envelope: SyncBatch['entities'][number],
+  ): Promise<void> {
+    if (!SESSION_BOUND.has(envelope.entity_type)) return;
+
+    const sessionId = (envelope.payload as { session_id?: unknown } | null)?.session_id;
+    // Null is legitimate: a sale rung with no drawer open carries no session.
+    if (typeof sessionId !== 'string' || sessionId.length === 0) return;
+
+    const { rows } = await tx.query<{ id: string }>(
+      `SELECT id FROM cash_sessions WHERE id = $1`,
+      [sessionId],
+    );
+    if (rows.length === 0) {
+      throw new RetryableIntakeError(
+        `cash session ${sessionId} has not arrived yet; this ` +
+          `${envelope.entity_type} waits for it`,
+      );
     }
   }
 

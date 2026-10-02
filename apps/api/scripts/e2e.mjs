@@ -613,6 +613,166 @@ check(
     token: ownerToken,
   });
   check('the ledger and levels still agree after sync', stillHealthy.body?.healthy === true);
+
+  // --------------------------------------------------------------------------
+  // A sale that reaches the server before its drawer does.
+  //
+  // This cost a shop its morning. The register's outbox skips rows that are
+  // backing off, so a cash_session whose first upload failed is passed over
+  // while the sales rung into it go on ahead. The foreign key refused them,
+  // the refusal was not a Postgres code the uploader counts as transient, and
+  // five attempts later completed sales -- money in the drawer -- were dead
+  // lettered. The sales must wait for the drawer instead.
+  // --------------------------------------------------------------------------
+  const orphanSessionId = uuidV7();
+  const orphanSaleId = uuidV7();
+  const cashierUserId = (await api('/api/v1/auth/session', { token: cashierToken }))
+    .body?.user_id;
+  const ownerUserId = (await api('/api/v1/auth/session', { token: ownerToken }))
+    .body?.user_id;
+  const orphanLineId = uuidV7();
+  const orphanPaymentId = uuidV7();
+  const orphanAt = new Date().toISOString();
+  const saleEnvelope = (id, sessionId) => ({
+    register_id: registerId,
+    device_id: randomUUID(),
+    entities: [
+      {
+        id,
+        entity_type: 'sale',
+        device_time: orphanAt,
+        payload: {
+          store_id: storeId,
+          register_id: registerId,
+          session_id: sessionId,
+          cashier_user_id: cashierUserId,
+          receipt_no: `E2E-ORPHAN-${id.slice(0, 8)}`,
+          // (register, sequence) is unique. The sales suite uses 1 to 3 and
+          // the rewards suite counts up from 9001, so this sits between them
+          // in a band of its own.
+          register_sequence: 5001,
+          status: 'completed',
+          subtotal_minor: '100',
+          tax_minor: '0',
+          total_minor: '100',
+          device_time: orphanAt,
+          completed_at: orphanAt,
+          lines: [
+            {
+              id: orphanLineId,
+              line_no: 1,
+              variant_id: variantId,
+              description: 'A sale whose drawer is late',
+              sku_snapshot: 'E2E-ORPHAN',
+              quantity: '1',
+              unit_price_minor: '100',
+              original_price_minor: '100',
+              tax_minor: '0',
+              total_minor: '100',
+            },
+          ],
+          payments: [
+            {
+              id: orphanPaymentId,
+              method: 'cash',
+              amount_minor: '100',
+              tendered_minor: '100',
+              change_minor: '0',
+              device_time: orphanAt,
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+  const early = await api('/api/v1/sync/batch', {
+    token: ownerToken,
+    method: 'POST',
+    body: saleEnvelope(orphanSaleId, orphanSessionId),
+  });
+  const earlyResult = early.body?.results?.[0];
+  check(
+    'a sale arriving before its drawer is refused',
+    earlyResult?.status === 'rejected',
+    JSON.stringify(earlyResult),
+  );
+  check(
+    'and refused as retryable, so the register keeps it instead of killing it',
+    earlyResult?.error?.retryable === true,
+    JSON.stringify(earlyResult?.error),
+  );
+
+  // The drawer turns up late, which is the whole point.
+  const lateSession = await api('/api/v1/sync/batch', {
+    token: ownerToken,
+    method: 'POST',
+    body: {
+      register_id: registerId,
+      device_id: randomUUID(),
+      entities: [
+        {
+          id: orphanSessionId,
+          entity_type: 'cash_session',
+          device_time: new Date().toISOString(),
+          payload: {
+            store_id: storeId,
+            register_id: registerId,
+            opened_by: ownerUserId,
+            opening_float_minor: '10000',
+            blind: false,
+            opened_at: new Date().toISOString(),
+          },
+        },
+      ],
+    },
+  });
+  check(
+    'the drawer lands when it finally arrives',
+    lateSession.body?.results?.[0]?.status === 'accepted',
+    JSON.stringify(lateSession.body?.results?.[0]),
+  );
+
+  const retried = await api('/api/v1/sync/batch', {
+    token: ownerToken,
+    method: 'POST',
+    body: saleEnvelope(orphanSaleId, orphanSessionId),
+  });
+  check(
+    'and the sale that was waiting then lands on the next try',
+    retried.body?.results?.[0]?.status === 'accepted',
+    JSON.stringify(retried.body?.results?.[0]),
+  );
+
+  // Put the drawer back. A register allows one open session at a time, so
+  // leaving this one open would make every cash check further down fail for
+  // a reason that has nothing to do with what they are testing.
+  const closed = await api('/api/v1/sync/batch', {
+    token: ownerToken,
+    method: 'POST',
+    body: {
+      register_id: registerId,
+      device_id: randomUUID(),
+      entities: [
+        {
+          id: uuidV7(),
+          entity_type: 'cash_session_close',
+          device_time: new Date().toISOString(),
+          payload: {
+            session_id: orphanSessionId,
+            closed_by: ownerUserId,
+            counted_minor: '10100',
+            closed_at: new Date().toISOString(),
+          },
+        },
+      ],
+    },
+  });
+  check(
+    'the late drawer closes again afterwards',
+    closed.body?.results?.[0]?.status === 'accepted',
+    JSON.stringify(closed.body?.results?.[0]),
+  );
 }
 
 // --------------------------------------------------- 8. a day at the counter

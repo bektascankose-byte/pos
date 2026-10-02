@@ -2,6 +2,25 @@
 
 Notable changes. Newest first.
 
+## A sale is never thrown away for arriving before its drawer
+
+**Sales rung this morning were being marked dead and never reaching the back
+office.** The register stamps each sale with the cash drawer session it
+belongs to, and the server refuses a sale whose drawer it has not been told
+about. That refusal was treated as a sale that is simply wrong, so after five
+tries the register gave up on it: completed sales, money already taken,
+turned into a hole in the day's numbers.
+
+Arriving early is normal, not wrong. The register's outbox skips rows that
+are waiting out a backoff, so a drawer whose first upload failed gets passed
+over for up to fifteen minutes while every sale rung into it goes up ahead of
+it. The dependency is real; the ordering was never guaranteed.
+
+Anything carrying a drawer session now waits for that drawer instead of being
+thrown out, the same way a void already waits for its sale. Sales, refunds,
+cash movements and shift closes alike. The register holds them and delivers
+them again once the drawer is there.
+
 ## A CARD button on the till, for cards taken on the shop's own terminal
 
 **CARD sits beside TAKE CASH on the payment screen.** The shop's PAX A35 is
