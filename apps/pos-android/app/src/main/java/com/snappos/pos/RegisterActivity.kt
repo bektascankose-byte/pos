@@ -4,7 +4,10 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.snappos.pos.ui.RegisterCustomerDisplay
 import com.snappos.pos.ui.RegisterScreen
+import com.snappos.pos.ui.RegisterViewModel
 import com.snappos.pos.ui.SnapPosTheme
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -23,7 +26,12 @@ class RegisterActivity : ComponentActivity() {
     enableEdgeToEdge()
     setContent {
       SnapPosTheme {
-        RegisterScreen()
+        // One view model, two screens. The customer's screen is hosted here,
+        // beside the cashier's rather than inside it, so it stays up through
+        // the unlock and drawer screens instead of going with them.
+        val viewModel: RegisterViewModel = hiltViewModel()
+        RegisterScreen(viewModel)
+        RegisterCustomerDisplay(viewModel)
       }
     }
   }

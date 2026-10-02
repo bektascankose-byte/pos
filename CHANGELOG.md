@@ -2,6 +2,45 @@
 
 Notable changes. Newest first.
 
+## The customer's screen shows the customer's side
+
+**The second screen was a copy of the cashier's.** The till has a customer
+facing display, and Android mirrors the main screen onto it whenever no app
+puts a window there. The customer screen had been written (the basket, a large
+total and a rewards panel) but nothing ever called it, so the customer watched
+the cashier's product grid, search box and sync pill.
+
+It is now hosted from the activity, beside the cashier's screen and reading
+the same view model, so the two can never disagree about a total. It stays up
+through the unlock and drawer screens and shows a basket only during a sale: a
+locked till, a closed drawer and a refund all leave it at "Welcome". An
+attached customer is greeted by name and never by phone number or email, which
+the next person in the queue could read.
+
+**After the sale it says thank you and shows the change.** Before, the basket
+would have emptied the instant the sale committed and gone back to "Welcome"
+while the customer was still waiting for change. The change is drawn as large
+as the total was. It only shows for the sale just rung: reopening an old
+receipt from the day's history does not thank whoever is standing there for
+somebody else's total.
+
+**It comes down when the register leaves the screen.** Android does not take
+a presentation down when its app goes to the background, and this till still
+runs the other till app for real trade. Left up, SnapPOS would have covered
+that app's own customer screen in the middle of its sale. The window is now
+dismissed when the activity stops and rebuilt when it returns, and if Android
+dismisses it by itself (a display that changes size does this) it is put back
+rather than left mirroring.
+
+**A customer's tap cannot take the scanner away.** The scanner is a keyboard,
+and Android sends keys to whichever screen was touched last. The customer
+window is touchable but never takes the keyboard, so a tap on it leaves the
+next scan going to the cashier's cart.
+
+The phone keypad for rewards is built but not switched on: the panel rests on
+"Ask about our rewards program". The keypad is also a little too tall for this
+till's customer screen and needs resizing before it is offered.
+
 ## The till's brand folders no longer vanish at startup
 
 **"Everything 55" with "Nothing here" under it.** The count was right and the

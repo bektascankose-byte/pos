@@ -85,8 +85,13 @@ fun CustomerScreen(
         }
       }
       Spacer(Modifier.height(Space.L.dp))
-      CustomerLines(state.cart, Modifier.weight(1f))
-      CustomerTotals(state.cart)
+      val completed = state.completed
+      if (completed != null && state.cart.isEmpty) {
+        CustomerThanks(completed, Modifier.weight(1f))
+      } else {
+        CustomerLines(state.cart, Modifier.weight(1f))
+        CustomerTotals(state.cart)
+      }
     }
 
     Box(Modifier.width(1.dp).fillMaxHeight().background(MaterialTheme.colorScheme.outline))
@@ -179,6 +184,48 @@ private fun CustomerTotalRow(label: String, amount: Money) {
 }
 
 /**
+ * After the sale: what it came to, and the change.
+ *
+ * Without this the basket empties the instant the sale commits and the screen
+ * goes back to "Welcome" while the customer is still holding out their hand
+ * for change, which reads as the till having forgotten them. The change is
+ * given the same weight the total had a moment ago, because it is now the
+ * number they are checking against what is put in their hand.
+ */
+@Composable
+private fun CustomerThanks(sale: CompletedSale, modifier: Modifier = Modifier) {
+  Column(
+    modifier.fillMaxWidth(),
+    verticalArrangement = Arrangement.Center,
+    horizontalAlignment = Alignment.CenterHorizontally,
+  ) {
+    Icon(
+      Icons.Default.CheckCircle,
+      null,
+      tint = MaterialTheme.colorScheme.tertiary,
+      modifier = Modifier.size(56.dp),
+    )
+    Spacer(Modifier.height(Space.M.dp))
+    Text("Thank you", style = MaterialTheme.typography.displaySmall)
+    Spacer(Modifier.height(Space.L.dp))
+    CustomerTotalRow("Total", sale.total)
+    if (!sale.change.isZero) {
+      Spacer(Modifier.height(Space.S.dp))
+      HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+      Spacer(Modifier.height(Space.S.dp))
+      Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text("CHANGE", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
+        Text(
+          "$${sale.change.toMajorString()}",
+          style = MaterialTheme.typography.displayMedium.merge(MoneyTextStyle),
+          fontWeight = FontWeight.Bold,
+        )
+      }
+    }
+  }
+}
+
+/**
  * The loyalty side.
  *
  * The customer types their own number. That is the whole reason this is worth
@@ -237,7 +284,7 @@ private fun LoyaltyResting() {
     Spacer(Modifier.height(Space.M.dp))
     Text("Rewards", style = MaterialTheme.typography.titleLarge)
     Text(
-      "Ask about the loyalty programme",
+      "Ask about our rewards program",
       style = MaterialTheme.typography.bodyLarge,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
       textAlign = TextAlign.Center,
