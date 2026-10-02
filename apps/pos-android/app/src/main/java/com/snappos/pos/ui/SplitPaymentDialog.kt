@@ -7,6 +7,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -74,7 +75,7 @@ fun SplitPaymentDialog(
   onConfirm: (List<Tender>) -> Unit,
 ) {
   var entries by remember { mutableStateOf(listOf<SplitEntry>()) }
-  // null = the entry list; "cash" / "other" = the keypad for that method.
+  // null = the entry list; "cash" / "card" / "external" = the keypad for that method.
   var entering by remember { mutableStateOf<String?>(null) }
   var digits by remember { mutableStateOf("") }
 
@@ -150,15 +151,28 @@ fun SplitPaymentDialog(
           }
 
           if (!covered) {
+            // Three across in a 420dp dialog: trimmed padding keeps each label on one line.
+            val tight = PaddingValues(horizontal = Space.XS.dp)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Space.S.dp)) {
               Button(
                 onClick = { digits = ""; entering = "cash" },
                 modifier = Modifier.weight(1f).height(Touch.MIN.dp),
-              ) { Text("Add cash") }
+                contentPadding = tight,
+              ) { Text("Add cash", maxLines = 1, softWrap = false) }
               OutlinedButton(
-                onClick = { digits = ""; entering = "other" },
+                onClick = { digits = ""; entering = "card" },
                 modifier = Modifier.weight(1f).height(Touch.MIN.dp),
-              ) { Text("Add other") }
+                contentPadding = tight,
+              ) { Text("Add card", maxLines = 1, softWrap = false) }
+              // "external" is the server's word for a payment taken outside
+              // this system (a check, a voucher). This used to send "other",
+              // which the server has no such method for: the sale was refused
+              // on upload and sat in the till as a failed upload.
+              OutlinedButton(
+                onClick = { digits = ""; entering = "external" },
+                modifier = Modifier.weight(1f).height(Touch.MIN.dp),
+                contentPadding = tight,
+              ) { Text("Add other", maxLines = 1, softWrap = false) }
             }
             Spacer(Modifier.height(Space.M.dp))
           }
@@ -190,8 +204,9 @@ fun SplitPaymentDialog(
         } else {
           val method = entering!!
           val isCash = method == "cash"
+          val isCard = method == "card"
           Text(
-            if (isCash) "Add cash" else "Add other payment",
+            if (isCash) "Add cash" else if (isCard) "Add card" else "Add other payment",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.SemiBold,
           )
@@ -215,6 +230,13 @@ fun SplitPaymentDialog(
           // A card, gift card or check tender is exact — there is no reader
           // here to produce change from it, so it can never exceed what's left.
           val overOther = !isCash && entered > Money.ZERO && entered > remaining
+          if (isCard) {
+            Text(
+              "Run the card for this amount on the terminal and add it once it is approved.",
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
           if (overOther) {
             Text(
               "Cannot exceed the remaining ${remaining.toMajorString()}",
@@ -243,7 +265,7 @@ fun SplitPaymentDialog(
                 val change = if (isCash) entered - amount else Money.ZERO
                 entries = entries + SplitEntry(
                   method = method,
-                  label = if (isCash) "Cash" else "Other",
+                  label = if (isCash) "Cash" else if (isCard) "Card" else "Other",
                   amount = amount,
                   tendered = if (isCash) entered else null,
                   change = change,

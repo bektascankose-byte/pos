@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -16,7 +17,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -66,6 +69,12 @@ fun CashPaymentDialog(
    * extra height on the already-tight compact layout.
    */
   onSplitPayment: (() -> Unit)? = null,
+  /**
+   * Null when counting a drawer. Otherwise the whole total goes on a card:
+   * a button as tall as TAKE CASH and beside it, because at this counter a
+   * card is as common as cash and must not be a link under the fold.
+   */
+  onCardPayment: (() -> Unit)? = null,
 ) {
   // Digits as typed, interpreted as minor units: typing 5 0 0 0 means $50.00.
   // Cashiers on every POS enter cash this way, and a decimal point is a keypress
@@ -101,7 +110,7 @@ fun CashPaymentDialog(
               Spacer(Modifier.height(Space.M.dp))
               QuickCashRow(total) { digits = it }
               Spacer(Modifier.weight(1f))
-              Actions(sufficient || counting, confirmLabel, onDismiss) { onConfirm(tendered) }
+              Actions(sufficient || counting, confirmLabel, onDismiss, onCardPayment) { onConfirm(tendered) }
               onSplitPayment?.let { split ->
                 TextButton(onClick = split, modifier = Modifier.fillMaxWidth()) { Text("Split payment") }
               }
@@ -126,7 +135,7 @@ fun CashPaymentDialog(
               onClear = { digits = "" },
             )
             Spacer(Modifier.height(Space.M.dp))
-            Actions(sufficient || counting, confirmLabel, onDismiss) { onConfirm(tendered) }
+            Actions(sufficient || counting, confirmLabel, onDismiss, onCardPayment) { onConfirm(tendered) }
             onSplitPayment?.let { split ->
               TextButton(onClick = split, modifier = Modifier.fillMaxWidth()) { Text("Split payment") }
             }
@@ -199,19 +208,118 @@ private fun Actions(
   enabled: Boolean,
   confirmLabel: String,
   onCancel: () -> Unit,
+  onCard: (() -> Unit)?,
   onConfirm: () -> Unit,
 ) {
-  Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Space.S.dp)) {
-    TextButton(onClick = onCancel, modifier = Modifier.weight(1f).height(Touch.MIN.dp)) {
-      Text("Cancel")
+  // Three across when a card is offered. Padding is trimmed so the labels
+  // stay on one line in the half-width column of the landscape layout.
+  val tight = PaddingValues(horizontal = Space.XS.dp)
+  Row(
+    Modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.spacedBy(Space.S.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    TextButton(
+      onClick = onCancel,
+      modifier = Modifier.weight(1f).height(Touch.MIN.dp),
+      contentPadding = tight,
+    ) {
+      Text("Cancel", maxLines = 1, softWrap = false)
+    }
+    if (onCard != null) {
+      // Never gated on what was typed: a card always covers the exact total.
+      OutlinedButton(
+        onClick = onCard,
+        modifier = Modifier.weight(1.4f).height(Touch.PRIMARY.dp),
+        shape = RoundedCornerShape(6.dp),
+        contentPadding = tight,
+      ) {
+        Text(
+          "CARD",
+          style = MaterialTheme.typography.titleLarge,
+          fontWeight = FontWeight.SemiBold,
+          maxLines = 1,
+          softWrap = false,
+        )
+      }
     }
     Button(
       onClick = onConfirm,
       enabled = enabled,
-      modifier = Modifier.weight(2f).height(Touch.PRIMARY.dp),
+      modifier = Modifier.weight(if (onCard != null) 2.2f else 2f).height(Touch.PRIMARY.dp),
       shape = RoundedCornerShape(6.dp),
+      contentPadding = if (onCard != null) tight else ButtonDefaults.ContentPadding,
     ) {
-      Text(confirmLabel, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+      Text(
+        confirmLabel,
+        style = MaterialTheme.typography.titleLarge,
+        fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+        softWrap = false,
+      )
+    }
+  }
+}
+
+/**
+ * A card taken on the shop's own terminal.
+ *
+ * SnapPOS does not talk to the terminal: it is provisioned by another
+ * processor, so the cashier keys the amount there and this records what
+ * happened. That is why the button says APPROVED rather than CHARGE. The sale
+ * is only saved once a person has seen the terminal approve it, and a decline
+ * is one tap back to cash or a split, with nothing written.
+ */
+@Composable
+fun CardPaymentDialog(
+  total: Money,
+  onBack: () -> Unit,
+  onApproved: () -> Unit,
+) {
+  Dialog(onDismissRequest = onBack, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Surface(
+      shape = RoundedCornerShape(12.dp),
+      color = MaterialTheme.colorScheme.surface,
+      modifier = Modifier.padding(Space.M.dp).widthIn(max = 420.dp),
+    ) {
+      Column(Modifier.padding(Space.L.dp)) {
+        Text("Card", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(Space.S.dp))
+        Row(
+          Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text("Enter on the terminal", style = MaterialTheme.typography.bodyLarge)
+          // As large as the change figure on the cash dialog: it is the number
+          // being typed on another device, and a slip here is a wrong charge.
+          Text(total.toMajorString(), style = MaterialTheme.typography.displaySmall.merge(MoneyTextStyle))
+        }
+        Spacer(Modifier.height(Space.M.dp))
+        Text(
+          "Run the card for this amount. Tap CARD APPROVED only after the terminal says approved.",
+          style = MaterialTheme.typography.bodyLarge,
+        )
+        Spacer(Modifier.height(Space.S.dp))
+        Text(
+          "Declined or cancelled? Tap Back and take the payment another way.",
+          style = MaterialTheme.typography.labelMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(Space.M.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Space.S.dp)) {
+          TextButton(onClick = onBack, modifier = Modifier.weight(1f).height(Touch.MIN.dp)) {
+            Text("Back")
+          }
+          Button(
+            onClick = onApproved,
+            modifier = Modifier.weight(2f).height(Touch.PRIMARY.dp),
+            shape = RoundedCornerShape(6.dp),
+          ) {
+            Text("CARD APPROVED", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+          }
+        }
+      }
     }
   }
 }

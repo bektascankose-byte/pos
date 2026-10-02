@@ -145,6 +145,7 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
 
   var showPayment by remember { mutableStateOf(false) }
   var showSplitPayment by remember { mutableStateOf(false) }
+  var showCardPayment by remember { mutableStateOf(false) }
   var showClose by remember { mutableStateOf(false) }
   var selectedLineId by remember { mutableStateOf<String?>(null) }
   var showDiscount by remember { mutableStateOf(false) }
@@ -166,7 +167,7 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
     // The draft counts because typing happens on the keyboard's own window,
     // where the tap counter below never sees it.
     activity = listOf(touches, state.cart.itemCount, state.selectedLineId, state.selectedCategoryId, state.searchDraft),
-    enabled = state.cart.isEmpty && !showPayment && !showSplitPayment,
+    enabled = state.cart.isEmpty && !showPayment && !showSplitPayment && !showCardPayment,
   )
 
   val syncState = when {
@@ -430,6 +431,26 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
       onSplitPayment = {
         showPayment = false
         showSplitPayment = true
+      },
+      onCardPayment = {
+        showPayment = false
+        showCardPayment = true
+      },
+    )
+  }
+
+  if (showCardPayment) {
+    CardPaymentDialog(
+      total = state.cart.total,
+      // Back to the payment choices, not out of the sale: a decline is followed
+      // by cash or a split far more often than by walking away.
+      onBack = {
+        showCardPayment = false
+        showPayment = true
+      },
+      onApproved = {
+        showCardPayment = false
+        viewModel.payCard()
       },
     )
   }

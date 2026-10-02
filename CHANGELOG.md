@@ -2,6 +2,32 @@
 
 Notable changes. Newest first.
 
+## A CARD button on the till, for cards taken on the shop's own terminal
+
+**CARD sits beside TAKE CASH on the payment screen.** The shop's PAX A35 is
+provisioned through Modisoft's card processing, so SnapPOS cannot drive it;
+the owner chose to record card sales rather than wait on a merchant account.
+Tapping CARD shows the total, as large as the change figure on the cash
+screen, with one instruction: run the card for this amount, and tap CARD
+APPROVED only after the terminal says approved. The sale is saved as paid by
+`card` at that tap and not before, so a declined card leaves nothing written;
+Back returns to the payment choices for cash or a split. No drawer opens for a
+card. Split payment gains **Add card** beside Add cash and Add other.
+
+SnapPOS never sees a card number and does not claim to have processed
+anything: the terminal's own batch stays the record of what was charged, and
+the back office's sales by payment method now has a `card` line to check it
+against. A void or refund of a card sale puts stock back but does not return
+money to the card; that is still done on the terminal by hand.
+
+**Split payments with "Add other" never reached the server.** The till saved
+them as method `other`, which is not one of the server's payment methods
+(`external` is), so the upload was refused and the sale sat as a failed
+upload. It now sends `external`, and the receipt still prints "Other".
+
+Till unit tests pass and the debug build assembles. Not yet tried on the till:
+its remote connection was off when this was written.
+
 ## The AI lists every flavor of a long line, not the first forty
 
 **Draft with AI stopped at 41 flavors every time.** `AiService.fillProduct`

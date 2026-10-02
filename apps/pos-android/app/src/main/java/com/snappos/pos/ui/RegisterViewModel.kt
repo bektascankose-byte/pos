@@ -1327,6 +1327,32 @@ class RegisterViewModel @Inject constructor(
   }
 
   /**
+   * The whole sale on a card that the shop's own terminal has already approved.
+   *
+   * Recorded, not processed: nothing here talks to a card reader. The cashier
+   * keys the amount on the terminal, watches it approve, and only then calls
+   * this, so a sale is never saved as paid on the strength of a card that was
+   * about to be declined. No change and no drawer: [commitTenders] opens the
+   * drawer for cash only.
+   */
+  fun payCard() {
+    val cart = _state.value.cart
+    if (cart.isEmpty) return
+
+    if (cart.requiresAgeVerification) {
+      _state.value = _state.value.copy(
+        message = Toast(
+          "${cart.minimumAgeRequired}+ ID required before payment",
+          isError = true,
+        ),
+      )
+      return
+    }
+
+    commitTenders(cart, listOf(Tender(method = "card", amount = cart.total)))
+  }
+
+  /**
    * Cover one sale with more than one tender.
    *
    * The tender list already sums to at least the cart total — [SplitPaymentDialog]
@@ -1443,7 +1469,11 @@ class RegisterViewModel @Inject constructor(
       // note against a $43 sale reads "cash $50.00 / change $7.00" on the
       // slip, which is what a customer expects to see, not "$43.00". Anything
       // else has no such distinction — it was for its exact amount.
-      tenders = tenders.map { ReceiptTender(it.method, it.tendered ?: it.amount) },
+      // The customer's word for it, not the server's: "external" reads as
+      // nothing to someone holding a receipt.
+      tenders = tenders.map {
+        ReceiptTender(if (it.method == "external") "other" else it.method, it.tendered ?: it.amount)
+      },
       change = change,
       minimumAge = cart.minimumAgeRequired,
       // The cart reached payment, so any age gate on it was satisfied — that is
