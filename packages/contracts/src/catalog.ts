@@ -642,6 +642,21 @@ export const productSearchSchema = pagination.extend({
   status: entityStatus.optional(),
   /** Only variants with stock. The register's default view. */
   in_stock: z.coerce.boolean().optional(),
+  /**
+   * This one list is allowed to be long.
+   *
+   * The shared default is 50 with a ceiling of 200, which is right for the
+   * register: it asks for what a screen can show. The back office asks a
+   * different question -- "show me my catalog" -- and a shop with 453
+   * flavours was being handed the first 50 of them and told, by a null
+   * cursor, that there were no more. Silently showing someone a third of
+   * their inventory is worse than being slow.
+   *
+   * One row per flavour, so the ceiling is counted in flavours and not in
+   * products. A few thousand is a large independent shop and still one
+   * modest response.
+   */
+  limit: z.coerce.number().int().min(1).max(5000).default(500),
 });
 
 /** Barcode lookup is the single hottest path in the system. */

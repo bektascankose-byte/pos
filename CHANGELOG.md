@@ -2,6 +2,21 @@
 
 Notable changes. Newest first.
 
+## Products shows the whole catalog, not the first fifty
+
+**The list was capped and said nothing about it.** Products in the back office
+asked for a page of fifty and reported that there were no more, so a catalog
+of any real size looked complete while most of it was missing. Search made it
+worse rather than better: searching narrowed the set and then still cut it at
+fifty, which is why the same item could seem to be absent one moment and
+present the next.
+
+The page now asks for five hundred and will take up to five thousand, which
+covers a shop that keeps every flavor of every line as its own row. When a
+reply really is cut short it now says so instead of claiming the end of the
+list, so a future screen can show that there is more rather than quietly
+losing it.
+
 ## The customer's screen shows the customer's side
 
 **The second screen was a copy of the cashier's.** The till has a customer

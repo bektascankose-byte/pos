@@ -171,7 +171,16 @@ export class CatalogService {
           params.limit,
         ],
       );
-      return { data: rows, next_cursor: null };
+      // `truncated` rather than a null cursor pretending there is nothing
+      // more. This list has no real pagination -- it is a back office view of
+      // one shop's catalog, asked for whole -- so the honest thing when the
+      // ceiling is reached is to say so, and let the screen tell the owner
+      // some of their inventory is not being shown.
+      return {
+        data: rows,
+        next_cursor: null,
+        truncated: rows.length >= params.limit,
+      };
     });
   }
 
