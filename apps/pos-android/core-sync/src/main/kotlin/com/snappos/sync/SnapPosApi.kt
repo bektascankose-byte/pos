@@ -89,6 +89,32 @@ interface SnapPosApi {
   @GET("api/v1/customers/{id}")
   suspend fun getCustomer(@Path("id") id: String): Response<CustomerDto>
 
+  // -------------------------------------------------- the customer's own screen
+  //
+  // What a customer does for themselves at the counter: find their rewards,
+  // join, give a birthday, answer about offers. Separate routes from the
+  // cashier's above, and every one of them works for a plain cashier's shift,
+  // because the customer is the one acting. The contact goes in the body even
+  // for the lookup, so a phone number never sits in a URL.
+
+  @POST("api/v1/customer-display/identify")
+  suspend fun rewardsIdentify(@Body body: RewardsContactRequest): Response<RewardsIdentifyResponse>
+
+  @POST("api/v1/customer-display/join")
+  suspend fun rewardsJoin(@Body body: RewardsContactRequest): Response<RewardsMemberDto>
+
+  @POST("api/v1/customer-display/customers/{id}/birthday")
+  suspend fun rewardsBirthday(
+    @Path("id") customerId: String,
+    @Body body: RewardsBirthdayRequest,
+  ): Response<RewardsSavedResponse>
+
+  @POST("api/v1/customer-display/customers/{id}/offers")
+  suspend fun rewardsOffers(
+    @Path("id") customerId: String,
+    @Body body: RewardsOffersRequest,
+  ): Response<RewardsSavedResponse>
+
   /**
    * Send the customer their receipt by email or text.
    *
@@ -200,6 +226,57 @@ data class CreateCustomerRequest(
   val phone: String? = null,
   val email: String? = null,
 )
+
+// ------------------------------------------------------ the customer's screen
+
+/** A phone or an email, exactly one. The one left null is not sent at all. */
+@Serializable
+data class RewardsContactRequest(
+  val phone: String? = null,
+  val email: String? = null,
+)
+
+/**
+ * A member, as their own screen needs them.
+ *
+ * No birthday comes back, only whether one is missing: a number typed by a
+ * stranger should not be answered with somebody's birthday.
+ */
+@Serializable
+data class RewardsMemberDto(
+  val customer: CustomerDto,
+  /** True when this request created the member. */
+  val joined: Boolean = false,
+  val needs_birthday: Boolean = false,
+  /** "sms" or "email" when the customer has never answered about offers there. */
+  val ask_offers: String? = null,
+  val loyalty: RewardsBalanceDto = RewardsBalanceDto(),
+)
+
+@Serializable
+data class RewardsBalanceDto(
+  val program_name: String = "",
+  val program_active: Boolean = false,
+  val points: Int = 0,
+  /** What the balance is worth when spent, in cents. */
+  val value_minor: String = "0",
+)
+
+@Serializable
+data class RewardsIdentifyResponse(
+  val found: Boolean = false,
+  val member: RewardsMemberDto? = null,
+)
+
+@Serializable
+data class RewardsBirthdayRequest(val birth_month: Int, val birth_day: Int)
+
+/** `wording` is the question as the screen showed it, kept as evidence of what was agreed to. */
+@Serializable
+data class RewardsOffersRequest(val channel: String, val granted: Boolean, val wording: String)
+
+@Serializable
+data class RewardsSavedResponse(val saved: Boolean = false)
 
 // ------------------------------------------------------------------- upload
 

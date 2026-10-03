@@ -2,6 +2,38 @@
 
 Notable changes. Newest first.
 
+## Customers can join the rewards program on their own screen
+
+**The keypad was built and resting.** The customer facing screen showed "Ask
+about our rewards program" and could not do anything about it, because nothing
+behind it existed. The server half is now there and the panel is switched on.
+
+A customer types a phone number or an email on the screen in front of them and
+joins, without the cashier typing anything and without handing their number
+across the counter. A number already on file finds the existing member rather
+than making a second one, so tapping Join twice is harmless.
+
+**A customer's screen is given less reach than a member of staff.** Everything
+else that writes a customer record is an employee vouching for a fact and is
+gated behind customer.manage. This is the other case, a stranger at a keypad,
+so it was built narrower on purpose:
+
+- Joining takes one contact and nothing else. No name, no notes, no tags.
+- A birthday can be given once. A member who already has one is never asked
+  again and a second answer changes nothing, so typing somebody else's number
+  cannot move their birthday. Corrections stay a back office job.
+- An answer about offers goes into the consent log with the exact wording the
+  customer was shown and the screen it came from, and only for a channel they
+  actually gave a contact for.
+- Lookups match the whole contact. The back office matches fragments, which on
+  a screen a customer types into would let a few letters fish for other people.
+
+A cashier without customer.manage can still let a customer join, because the
+customer is the one asserting it.
+
+The panel's height on this till's customer screen still wants checking on the
+hardware.
+
 ## The day's receipts, and a Print button that knows the printer is there
 
 **Print was missing from the sheet that opens itself.** Finishing a sale opens

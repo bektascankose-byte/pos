@@ -12,16 +12,17 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -30,6 +31,7 @@ import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.snappos.domain.Cart
 import com.snappos.domain.Money
+import com.snappos.sync.CustomerDto
 
 /**
  * What the customer's screen is showing right now.
@@ -39,12 +41,16 @@ import com.snappos.domain.Money
  * anything it could forget, the register already knows, and two sources of
  * truth for one cart is how the two screens end up disagreeing about a total
  * in front of the person paying it.
+ *
+ * The one exception is [rewards], which comes from [RewardsViewModel]. Where a
+ * customer is in signing in is theirs alone and the register has no use for
+ * it; who ends up attached to the sale still lives on the register.
  */
 data class CustomerScreenState(
   val storeName: String = "",
   val cart: Cart = Cart.EMPTY,
   val customerName: String? = null,
-  val loyalty: LoyaltyState = LoyaltyState.Closed,
+  val rewards: RewardsPanel = RewardsPanel.Resting,
   /** The sale just paid for. Shown in place of an empty basket until the next one starts. */
   val completed: CompletedSale? = null,
 )
@@ -57,18 +63,6 @@ data class CustomerScreenState(
  */
 data class CompletedSale(val total: Money, val change: Money)
 
-sealed interface LoyaltyState {
-  /** Nothing offered: mid-sale, or already attached. */
-  data object Closed : LoyaltyState
-  data object Offered : LoyaltyState
-  data object Entering : LoyaltyState
-  data object Searching : LoyaltyState
-  data class Welcome(val name: String) : LoyaltyState
-  /** The number is not on file. The cashier finishes the sign-up. */
-  data class NotOnFile(val phone: String) : LoyaltyState
-  data class Unavailable(val reason: String) : LoyaltyState
-}
-
 /**
  * The customer's screen for this register.
  *
@@ -80,10 +74,16 @@ sealed interface LoyaltyState {
  * The customer is greeted by name only. The cashier's side falls back to a
  * phone number or an email when there is no name, and neither belongs on a
  * screen the next person in the queue can read.
+ *
+ * It is also where the rewards side is joined to the register: the customer
+ * signing in attaches them to the sale through the register's own
+ * `attachCustomer`, the same call the cashier's customer dialog makes, so
+ * there is one way onto a sale and the cashier sees it happen.
  */
 @Composable
-fun RegisterCustomerDisplay(viewModel: RegisterViewModel) {
+fun RegisterCustomerDisplay(viewModel: RegisterViewModel, rewards: RewardsViewModel = hiltViewModel()) {
   val state by viewModel.state.collectAsStateWithLifecycle()
+  val panel by rewards.panel.collectAsStateWithLifecycle()
   val selling = state.stage == RegisterStage.Selling
 
   // The receipt on the cashier's screen is this sale's only while its number
@@ -95,7 +95,8 @@ fun RegisterCustomerDisplay(viewModel: RegisterViewModel) {
     ?.takeIf { selling && state.showingReceipt && it.receiptNo == state.lastReceiptNo }
     ?.let { CompletedSale(total = it.total, change = it.change) }
 
-  val customerName = state.attachedCustomer
+  val attached = state.attachedCustomer
+  val customerName = attached
     ?.takeIf { selling }
     ?.let { customer ->
       listOfNotNull(customer.first_name, customer.last_name)
@@ -105,16 +106,37 @@ fun RegisterCustomerDisplay(viewModel: RegisterViewModel) {
         .ifEmpty { null }
     }
 
+  val link = remember(viewModel) {
+    object : RegisterLink {
+      override fun attach(customer: CustomerDto) = viewModel.attachCustomer(customer)
+      override fun detach() = viewModel.detachCustomer()
+    }
+  }
+  // The rewards side is told the whole picture whenever any part of it
+  // changes. The receipt number is how it knows a sale completed: it is set
+  // by a sale committing and by nothing else, which the sale id is not (a
+  // reprint from history changes that too).
+  val cartEmpty = state.cart.isEmpty
+  val lastReceiptNo = state.lastReceiptNo
+  LaunchedEffect(link, selling, attached?.id, cartEmpty, lastReceiptNo) {
+    rewards.connect(link)
+    rewards.onRegister(
+      selling = selling,
+      attached = attached,
+      cartEmpty = cartEmpty,
+      lastReceiptNo = lastReceiptNo,
+    )
+  }
+
   CustomerDisplayHost(
     state = CustomerScreenState(
       storeName = state.storeName,
       cart = if (selling) state.cart else Cart.EMPTY,
       customerName = customerName,
+      rewards = panel,
       completed = completed,
     ),
-    // The keypad is not offered yet, so there is nothing for these to do.
-    onPhoneEntered = {},
-    onDismissLoyalty = {},
+    actions = rewards,
   )
 }
 
@@ -132,11 +154,7 @@ fun RegisterCustomerDisplay(viewModel: RegisterViewModel) {
  * restarted to notice is a register the shop restarts during a queue.
  */
 @Composable
-fun CustomerDisplayHost(
-  state: CustomerScreenState,
-  onPhoneEntered: (String) -> Unit,
-  onDismissLoyalty: () -> Unit,
-) {
+fun CustomerDisplayHost(state: CustomerScreenState, actions: RewardsActions) {
   val context = LocalContext.current
   val activity = remember(context) { context.findActivity() } ?: return
   val displays = remember(context) { context.getSystemService(DisplayManager::class.java) }
@@ -160,8 +178,6 @@ fun CustomerDisplayHost(
   // every cart change would blink the customer's screen on every scan.
   val live = remember { mutableStateOf(state) }
   SideEffect { live.value = state }
-  val phone = rememberUpdatedState(onPhoneEntered)
-  val dismiss = rememberUpdatedState(onDismissLoyalty)
 
   // Up only while the register itself is on screen. Android does not take a
   // presentation down when its activity goes to the background, and this till
@@ -172,14 +188,14 @@ fun CustomerDisplayHost(
   // callback sets, so taking the screen down never waits on a recomposition
   // of an activity that has just been stopped.
   val target = display
-  DisposableEffect(target, activity) {
+  DisposableEffect(target, activity, actions) {
     val main = Handler(Looper.getMainLooper())
     var disposed = false
     var presentation: CustomerPresentation? = null
     fun show() {
       if (disposed || presentation != null || target == null) return
       if (!activity.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return
-      val next = CustomerPresentation(activity, target, live, phone, dismiss)
+      val next = CustomerPresentation(activity, target, live, actions)
       // Android takes a presentation down by itself when its display changes
       // size or rotation. Nothing else would put it back until the register
       // next left the screen and returned, and until then the customer would
@@ -226,8 +242,7 @@ private class CustomerPresentation(
   private val activity: ComponentActivity,
   display: Display,
   private val state: State<CustomerScreenState>,
-  private val onPhone: State<(String) -> Unit>,
-  private val onDismiss: State<() -> Unit>,
+  private val actions: RewardsActions,
 ) : Presentation(activity, display) {
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -236,8 +251,8 @@ private class CustomerPresentation(
     // scanner on this till is a keyboard, and Android gives the keys to
     // whichever screen was touched last: without this, a customer tapping
     // their screen would take the scanner away from the cashier until the
-    // cashier touched theirs again. Everything on this screen is a button, so
-    // it has no use for the keys.
+    // cashier touched theirs again. Everything on this screen is a button,
+    // the email keyboard included, so it has no use for the keys.
     window?.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
     val view = ComposeView(context).apply {
       // A Presentation window has no view-tree owners of its own, so it borrows
@@ -254,11 +269,7 @@ private class CustomerPresentation(
       setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
       setContent {
         SnapPosTheme {
-          CustomerScreen(
-            state = state.value,
-            onPhoneEntered = { onPhone.value(it) },
-            onDismiss = { onDismiss.value() },
-          )
+          CustomerScreen(state = state.value, actions = actions)
         }
       }
     }

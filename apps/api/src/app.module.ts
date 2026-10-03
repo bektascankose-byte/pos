@@ -20,6 +20,7 @@ import { SalesModule } from './modules/sales/sales.module.js';
 import { RefundsModule } from './modules/refunds/refunds.module.js';
 import { CashModule } from './modules/cash/cash.module.js';
 import { CustomersModule } from './modules/customers/customers.module.js';
+import { CustomerDisplayModule } from './modules/customer-display/customer-display.module.js';
 import { DataTransferModule } from './modules/data-transfer/data-transfer.module.js';
 import { EmployeesModule } from './modules/employees/employees.module.js';
 import { InvoicingModule } from './modules/invoicing/invoicing.module.js';
@@ -49,6 +50,7 @@ import { HealthController } from './modules/health/health.controller.js';
     RefundsModule,
     CashModule,
     CustomersModule,
+    CustomerDisplayModule,
     DataTransferModule,
     EmployeesModule,
     InvoicingModule,

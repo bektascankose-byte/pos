@@ -16,6 +16,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { runSalesChecks } from './e2e-sales.mjs';
 import { runPriceGroupChecks } from './e2e-price-groups.mjs';
 import { runBrandLogoChecks } from './e2e-brand-logos.mjs';
+import { runCustomerDisplayChecks } from './e2e-customer-display.mjs';
 import { runPasswordResetChecks } from './e2e-password-reset.mjs';
 import { runOrderChecks } from './e2e-orders.mjs';
 import { runShopChecks } from './e2e-shop.mjs';
@@ -833,6 +834,12 @@ await runPriceGroupChecks({ api, check, ownerToken, cashierToken, storeId });
 // ------------------------------------------------------------- 12a. brand logos
 
 await runBrandLogoChecks({ api, base: BASE, check, ownerToken, cashierToken, storeId });
+
+// ------------------------------------------- 12c. the customer's own screen
+// After the counting checks above for the same reason as the price groups:
+// it adds customers of its own.
+
+await runCustomerDisplayChecks({ api, check, ownerToken, cashierToken });
 
 // -------------------------------------------------- 12b. forgetting a password
 // After everything that needs to be signed in, because finishing a reset

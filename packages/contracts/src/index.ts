@@ -21,6 +21,7 @@ export * from './delivery.js';
 export * from './banners.js';
 export * from './phone.js';
 export * from './customers.js';
+export * from './customer-display.js';
 export * from './data-transfer.js';
 export * from './employees.js';
 export * from './inventory.js';
