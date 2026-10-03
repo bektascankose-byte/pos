@@ -2,6 +2,31 @@
 
 Notable changes. Newest first.
 
+## The day's receipts, and a Print button that knows the printer is there
+
+**Print was missing from the sheet that opens itself.** Finishing a sale opens
+the receipt sheet, and that sheet decides whether to offer Print by looking at
+the printer status it was given. On the path that opens by itself nothing had
+asked the printer, so the status was whatever it had been at startup and the
+sheet said "No printer plugged in" every time. Opening the same sheet by hand
+from Receipt asked properly and offered Print, which is why one worked and the
+other did not. Both paths now ask the printer at the moment the sheet opens.
+
+**Receipt no longer demands a receipt number.** A customer coming back rarely
+has one, and the cashier had no way in without it. Receipt now opens on the
+day's sales, newest first, with the receipt number, the time, the item count,
+how it was paid and the total on each row, and a voided sale marked as voided.
+Tapping one opens it with the same Print, Email and Text choices as a sale
+just rung.
+
+**And other days are reachable.** Earlier and Later step a day at a time with
+a Today button to come back, so a receipt from last week takes a few taps
+rather than a number nobody wrote down. The search by receipt number is still
+there and now filters the list in front of you.
+
+A reprint names the cashier who rang the sale and carries the time it was rung,
+not the time it was reprinted.
+
 ## Products shows the whole catalog, not the first fifty
 
 **The list was capped and said nothing about it.** Products in the back office

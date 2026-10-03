@@ -13,6 +13,8 @@ import com.snappos.data.Cashier
 import com.snappos.data.CashRepository
 import com.snappos.data.DevProvisioning
 import com.snappos.data.CommittedSale
+import com.snappos.data.ReceiptHistory
+import com.snappos.data.ReceiptSummary
 import com.snappos.data.RefundRepository
 import com.snappos.data.dao.ConfigDao
 import com.snappos.domain.ReceiptItem
@@ -20,6 +22,7 @@ import com.snappos.domain.ReceiptStore
 import com.snappos.domain.ReceiptTender
 import com.snappos.domain.SaleReceipt
 import java.time.Instant
+import java.time.LocalDate
 import com.snappos.data.RosterDiagnosis
 import com.snappos.data.VoidRepository
 import com.snappos.data.RefundSelection
@@ -174,6 +177,20 @@ data class RegisterUiState(
   /** What happened to the last email or text, shown on the sheet itself. */
   val receiptSendNote: String? = null,
   val receiptSendFailed: Boolean = false,
+  // --------------------------------------------------------- receipt history
+  /**
+   * Looking back over the receipts this register has taken.
+   *
+   * A cashier asked for a copy almost never has the receipt number: the
+   * customer has lost the slip, which is why they are asking. So the day's
+   * takings are listed and the number is a way to narrow them, not the way
+   * in.
+   */
+  val browsingReceipts: Boolean = false,
+  val receiptDay: LocalDate = LocalDate.now(),
+  val receiptsOnDay: List<ReceiptSummary> = emptyList(),
+  val receiptQuery: String = "",
+  val loadingReceipts: Boolean = false,
   val busy: Boolean = false,
   // ------------------------------------------------------------------ refunds
   val refundSale: RefundableSale? = null,
@@ -267,6 +284,9 @@ class RegisterViewModel @Inject constructor(
   // with the network down; sending one cannot, so it goes to the server and
   // says plainly when it could not.
   private val receiptSender: ReceiptSender,
+  // The day's receipts, read straight off this device. Looking one up has
+  // nothing to do with whether the shop's internet is working.
+  private val receipts: ReceiptHistory,
 ) : ViewModel() {
 
   private val _state = MutableStateFlow(RegisterUiState())
@@ -1465,6 +1485,9 @@ class RegisterViewModel @Inject constructor(
           printProblem = null,
           message = Toast("Sale ${committed.receiptNo} saved on this device"),
         )
+        // The receipt sheet is now on screen, so the printer has to be asked
+        // about before the cashier looks for the Print button.
+        refreshPrinterStatus()
         // Enqueued AFTER the sale is committed, never before. The upload is a
         // consequence of a sale existing; a sale is never a consequence of an
         // upload succeeding.
@@ -1536,6 +1559,78 @@ class RegisterViewModel @Inject constructor(
     )
   }
 
+  /**
+   * Open the day's receipts.
+   *
+   * This is what the Receipt button does now. It used to reopen the last
+   * sale's slip and nothing else, which is only ever the right answer for
+   * the customer who is still standing there -- and that customer already
+   * had the sheet offered to them when the sale completed.
+   */
+  fun browseReceipts() {
+    _state.value = _state.value.copy(
+      browsingReceipts = true,
+      receiptQuery = "",
+      receiptDay = LocalDate.now(),
+    )
+    loadReceiptsForDay(LocalDate.now())
+  }
+
+  fun closeReceiptBrowser() {
+    _state.value = _state.value.copy(browsingReceipts = false, receiptQuery = "")
+  }
+
+  fun pickReceiptDay(day: LocalDate) {
+    _state.value = _state.value.copy(receiptDay = day, receiptQuery = "")
+    loadReceiptsForDay(day)
+  }
+
+  fun onReceiptQuery(query: String) {
+    _state.value = _state.value.copy(receiptQuery = query)
+  }
+
+  private fun loadReceiptsForDay(day: LocalDate) {
+    viewModelScope.launch {
+      _state.value = _state.value.copy(loadingReceipts = true)
+      val found = runCatching { receipts.onDay(day) }.getOrDefault(emptyList())
+      _state.value = _state.value.copy(receiptsOnDay = found, loadingReceipts = false)
+    }
+  }
+
+  /**
+   * Open one of the day's receipts, rebuilt from what was stored.
+   *
+   * Replaces `lastReceipt` while it is on screen, because the sheet shows
+   * one receipt and the cashier chose this one. The sale id goes with it so
+   * emailing or texting from the sheet sends the receipt being looked at,
+   * not the last one rung.
+   */
+  fun openStoredReceipt(saleId: String) {
+    viewModelScope.launch {
+      val receipt = receipts.receiptFor(saleId)
+      if (receipt == null) {
+        _state.value = _state.value.copy(
+          message = Toast("That receipt could not be rebuilt on this register", isError = true),
+        )
+        return@launch
+      }
+      _state.value = _state.value.copy(
+        browsingReceipts = false,
+        lastReceipt = receipt,
+        lastSaleId = saleId,
+        // A reprint has no customer attached to prefill from, and the one
+        // from the last sale rung would be the wrong person entirely.
+        lastCustomerEmail = null,
+        lastCustomerPhone = null,
+        showingReceipt = true,
+        printProblem = null,
+        receiptSendNote = null,
+        receiptSendFailed = false,
+      )
+      refreshPrinterStatus()
+    }
+  }
+
   fun showReceipt() {
     if (_state.value.lastReceipt != null) {
       _state.value = _state.value.copy(
@@ -1544,12 +1639,24 @@ class RegisterViewModel @Inject constructor(
         receiptSendNote = null,
         receiptSendFailed = false,
       )
-      // Asked fresh each time the receipt opens: a printer unplugged since the
-      // last sale should not still be offering to print.
-      viewModelScope.launch {
-        val status = printer.status()
-        _state.value = _state.value.copy(printerStatus = status)
-      }
+      refreshPrinterStatus()
+    }
+  }
+
+  /**
+   * Ask the printer whether it is there, every time the receipt is on screen.
+   *
+   * Asked fresh rather than remembered: a printer unplugged since the last
+   * sale should not still be offering to print. The reverse matters just as
+   * much, and is the bug this exists to prevent -- the sheet that opens by
+   * itself after a sale used to show it without ever asking, so a till with
+   * a printer plugged in and working said "No printer plugged in" and hid
+   * the Print button, on the one screen where the cashier needs it most.
+   */
+  private fun refreshPrinterStatus() {
+    viewModelScope.launch {
+      val status = printer.status()
+      _state.value = _state.value.copy(printerStatus = status)
     }
   }
 

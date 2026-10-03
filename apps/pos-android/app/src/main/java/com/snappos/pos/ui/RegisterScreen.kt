@@ -208,8 +208,12 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
         onLock = viewModel::lock,
         onCloseDrawer = { showClose = true },
         onRefund = viewModel::startRefund,
-        onReceipt = viewModel::showReceipt,
-        hasReceipt = state.lastReceipt != null,
+        onReceipt = viewModel::browseReceipts,
+        // Always offered now. It opens the day's receipts rather than the
+        // last one, so it has something to show from the first sale of the
+        // shift onwards, and on a register that has not rung anything yet
+        // it says so rather than being mysteriously dead.
+        hasReceipt = true,
         heldCount = state.heldCarts.size,
         onHeldSales = { showHeldSales = true },
       )
@@ -386,6 +390,19 @@ fun RegisterScreen(viewModel: RegisterViewModel = hiltViewModel()) {
         }
       }
     }
+  }
+
+  if (state.browsingReceipts) {
+    ReceiptBrowserDialog(
+      day = state.receiptDay,
+      receipts = state.receiptsOnDay,
+      query = state.receiptQuery,
+      loading = state.loadingReceipts,
+      onQuery = viewModel::onReceiptQuery,
+      onPickDay = viewModel::pickReceiptDay,
+      onOpen = viewModel::openStoredReceipt,
+      onDismiss = viewModel::closeReceiptBrowser,
+    )
   }
 
   if (state.showingReceipt) {

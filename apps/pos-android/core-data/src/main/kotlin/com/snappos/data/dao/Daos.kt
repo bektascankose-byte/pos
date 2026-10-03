@@ -318,6 +318,32 @@ interface SalesDao {
   @Query("SELECT * FROM sales ORDER BY completedAtMillis DESC LIMIT :limit")
   fun recent(limit: Int = 50): Flow<List<SaleEntity>>
 
+  /**
+   * One day's sales, newest first.
+   *
+   * Half open on purpose: `from` is midnight and `to` is the next midnight,
+   * so a sale rung at 23:59:59.999 belongs to the day it was rung on and
+   * nothing lands in two days at once.
+   *
+   * Parked baskets are left out. They are not receipts, nobody was handed
+   * one, and offering to reprint something that was never sold is a way to
+   * hand a customer paper for a sale that did not happen.
+   */
+  @Query(
+    """
+    SELECT * FROM sales
+    WHERE completedAtMillis >= :from AND completedAtMillis < :to
+      AND status != 'parked'
+    ORDER BY completedAtMillis DESC
+    LIMIT :limit
+    """,
+  )
+  suspend fun onDay(from: Long, to: Long, limit: Int = 300): List<SaleEntity>
+
+  /** Receipt number lookup, for when the customer has the slip in their hand. */
+  @Query("SELECT * FROM sales WHERE UPPER(receiptNo) = UPPER(:receiptNo) LIMIT 1")
+  suspend fun byReceiptNo(receiptNo: String): SaleEntity?
+
   @Query("UPDATE sales SET syncState = :state WHERE id = :id")
   suspend fun setSyncState(id: String, state: String)
 
